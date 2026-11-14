@@ -133,9 +133,9 @@ fn grid_index_round_trips_with_negative_coordinates() {
 #[test]
 fn eye_is_recovered_from_a_perspective_view_projection() {
     let eye = glam::Vec3::new(-100.5, 37.25, 4000.0);
-    let view = Mat4::look_to_rh(eye, glam::Vec3::new(0.3, -0.2, 1.0).normalize(), glam::Vec3::Y);
-    let proj = Mat4::perspective_rh(1.2, 1.7, 0.05, 900.0);
+    let view = glam::camera::rh::view::look_to_mat4(eye, glam::Vec3::new(0.3, -0.2, 1.0).normalize(), glam::Vec3::Y);
+    let proj = glam::camera::rh::proj::directx::perspective(1.2, 1.7, 0.05, 900.0);
     let found = eye_from(proj * view).expect("perspective");
     assert!((found - eye).length() < 0.05, "{found} vs {eye}");
-    assert!(eye_from(Mat4::orthographic_rh(-1.0, 1.0, -1.0, 1.0, 0.1, 10.0) * view).is_none());
+    assert!(eye_from(glam::camera::rh::proj::directx::orthographic(-1.0, 1.0, -1.0, 1.0, 0.1, 10.0) * view).is_none());
 }

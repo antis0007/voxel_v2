@@ -11,6 +11,17 @@ fn rgb(c: [f32; 3], k: f32) -> C {
 }
 
 pub(super) fn paint(p: &egui::Painter, r: Rect, look: u16) {
+    if look & crate::world::adventure::wand_items::GRIMOIRE_LOOK != 0 {
+        let d = r.width().min(r.height());
+        let book = Rect::from_center_size(r.center(), vec2(d * 0.67, d * 0.85));
+        p.rect_filled(book.translate(vec2(d * 0.06, d * 0.05)), 1.0, C::from_rgb(220, 211, 175));
+        p.rect_filled(book, 1.0, C::from_rgb(57, 38, 73));
+        let spine = Rect::from_min_size(book.min, vec2(d * 0.13, book.height()));
+        p.rect_filled(spine, 0.0, C::from_rgb(108, 74, 45));
+        p.rect_filled(Rect::from_center_size(book.center(), vec2(d * 0.18, d * 0.18)),
+            0.0, C::from_rgb(202, 163, 93));
+        return;
+    }
     // One texture per family and palette, independent of tier and save ID.
     let key=crate::mesh::models::wand_kit::icon_key(look);
     let id=egui::Id::new(("wand_kit_icon",key));

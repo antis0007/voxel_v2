@@ -92,16 +92,39 @@ pub fn origin_bias_voxels() -> i32 {
 }
 
 /// Per-draw placement read from vertex buffer slot 1.
+///
+/// Flat draws store a voxel offset and leave the axes at zero (`offset.w == 0`).
+/// A planet chunk stores origin-frame metres in `offset.xyz` (`offset.w == 1`)
+/// and one axis per voxel axis. The axis `.w` lanes keep that chunk's voxel
+/// offset so chart-space patterns still rebuild from the integer origin.
+///
+/// `seam` holds origin-frame positions at the chunk's eight corners. Both
+/// owners of a shared face blend the same positions.
+/// Layout by component: `seam[0..2]` x, `seam[2..4]` y, `seam[4..6]` z, each
+/// pair covering corners 0-3 then 4-7 with corner index `x + 2y + 4z`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DrawTransform {
     pub offset: [f32; 4],
-    /// Unit quaternion `xyzw`; identity until bent chunks (decision 0025).
-    pub rotation: [f32; 4],
+    pub axis_x: [f32; 4],
+    pub axis_y: [f32; 4],
+    pub axis_z: [f32; 4],
+    pub seam: [[f32; 4]; 6],
 }
 
 impl DrawTransform {
-    pub const IDENTITY: DrawTransform = DrawTransform { offset: [0.0; 4], rotation: [0.0, 0.0, 0.0, 1.0] };
+    pub const IDENTITY: DrawTransform = DrawTransform {
+        offset: [0.0; 4],
+        axis_x: [0.0; 4],
+        axis_y: [0.0; 4],
+        axis_z: [0.0; 4],
+        seam: [[0.0; 4]; 6],
+    };
+
+    /// Flat voxel offset. Axes stay zero so the shader uses the origin frame.
+    pub fn flat(offset: [f32; 4]) -> DrawTransform {
+        DrawTransform { offset, ..Self::IDENTITY }
+    }
 
     /// Instance-step layout at slot 1 for world and shadow pipelines.
     pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
@@ -109,10 +132,13 @@ impl DrawTransform {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &Self::ATTRIBUTES,
     };
-    const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![5 => Float32x4, 6 => Float32x4];
+    const ATTRIBUTES: [wgpu::VertexAttribute; 10] = wgpu::vertex_attr_array![
+        5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
+        9 => Float32x4, 10 => Float32x4, 11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4
+    ];
 }
 
-const _: [(); 32] = [(); std::mem::size_of::<DrawTransform>()];
+const _: [(); 160] = [(); std::mem::size_of::<DrawTransform>()];
 
 /// One frame's table of draw transforms, one slot per chunk.
 ///
@@ -122,6 +148,7 @@ const _: [(); 32] = [(); std::mem::size_of::<DrawTransform>()];
 #[derive(Default)]
 pub struct DrawOffsets {
     transforms: Vec<DrawTransform>,
+    uploaded_bytes: Vec<u8>,
     slots: FastMap<IVec3, u32>,
     buffer: Option<wgpu::Buffer>,
     capacity: usize,
@@ -146,7 +173,23 @@ impl DrawOffsets {
         slot
     }
 
-    /// Writes the table to the GPU, growing the buffer if needed.
+    /// Transition draws need independent slots; shadows keep the ordinary transform.
+    pub fn transition_slots(&mut self, mut transform: DrawTransform, phase: u32) -> (u32, u32) {
+        let outgoing = self.transforms.len() as u32;
+        // Bit zero of offset.w still selects the bent chunk transform.
+        transform.offset[3] += (2 * phase) as f32;
+        self.transforms.push(transform);
+        transform.offset[3] += 128.0;
+        self.transforms.push(transform);
+        (outgoing, outgoing + 1)
+    }
+
+    /// Slot already taken this frame; passes recorded after `upload` use this.
+    pub fn existing_slot(&self, chunk: IVec3) -> Option<u32> {
+        self.slots.get(&chunk).copied()
+    }
+
+    /// Uploads a changed table to the GPU, growing the buffer if needed.
     ///
     /// Call once per frame after every draw list has taken its slots and before
     /// the first pass binds the buffer: a pass that already bound it would keep
@@ -164,8 +207,14 @@ impl DrawOffsets {
                 mapped_at_creation: false,
             }));
         }
+        let bytes = bytemuck::cast_slice::<_, u8>(&self.transforms);
+        if bytes == self.uploaded_bytes.as_slice() {
+            return;
+        }
         if let Some(buffer) = &self.buffer {
-            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&self.transforms));
+            queue.write_buffer(buffer, 0, bytes);
+            self.uploaded_bytes.clear();
+            self.uploaded_bytes.extend_from_slice(bytes);
         }
     }
 
@@ -182,6 +231,10 @@ mod origin_gpu_tests;
 #[cfg(test)]
 #[path = "origin_far_chunk_gpu_tests.rs"]
 mod origin_far_chunk_gpu_tests;
+
+#[cfg(test)]
+#[path = "origin_pattern_gpu_tests.rs"]
+mod origin_pattern_gpu_tests;
 
 #[cfg(test)]
 mod tests {

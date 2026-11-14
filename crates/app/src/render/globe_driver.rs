@@ -10,10 +10,14 @@ use super::globe::worker::{Worker, tile_bytes};
 use super::globe::{self, chart};
 use crate::altitude::Tier;
 use engine_voxel::WorldSampleConfig;
-use glam::{DVec3, Mat4, Vec3};
+use glam::{DVec3, Mat4, Vec3, Vec4};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+fn hell_planet(cfg: WorldSampleConfig) -> bool {
+    cfg.is_hell()
+}
 
 #[path = "globe_driver_shell.rs"]
 mod shell_refresh;
@@ -44,6 +48,10 @@ pub struct GlobeStats {
     pub dropped: usize,
     /// Worker bake wall time accumulated since the previous frame.
     pub bake_ms: f32,
+    pub cloud_bake_ms: f32,
+    pub cloud_pending: u32,
+    pub cloud_resolution: u32,
+    pub night_lights: u32,
 }
 
 /// Camera inputs for one globe frame, all in chart metres.
@@ -53,13 +61,20 @@ pub struct GlobeView {
     /// Reverse-Z projection the terrain uses.
     pub projection: Mat4,
     pub sun_dir: Vec3,
+    pub moon_dir: Vec3,
+    /// `LightingState::moon_intensity`; planets hold 0.05 while the moon is up.
+    pub moon_intensity: f32,
     pub focal_px: f32,
     /// Time base of the cloud march's wind offset.
     pub sky_time_s: f32,
     pub clouds: crate::world::CloudControls,
     pub weather_seed: u32,
+    /// Synced weather day, `synoptic::days`.
+    pub weather_days: f64,
     /// Render-thread wall seconds; the sky time can be frozen by reviews, this cannot.
     pub clock_s: f64,
+    /// `RenderDebugView::as_u32`; the globe answers the surface views it shares with the terrain pass.
+    pub debug_view: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +132,7 @@ pub struct GlobeDriver {
     selection: Selection,
     select_scratch: SelectScratch,
     keep: Vec<TileId>,
+    keep_for_draw: Vec<TileId>,
     request: Vec<TileId>,
     /// The list the worker last received; an identical list is not resent.
     sent: Vec<TileId>,
@@ -124,9 +140,14 @@ pub struct GlobeDriver {
     surface_since: Option<f64>,
     last_spawn: Option<f64>,
     running: bool,
+    ground_ready: bool,
     stats: GlobeStats,
     shell_worker: Option<ShellWorker>,
     last_shell: Option<f64>,
+    last_shell_lights: Option<f64>,
+    last_light_eye: Option<DVec3>,
+    shell_in_flight: u8,
+    shell_bake_resolution: u32,
     light_count: u32,
     /// Whether the volumetric march may run; meaningful only while `running`.
     march: bool,
@@ -146,7 +167,15 @@ impl GlobeDriver {
     }
 
     pub fn orbit_view(&self) -> bool {
-        hides_horizon(self.running, self.tier, self.stats.resident)
+        hides_horizon(self.ground_ready(), self.tier, self.stats.resident)
+    }
+
+    pub fn ground_ready(&self) -> bool {
+        self.running && self.ground_ready
+    }
+
+    pub fn ground_ready_for(&self, cfg: WorldSampleConfig) -> bool {
+        self.built_for == Some(cfg) && self.ground_ready()
     }
 
     /// Whether the volumetric cloud march and its composite run this frame.
@@ -163,6 +192,10 @@ impl GlobeDriver {
         // The next running frame respawns it and rebakes all six faces.
         self.shell_worker = None;
         self.last_shell = None;
+        self.last_shell_lights = None;
+        self.last_light_eye = None;
+        self.shell_in_flight = 0;
+        self.shell_bake_resolution = 0;
         self.shell_pending.clear();
         self.sent.clear();
     }
@@ -176,13 +209,31 @@ impl GlobeDriver {
         self.last_spawn = None;
         self.light_count = 0;
         self.stats = GlobeStats::default();
+        self.ground_ready = false;
     }
 
     /// Selects tiles, orders requests and fills the keep set; true when the request list changed.
     fn plan(&mut self, ready: &dyn Fn(TileId) -> bool, eye_body: DVec3, focal_px: f64, max_draw: usize) -> bool {
-        scheduler::select_into(ready, eye_body, focal_px, max_draw, &mut self.select_scratch, &mut self.selection);
+        self.plan_with_maturity(ready,&|_| true,eye_body,focal_px,&[],max_draw)
+    }
+
+    fn plan_with_maturity(&mut self, ready: &dyn Fn(TileId) -> bool, mature: &dyn Fn(TileId) -> bool,
+        eye_body: DVec3, focal_px: f64, planes: &[Vec4], max_draw: usize) -> bool {
+        scheduler::select_into_with_maturity(ready,mature,eye_body,focal_px,planes,max_draw,&mut self.select_scratch,&mut self.selection);
         request_order(&self.selection.draw, &self.selection.wanted, ready, &mut self.request);
-        scheduler::keep_set(&self.selection.draw, &mut self.keep);
+        if !planes.is_empty() {
+            // Keep a cheap fallback for a camera turn onto a previously unseen face.
+            for id in (0..6).map(TileId::root) {
+                if !ready(id) && !self.request.contains(&id) {
+                    if self.request.len() == MAX_REQUEST { self.request.pop(); }
+                    self.request.insert(0, id);
+                }
+            }
+        }
+        if self.keep.is_empty() || self.keep_for_draw != self.selection.draw {
+            scheduler::keep_set(&self.selection.draw, &mut self.keep);
+            self.keep_for_draw.clone_from(&self.selection.draw);
+        }
         if self.request == self.sent {
             return false;
         }
@@ -218,7 +269,13 @@ impl GlobeDriver {
         };
         let step = if globe::active() { driver_step(self.tier, globe::forced(), surface_s) } else { Step::Skip };
         self.running = step == Step::Run;
-        self.march = shell::volumetric_clouds_enabled(view.eye_m.y, shell::cloud_top_slab_m(&view.clouds));
+        self.march = if cfg.is_planet() {
+            // Keep the volume through the complete optical-depth handoff;
+            // stopping at the compressed cirrus top would cut it mid-fade.
+            view.eye_m.y < shell::HANDOFF_M.1
+        } else {
+            shell::volumetric_clouds_enabled(view.eye_m.y, shell::cloud_top_slab_m(&view.clouds))
+        };
         if !self.running {
             self.stats = GlobeStats::default();
             if step == Step::DropWorker {
@@ -243,26 +300,42 @@ impl GlobeDriver {
         // Tiles drained this frame upload before `prepare`, so they count as ready now.
         let ready = |id: TileId| globe.resident_contains(id) || incoming.iter().any(|t| t.id == id);
         let max_draw = lean_limits(crate::render::lean_shading()).0;
-        if self.plan(&ready, eye_body, f64::from(view.focal_px), max_draw)
+        let planes = super::streaming::extract_planes(view_proj);
+        let surface_mode = if cfg.is_planet() { globe::surface_mode() } else { 0 };
+        let sample_scale = if surface_mode == 1 { 2.0 } else { 1.0 };
+        if self.plan_with_maturity(&ready, &|id| globe.can_refine(id), eye_body, f64::from(view.focal_px) * sample_scale, &planes[..4], max_draw)
             && let Some(worker) = &self.worker
         {
             worker.request(&self.sent);
         }
         let frame = chart::frame(view.eye_m);
         let sun = (frame * view.sun_dir.as_dvec3()).normalize_or_zero().as_vec3();
+        let moon = (frame * view.moon_dir.as_dvec3()).normalize_or_zero().as_vec3();
         let shell_bytes = self.refresh_shell(globe, queue, view, eye_body, incoming_bytes, factory_clusters);
         let eye = eye_body.as_vec3();
         let uniform = GlobeUniform {
             eye_body: [eye.x, eye.y, eye.z, self.light_count as f32],
-            sun_dir_body: [sun.x, sun.y, sun.z, 0.0],
+            // The sky and disc must animate their shared emission field on the
+            // same clock; the worker refresh cadence still uses wall time.
+            sun_dir_body: [sun.x, sun.y, sun.z, view.sky_time_s.rem_euclid(3600.0)],
             radius_m: chart::RADIUS_M as f32,
-            sea_level_m: 0.0,
+            // Baked heights are world metres, so the sea surface sits at the water level, not 0.
+            sea_level_m: cfg.world_y(cfg.water_level()),
             focal_px: view.focal_px,
-            flags: u32::from(crate::render::lean_shading()) | if globe.shell_ready() { 2 } else { 0 } | if self.light_count > 0 { 4 } else { 0 },
-            limb: [0.35, 0.55, 0.95, 1.0],
+            flags: u32::from(crate::render::lean_shading()) | if globe.shell_ready() && crate::render::draw_clouds() && !hell_planet(cfg) { 2 } else { 0 } | if self.light_count > 0 { 4 } else { 0 }
+                | if hell_planet(cfg) { 8 } else { 0 }
+                | if engine_worldgen::planetary::tidal_coasts(&cfg) { 16 } else { 0 }
+                | if globe::reference_cloud_air() { 32 } else { 0 }
+                | if cfg.is_planet() { 64 } else { 0 }
+                | ((view.debug_view & 0xFF) << 8) | (surface_mode << 16),
+            moon_body: [moon.x, moon.y, moon.z, (view.moon_intensity * 20.0).min(1.0)],
             view_proj: view_proj.to_cols_array_2d(),
         };
         let frame_stats = globe.frame(queue, incoming, &self.selection, &self.keep, eye_body, uniform);
+        if !self.ground_ready {
+            // The keep set protects roots until the next world reset.
+            self.ground_ready = (0..6).map(TileId::root).all(|id| globe.resident_contains(id));
+        }
         if frame_stats.dropped > 0 {
             // A dropped tile stays unready while the list may not change, so resend next frame.
             self.sent.clear();
@@ -277,6 +350,10 @@ impl GlobeDriver {
             cpu_ms: start.elapsed().as_secs_f32() * 1000.0,
             dropped: frame_stats.dropped,
             bake_ms: bake_nanos as f32 / 1.0e6,
+            cloud_bake_ms: self.shell_worker.as_ref().map_or(0, ShellWorker::take_bake_nanos) as f32 / 1.0e6,
+            cloud_pending: self.shell_in_flight.count_ones(),
+            cloud_resolution: self.shell_bake_resolution,
+            night_lights: self.light_count,
         };
     }
 }

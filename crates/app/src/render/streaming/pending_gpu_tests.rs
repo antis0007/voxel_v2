@@ -17,7 +17,7 @@ fn cpu(streamer:&ChunkStreamer,lod:u8,revision:u64,job_id:u64,vertex_count:usize
     let mesh=ChunkMesh{vertices,indices:vec![0,1,2]};
     let bytes=mesh.vertices.capacity()*std::mem::size_of::<Vertex3>()+mesh.indices.capacity()*4;
     let lease=streamer.mesh_budget.acquire(bytes,&AtomicBool::new(false)).unwrap();
-    CpuChunkMesh{failed:false,lod_invariant:false,key:ChunkKey{coord:IVec3::ZERO,lod},revision,
+    CpuChunkMesh{observation_source:Default::default(),failed:false,lod_invariant:false,key:ChunkKey{coord:IVec3::ZERO,lod},revision,
         job_id,world_epoch:streamer.upload_epoch,cache_epoch:0,mesh,shadow_casters:Default::default(),boundary_profile:Default::default(),connectivity:None,_lease:Some(lease)}
 }
 fn uploaded(device:&wgpu::Device,queue:&wgpu::Queue,cache:&mut ChunkCache,c:&CpuChunkMesh)->ChunkGpuMesh {
@@ -85,8 +85,10 @@ fn gpu_pending_edit_interest_and_lod_changes_revalidate_before_commit() {
             _=>{cache.center_chunk=IVec3::ZERO;}
         }
         state.store(1,Ordering::Relaxed);
-        assert_eq!(s.poll_pending_uploads(&device,&AtomicBool::new(false),&mut cache,4,Instant::now()).0,0);
-        assert_eq!(cache.gpu_meshes[&IVec3::ZERO].lod,0);assert_eq!(cache.gpu_mesh_revision,revision);
+        let published=s.poll_pending_uploads(&device,&AtomicBool::new(false),&mut cache,4,Instant::now()).0;
+        assert_eq!(cache.gpu_meshes[&IVec3::ZERO].lod,0);
+        assert_eq!(published,0);
+        assert_eq!(cache.gpu_mesh_revision,revision);
         assert_eq!(cache.pending_gpu.bytes(),0);assert_eq!(s.mesh_budget.used(),0);
         if change==0 {assert_eq!(s.dirty_revisions.get(&IVec3::ZERO),Some(&11));assert!(s.pending_keys.contains(&ChunkKey{coord:IVec3::ZERO,lod:0}));}
     }
@@ -219,6 +221,23 @@ fn gpu_pending_health_signal_changes_during_ready_poll_cannot_publish() {
     assert_eq!(cache.pending_gpu.bytes(),0);
     assert!(s.pending_uploads.is_empty());assert_eq!(s.ready_meshes.len(),1);
     assert_eq!(cache.lod_meshes.bytes(),0);
+}
+
+#[test]
+#[ignore="native monotonic mesh publication under continuous edits"]
+fn gpu_late_mesh_publishes_but_cannot_replace_a_newer_display() {
+    let(device,queue,mut cache,mut s)=setup();seed_old(&device,&queue,&mut cache,&s,0);
+    let fresh=cpu(&s,0,12,1,3);
+    stage(&device,&queue,&mut cache,&mut s,fresh,Arc::new(AtomicU8::new(1)));
+    assert_eq!(s.poll_pending_uploads(&device,&AtomicBool::new(false),&mut cache,4,Instant::now()).0,1);
+    assert_eq!(cache.gpu_meshes[&IVec3::ZERO].source_revision,12);
+
+    s.dirty_revisions.insert(IVec3::ZERO,13);cache.dirty_meshes.insert(IVec3::ZERO);
+    let old=cpu(&s,0,10,2,3);
+    stage(&device,&queue,&mut cache,&mut s,old,Arc::new(AtomicU8::new(1)));
+    assert_eq!(s.poll_pending_uploads(&device,&AtomicBool::new(false),&mut cache,4,Instant::now()).0,0);
+    assert_eq!(cache.gpu_meshes[&IVec3::ZERO].source_revision,12);
+    assert!(s.pending_keys.contains(&ChunkKey{coord:IVec3::ZERO,lod:0}));
 }
 
 fn exact_test_sources(cache:&mut ChunkCache,coords:HashSet<IVec3>) {

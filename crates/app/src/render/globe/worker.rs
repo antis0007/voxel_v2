@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::time::Duration;
 
-/// Partial bakes kept for resumption; past this the set is dropped and preempted tiles restart.
+/// Partial bakes kept for resumption; evict one least-complete tile at the cap.
 const MAX_PARTIAL: usize = 32;
 /// A real tile needs about 200 turns; a bake past this is stuck and would starve the queue.
 const MAX_TURNS: u32 = 4_096;
@@ -26,7 +26,7 @@ pub struct Worker {
 }
 
 pub(crate) fn tile_bytes(t: &TileData) -> usize {
-    t.height_m.len() * 2 + t.material.len() + t.water.len() + t.climate.len() * 2
+    t.height_m.len() * 2 + t.material.len() + t.water.len() + t.climate.len() * 4 + t.normals.len() * 2
 }
 
 impl Worker {
@@ -37,7 +37,10 @@ impl Worker {
         let counter = bake_nanos.clone();
         let bake = move |cfg: &WorldSampleConfig, id: TileId| {
             if !partial.contains_key(&id) && partial.len() >= MAX_PARTIAL {
-                partial.clear();
+                // Camera turns must not throw away every nearly finished tile.
+                if let Some(victim) = partial.iter().min_by_key(|(key, (_, cursor))| (cursor.next_sample, **key)).map(|(key, _)| *key) {
+                    partial.remove(&victim);
+                }
             }
             let (data, cursor) =
                 partial.entry(id).or_insert_with(|| (TileData::empty(id), BakeCursor::default()));

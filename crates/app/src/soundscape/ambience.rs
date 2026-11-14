@@ -48,12 +48,17 @@ pub struct Surroundings {
     pub altitude_m: f32,
     /// Share of directions that fall away by more than `DROP_M`: cliff edges, ridges, towers.
     pub exposure: f32,
+    /// Solid terrain within the bounded downward probe; excludes high flight.
+    pub grounded: bool,
     /// Ears under water, set by the caller from the player rather than probed.
     pub submerged: f32,
     /// Leaf and bush cells per compass sector (`DIRECTIONS` order), nearer rings weigh more.
     pub canopy: [f32; 8],
     /// Still water per compass sector, from the same rings as `water`.
     pub still_water: [f32; 8],
+    /// Nearby sector coverage: flowers, fungi, crystals, lava. Counts are
+    /// bounded per direction; stacking blocks never multiplies the bonus.
+    pub flora: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -68,41 +73,74 @@ fn smoothstep(lo: f32, hi: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Probes about 360 cells at roughly one-metre spacing, whatever the voxel size.
+/// Probes the listener's surroundings at roughly one-metre spacing.
+#[cfg(test)]
 pub fn probe(get: impl Fn(IVec3) -> BlockId, eye: IVec3, meters: f32, sea_level_m: f32) -> Surroundings {
-    probe_flow(get, |_| 0.0, eye, meters, sea_level_m)
+    sample(get, eye, meters, sea_level_m).with_flow(|_| 0.0)
 }
 
-pub fn probe_flow(get: impl Fn(IVec3) -> BlockId, speed: impl Fn(IVec3) -> f32, eye: IVec3, meters: f32, sea_level_m: f32) -> Surroundings {
+pub(super) struct Sample {
+    surroundings: Surroundings,
+    sources: Vec<WaterSource>,
+}
+
+struct WaterSource {
+    position: IVec3,
+    weight: f32,
+    sector: usize,
+    falling: bool,
+}
+
+impl Sample {
+    /// Keep flow live even when the geometry was sampled on a worker.
+    pub(super) fn with_flow(mut self, speed: impl Fn(IVec3) -> f32) -> Surroundings {
+        let mut water = 0.0;
+        let mut motion = 0.0;
+        for source in self.sources {
+            let moving = if source.falling { 1.0 } else { (speed(source.position).max(0.0) / 1.5).min(1.0) };
+            water += source.weight;
+            motion += source.weight * moving;
+            if moving < STILL_MOTION {
+                let still = &mut self.surroundings.still_water[source.sector];
+                *still = (*still + source.weight * (1.0 - moving)).min(1.0);
+            }
+        }
+        self.surroundings.water = f32::min(water / 2.0, 1.0);
+        self.surroundings.water_motion = if water > 0.0 { (motion / water).clamp(0.0, 1.0) } else { 0.0 };
+        self.surroundings
+    }
+}
+
+pub(super) fn sample(get: impl Fn(IVec3) -> BlockId, eye: IVec3, meters: f32, sea_level_m: f32) -> Sample {
     let meters = meters.max(1.0e-3);
     let stride = (1.0 / meters).round().max(1.0) as i32;
     let cells = |m: f32| ((m / meters) as i32 / stride).max(1);
     let spread = (SKY_SPREAD_M / meters).round() as i32;
-    let roofed = |column: IVec3, rock: &mut u32| {
-        let mut covered = false;
-        for k in 1..=cells(SKY_REACH_M) {
-            if get(column + IVec3::Y * (k * stride)).is_opaque() {
-                covered = true;
-                *rock += 1;
-            }
+    let mut rock = 0u32;
+    let rock_metres = |count: u32| count as f32 * stride as f32 * meters;
+    for k in 1..=cells(SKY_REACH_M) {
+        if get(eye + IVec3::Y * (k * stride)).is_opaque() {
+            rock += 1;
+            if rock_metres(rock) >= ROCK_ROOF_M.1 { break; }
         }
-        covered
-    };
-    let mut rock = 0;
-    let mut open = u32::from(!roofed(eye, &mut rock));
-    let mut ignored = 0;
-    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-        open += u32::from(!roofed(eye + IVec3::new(dx * spread, 0, dz * spread), &mut ignored));
     }
-    let walls = DIRECTIONS
-        .iter()
-        .filter(|&&(dx, dz)| {
+    let mut open = u32::from(rock == 0);
+    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+        let column = eye + IVec3::new(dx * spread, 0, dz * spread);
+        open += u32::from(!(1..=cells(SKY_REACH_M))
+            .any(|k| get(column + IVec3::Y * (k * stride)).is_opaque()));
+    }
+    let roof = smoothstep(ROCK_ROOF_M.0, ROCK_ROOF_M.1, rock_metres(rock));
+    // Wall samples only scale underground ambience, which is zero without enough roof.
+    let underground = if roof > 0.0 {
+        let walls = DIRECTIONS.iter().filter(|&&(dx, dz)| {
             (1..=cells(WALL_REACH_M)).any(|k| get(eye + IVec3::new(dx, 0, dz) * (k * stride)).is_opaque())
-        })
-        .count();
-    let mut water = 0.0;
-    let mut motion = 0.0;
-    let mut still_water = [0.0f32; 8];
+        }).count();
+        roof * (0.4 + 0.6 * walls as f32 / 8.0)
+    } else {
+        0.0
+    };
+    let mut sources = Vec::new();
     for (ring, weight) in WATER_RINGS_M.iter().zip(WATER_WEIGHTS) {
         let r = (ring / meters).round() as i32;
         for (sector, (dx, dz)) in DIRECTIONS.into_iter().enumerate() {
@@ -119,25 +157,24 @@ pub fn probe_flow(get: impl Fn(IVec3) -> BlockId, speed: impl Fn(IVec3) -> f32, 
                 if blocked { continue; }
                 // A one-metre probe can jump through a thin pool floor at fine
                 // voxel scales. Only an unsupported water cell is a fall.
-                let falling = get(p - IVec3::Y) == BlockId::Air;
-                let moving = if falling { 1.0 } else { (speed(p).max(0.0) / 1.5).min(1.0) };
-                water += weight;
-                motion += weight * moving;
-                if moving < STILL_MOTION {
-                    still_water[sector] = (still_water[sector] + weight * (1.0 - moving)).min(1.0);
-                }
+                sources.push(WaterSource { position: p, weight, sector, falling: get(p - IVec3::Y) == BlockId::Air });
             }
         }
     }
     let mut canopy = [0.0f32; 8];
+    let canopy_step = cells(CANOPY_STEP_M) * stride;
     for (ring, weight) in CANOPY_RINGS_M.iter().zip(CANOPY_WEIGHTS) {
         let r = (ring / meters).round() as i32;
         for (sector, (dx, dz)) in DIRECTIONS.into_iter().enumerate() {
+            if canopy[sector] >= 2.0 { continue; }
             let column = eye + IVec3::new(dx * r, 0, dz * r);
-            let step = cells(CANOPY_STEP_M) * stride;
-            let hits = CANOPY_STEPS
-                .filter(|&k| matches!(get(column + IVec3::Y * (k * step)), BlockId::Leaves | BlockId::PineLeaves | BlockId::Bush))
-                .count();
+            let mut hits = 0;
+            for k in CANOPY_STEPS {
+                if matches!(get(column + IVec3::Y * (k * canopy_step)), BlockId::Leaves | BlockId::PineLeaves | BlockId::Bush) {
+                    hits += 1;
+                    if canopy[sector] + weight * hits as f32 >= 2.0 { break; }
+                }
+            }
             canopy[sector] += weight * hits as f32;
         }
     }
@@ -147,25 +184,55 @@ pub fn probe_flow(get: impl Fn(IVec3) -> BlockId, speed: impl Fn(IVec3) -> f32, 
     let out = (EDGE_OUT_M / meters).round() as i32;
     // Exposure is a cliff edge, not open air: without ground under the eye there is no edge.
     let grounded = (0..=cells(DROP_M)).any(|k| get(eye - IVec3::Y * (k * stride)).is_opaque());
-    let drops = DIRECTIONS
+    let drops = if grounded { DIRECTIONS
         .iter()
         .filter(|&&(dx, dz)| {
             let column = eye + IVec3::new(dx * out, 0, dz * out);
             !(0..=cells(DROP_M)).any(|k| get(column - IVec3::Y * (k * stride)).is_opaque())
         })
-        .count();
-    let rock_m = rock as f32 * stride as f32 * meters;
-    Surroundings {
-        exposure: if grounded { drops as f32 / 8.0 } else { 0.0 },
-        submerged: 0.0,
+        .count() } else { 0 };
+    let mut flora = [0.0; 4];
+    let flora_stride = (0.25 / meters).round().max(1.0) as i32;
+    let flora_down = (3.0 / (flora_stride as f32 * meters)).ceil() as i32;
+    let flora_up = (4.0 / (flora_stride as f32 * meters)).ceil() as i32;
+    for (dx, dz) in std::iter::once((0, 0)).chain(DIRECTIONS) {
+        let mut seen = [false; 4];
+        for radius in [2.0, 5.0, 9.0] {
+            let r = (radius / meters).round() as i32;
+            for height in -flora_down..=flora_up {
+                let p = eye + IVec3::new(dx * r, height * flora_stride, dz * r);
+                let family = match get(p) {
+                    BlockId::Lavender | BlockId::Orchid | BlockId::ManaFlower | BlockId::CollectorFlower => Some(0),
+                    BlockId::FungalSoil | BlockId::GroveMoss | BlockId::AmberCap | BlockId::UmberCap
+                        | BlockId::SporeBlossom | BlockId::GlowBerries | BlockId::CaveVine => Some(1),
+                    BlockId::Crystal => Some(2),
+                    BlockId::Lava => Some(3),
+                    _ => None,
+                };
+                if let Some(i) = family && !seen[i] {
+                    let delta = p - eye;
+                    let steps = (delta.as_vec3().length() * meters * 2.0).ceil().max(1.0) as i32;
+                    let blocked = (1..steps).any(|k| {
+                        let q = (eye.as_vec3() + delta.as_vec3() * (k as f32 / steps as f32)).round().as_ivec3();
+                        q != p && get(q).is_opaque()
+                    });
+                    seen[i] = !blocked;
+                }
+            }
+        }
+        for i in 0..4 { flora[i] += f32::from(u8::from(seen[i])) / 9.0; }
+    }
+    let surroundings = Surroundings {
+        exposure: drops as f32 / 8.0,
+        grounded,
         sky: open as f32 / 5.0,
-        underground: smoothstep(ROCK_ROOF_M.0, ROCK_ROOF_M.1, rock_m) * (0.4 + 0.6 * walls as f32 / 8.0),
-        water: f32::min(water / 2.0, 1.0),
-        water_motion: if water > 0.0 { (motion / water).clamp(0.0, 1.0) } else { 0.0 },
+        underground,
         altitude_m: eye.y as f32 * meters - sea_level_m,
         canopy,
-        still_water,
-    }
+        flora,
+        ..Default::default()
+    };
+    Sample { surroundings, sources }
 }
 
 /// How enclosed the listener is, 0 open air to 1 a cave; drives the room reverb.
@@ -183,9 +250,9 @@ pub struct Air {
     pub top_m: f32,
 }
 
-/// Matches the earthlike Rayleigh preset in `assets/atmosphere.ron`, cut at the orbit tier
-/// so the orbital view never carries wind.
-pub const EARTH_AIR: Air = Air { floor_m: 0.0, scale_height_m: 8_000.0, top_m: 30_000.0 };
+/// Earthlike Rayleigh falloff from `assets/atmosphere.ron`, cut where chunk loading stops and
+/// the globe view takes over, so the view from above never carries wind.
+pub const EARTH_AIR: Air = Air { floor_m: 0.0, scale_height_m: 8_000.0, top_m: 6_000.0 };
 /// Matches the planet branch of `sky_shader.wgsl` (exp(-(alt - 150) / 1400)), so the beds go
 /// silent where the sky turns black; the top is the altitude where chunk loading stops.
 pub const PLANET_AIR: Air = Air { floor_m: 150.0, scale_height_m: 1_400.0, top_m: 6_000.0 };
@@ -210,7 +277,8 @@ pub fn levels(s: &Surroundings, w: &Weather, profile: Air) -> [f32; BED_COUNT] {
     let in_air = air(profile, s.altitude_m);
     // Void realms are not vacuum: their caves and water keep their own sound.
     let carried = if profile.top_m <= 0.0 { 1.0 } else { in_air };
-    out[Bed::Wind as usize] = (s.sky * (0.25 + 0.5 * height + 0.35 * w.storm + 0.4 * s.exposure)).min(1.0) * surface;
+    // A calm field is a quiet rush; height, storm and cliffs bring the wind up.
+    out[Bed::Wind as usize] = (s.sky * (0.21 + 0.4 * height + 0.35 * w.storm + 0.3 * s.exposure)).min(1.0) * surface;
     // A cave drone is air resonating in rock; a sealed airless one is silent.
     out[Bed::Cave as usize] = s.underground * (1.0 - s.sky) * carried;
     out[Bed::Water as usize] = (s.water * (0.08 + 0.92 * s.water_motion) * (1.0 - 0.25 * s.underground) * carried)
@@ -402,11 +470,16 @@ mod tests {
         }
         s.altitude_m = 80_000.0;
         assert!(levels(&s, &storm, EARTH_AIR)[Bed::Suit as usize] > 0.6);
-        s.altitude_m = 20_000.0;
-        assert!(levels(&s, &DAY, EARTH_AIR)[Bed::Wind as usize] < 0.1);
-        // The orbit tier starts at 30 km; nothing of the surface reaches it.
-        s.altitude_m = 30_000.0;
-        assert_eq!(levels(&s, &DAY, EARTH_AIR)[Bed::Wind as usize], 0.0);
+        s.altitude_m = 4_500.0;
+        assert!(levels(&s, &DAY, EARTH_AIR)[Bed::Wind as usize] < 0.4);
+        // Terrain unloads by 6 km and the globe takes over; nothing of the surface reaches it.
+        for altitude in [6_000.0, 20_000.0, 30_000.0] {
+            s.altitude_m = altitude;
+            let beds = levels(&s, &storm, EARTH_AIR);
+            for bed in [Bed::Wind, Bed::Rain, Bed::Insects] {
+                assert_eq!(beds[bed as usize], 0.0, "{bed:?} at {altitude} m");
+            }
+        }
         s.altitude_m = 0.0;
         assert_eq!(levels(&s, &DAY, EARTH_AIR)[Bed::Suit as usize], 0.0);
     }

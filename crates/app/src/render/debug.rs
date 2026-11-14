@@ -36,6 +36,10 @@ pub enum RenderDebugView {
     WaterDepth,
     Clay,
     ShadowSplit,
+    SkyGalaxy,
+    SkyStars,
+    SkyVisibility,
+    SurfaceDistance,
 }
 
 impl RenderDebugView {
@@ -75,6 +79,10 @@ impl RenderDebugView {
             Self::WaterDepth => 31,
             Self::Clay => 32,
             Self::ShadowSplit => 33,
+            Self::SkyGalaxy => 34,
+            Self::SkyStars => 35,
+            Self::SkyVisibility => 36,
+            Self::SurfaceDistance => 37,
         }
     }
 
@@ -110,14 +118,18 @@ impl RenderDebugView {
             Self::Projection => "Material Projection (5 cm texels)",
             Self::AmbientOcclusion => "Vertex Ambient Occlusion",
             Self::SkyAccess => "Cached Sky Access",
-            Self::MeshKind => "Mesh: resident green / backdrop blue / edited orange",
+            Self::MeshKind => "Mesh: resident green / backdrop blue / edited orange / backstop magenta",
             Self::WaterDepth => "Water Optical Depth (white: 32 metres)",
             Self::Clay => "Neutral Clay (fixed diffuse light)",
             Self::ShadowSplit => "Sun Shadow Split: cascades red / distant ranges green",
+            Self::SkyGalaxy => "Sky: galaxy band alone",
+            Self::SkyStars => "Sky: star field alone",
+            Self::SkyVisibility => "Ambient Sky Visibility (blue: column only)",
+            Self::SurfaceDistance => "Surface Distance: <128m red / 128-256m orange / 256-512m yellow / 512-1024m green / 1-2km cyan / 2-4km blue / >4km magenta",
         }
     }
 
-    pub fn all() -> [Self; 34] {
+    pub fn all() -> [Self; 38] {
         [
             Self::None,
             Self::WeatherClipmapNear,
@@ -153,6 +165,10 @@ impl RenderDebugView {
             Self::WaterDepth,
             Self::Clay,
             Self::ShadowSplit,
+            Self::SkyGalaxy,
+            Self::SkyStars,
+            Self::SkyVisibility,
+            Self::SurfaceDistance,
         ]
     }
 }

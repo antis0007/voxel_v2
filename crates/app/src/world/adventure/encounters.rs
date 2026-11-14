@@ -52,6 +52,7 @@ pub(super) const RECIPES: &[Recipe] = &[
     },
 ];
 
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct State {
     pub recipe: Option<usize>,
     pub concealed: bool,
@@ -107,6 +108,8 @@ impl State {
 pub(super) fn slots(id: IVec3) -> u32 {
     if id == IVec3::ZERO {
         2
+    } else if super::sites::district_post(id) {
+        3
     } else if id.z == 2 || id.z == 3 || id.y.abs() >= 500 {
         1
     } else {
@@ -114,7 +117,45 @@ pub(super) fn slots(id: IVec3) -> u32 {
     }
 }
 
+pub(super) fn clear_mask(id: IVec3) -> u32 {
+    // The authored Observatory has the guardian in the existing boss slot,
+    // with no ambient guards. Its death, not visiting the room, earns clearance.
+    if observatory::is_site(id) { 1 << 3 } else { (1 << slots(id)) - 1 }
+}
+
 /// True while the disguise or its audible emergence owns the creature's action.
+fn wake(e: &mut Enemy, feet: Vec3, disturbed: bool, sounds: &mut Vec<Sound>) {
+    e.encounter.concealed = false;
+    e.encounter.emerge = 0.85;
+    e.encounter.exposed = if disturbed { 2.5 } else { 1.25 };
+    e.cooldown = 0.85;
+    e.last_seen = feet;
+    e.alert = 5.0;
+    sound(sounds, Cue::Warning, Some(e.pos), 0.8);
+}
+
+pub(crate) fn focused_cache(world: &World, eye: Vec3, forward: Vec3, reach: f32) -> Option<(f32, IVec3, u32)> {
+    let scale = world.voxel_scale.meters();
+    world.adventure.enemies.iter().filter_map(|enemy| {
+        if enemy.health <= 0.0 || !enemy.encounter.concealed || enemy.encounter.mechanic() != Mechanic::CacheAmbush {
+            return None;
+        }
+        let center = enemy.pos + Vec3::Y * (scale * 0.45);
+        let distance = (center - eye).dot(forward);
+        ((0.0..=reach).contains(&distance) && (eye + forward * distance).distance_squared(center) < (scale * 0.56).powi(2)
+            && line(world, eye, center)).then_some((distance, enemy.site, enemy.slot))
+    }).min_by(|a,b| a.0.total_cmp(&b.0))
+}
+
+pub(crate) fn open_cache(world: &mut World, site: IVec3, slot: u32, feet: Vec3) {
+    let adventure = &mut world.adventure;
+    if let Some(enemy) = adventure.enemies.iter_mut().find(|enemy| enemy.site == site && enemy.slot == slot
+        && enemy.health > 0.0 && enemy.encounter.concealed && enemy.encounter.mechanic() == Mechanic::CacheAmbush)
+    {
+        wake(enemy, feet, false, &mut adventure.sounds);
+    }
+}
+
 pub(super) fn ambush(
     e: &mut Enemy,
     world: &World,
@@ -124,7 +165,9 @@ pub(super) fn ambush(
     dt: f32,
     sounds: &mut Vec<Sound>,
 ) -> bool {
-    e.encounter.exposed = (e.encounter.exposed - dt).max(0.0);
+    if !super::aberrations::is_kind(e.kind) {
+        e.encounter.exposed = (e.encounter.exposed - dt).max(0.0);
+    }
     if e.encounter.concealed {
         let offset = e.center() - eye;
         let distance = offset.length();
@@ -132,16 +175,13 @@ pub(super) fn ambush(
             || e.status.any()
             || e.slow > 0.0
             || (e.pos - e.home).length() > 0.6;
-        let opportunity =
-            distance < 3.8 || (distance < 6.0 && forward.dot(offset.normalize_or_zero()) < 0.2);
+        let opportunity = if e.encounter.mechanic() == Mechanic::CacheAmbush {
+            distance < 2.4 && forward.dot(offset.normalize_or_zero()) < -0.15
+        } else {
+            distance < 3.8 || (distance < 6.0 && forward.dot(offset.normalize_or_zero()) < 0.2)
+        };
         if disturbed || (opportunity && line(world, e.pos + Vec3::Y * 0.25, eye)) {
-            e.encounter.concealed = false;
-            e.encounter.emerge = 0.85;
-            e.encounter.exposed = if disturbed { 2.5 } else { 1.25 };
-            e.cooldown = 0.85;
-            e.last_seen = feet;
-            e.alert = 5.0;
-            sound(sounds, Cue::Warning, Some(e.pos), 0.8);
+            wake(e, feet, disturbed, sounds);
         } else {
             e.visible = false;
             e.alert = 0.0;
@@ -157,53 +197,30 @@ pub(super) fn ambush(
 }
 
 pub(super) fn disguise(e: &Enemy, m: &mut Model, time: f32) -> bool {
-    if !e.encounter.concealed {
-        return false;
+    if e.encounter.mechanic() == Mechanic::CacheAmbush && (e.encounter.concealed || e.encounter.emerge > 0.0) {
+        let scale = m.scale_meters();
+        let opened = if e.encounter.concealed { 0.0 } else { 1.0 - e.encounter.emerge / 0.85 };
+        crate::mesh::models::chest::draw(m, e.pos, scale, 0, 0, opened);
+        if opened > 0.1 {
+            for x in [-0.24, -0.08, 0.08, 0.24] {
+                m.cuboid(e.pos + Vec3::new(x, 0.66, -0.37) * scale,
+                    Vec3::new(0.053, 0.10, 0.066) * scale, Quat::IDENTITY,
+                    [0.81, 0.76, 0.58], 0.0);
+            }
+        } else if e.encounter.concealed && (time * 2.0 + e.slot as f32).sin() > 0.96 {
+            m.glow_voxel(e.pos + Vec3::new(0.16, 0.63, -0.451) * scale,
+                Vec3::splat(0.019 * scale), Quat::IDENTITY, PALETTE_AMBER, 0.25, 0.7);
+        }
+        return true;
     }
-    let cache = e.encounter.mechanic() == Mechanic::CacheAmbush;
-    let color = if cache {
-        [0.29, 0.21, 0.12]
-    } else {
-        [0.30, 0.29, 0.25]
-    };
-    if cache {
-        m.cuboid(
-            e.pos + Vec3::Y * 0.18,
-            Vec3::new(0.70, 0.35, 0.50),
-            Quat::IDENTITY,
-            color,
-            0.0,
-        );
-        m.cuboid(
-            e.pos + Vec3::Y * 0.39,
-            Vec3::new(0.74, 0.10, 0.54),
-            Quat::IDENTITY,
-            [0.36, 0.27, 0.15],
-            0.0,
-        );
-        for x in [-0.23, 0.23] {
-            m.cuboid(
-                e.pos + Vec3::new(x, 0.23, -0.28),
-                Vec3::new(0.05, 0.40, 0.05),
-                Quat::IDENTITY,
-                [0.39, 0.36, 0.27],
-                0.0,
-            );
-        }
-    } else {
-        for (x, y, z, w) in [
-            (-0.22, 0.12, 0.0, 0.4),
-            (0.20, 0.15, 0.08, 0.42),
-            (0.0, 0.24, -0.08, 0.45),
-        ] {
-            m.cuboid(
-                e.pos + Vec3::new(x, y, z),
-                Vec3::new(w, 0.25, 0.5),
-                Quat::IDENTITY,
-                color,
-                0.0,
-            );
-        }
+    if !e.encounter.concealed { return false; }
+    for (x, y, z, w) in [
+        (-0.22, 0.12, 0.0, 0.4),
+        (0.20, 0.15, 0.08, 0.42),
+        (0.0, 0.24, -0.08, 0.45),
+    ] {
+        m.cuboid(e.pos + Vec3::new(x, y, z), Vec3::new(w, 0.25, 0.5),
+            Quat::IDENTITY, [0.30, 0.29, 0.25], 0.0);
     }
     // A still seam and sparse glint let observant players spot and pre-empt the trap.
     m.cuboid(
@@ -227,6 +244,10 @@ pub(super) fn disguise(e: &Enemy, m: &mut Model, time: f32) -> bool {
 }
 
 pub(super) fn name(e: &Enemy) -> &'static str {
+    if vault_fight::lead(e) { return "Vault Charger"; }
+    if let Some(id) = wildlife::vehicle::villager_id(e) {
+        return crate::world::travel::trades::name(id);
+    }
     if e.habitat.is_some() {
         return match e.kind { 0 => "Cistern spider", 1 => "Root nursery guardian", _ => "Orchard Matron" };
     }

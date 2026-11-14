@@ -12,6 +12,10 @@ pub struct Fractions {
     count: usize,
 }
 impl Fractions {
+    pub(crate) fn chunk_identities(&self) -> impl Iterator<Item=(IVec3,usize)> + '_ {
+        self.chunks.iter().map(|(&coord,cells)|(coord,Arc::as_ptr(cells) as usize))
+    }
+
     pub fn get(&self, p: &Key) -> Option<&u64> {
         self.chunks.get(&chunk(position(*p)))?.get(p)
     }

@@ -10,7 +10,9 @@ pub const WATER_CAPACITY: u32 = 8192;
 
 /// Machines that consume piped water: washers, and piles for coolant.
 fn wants_coolant(n: &super::Node) -> bool {
-    n.kind == Kind::Washer || super::pile::is_pile(n)
+    matches!(n.kind, Kind::Washer | Kind::WetScrubber)
+        || (n.kind == Kind::Cultivator && super::biomatter::recipe(n.mode).is_some_and(|r| r.water > 0))
+        || super::pile::is_pile(n) || super::industry::boiler::active(n)
 }
 
 pub(super) fn route_water(factory: &mut Factory) {
@@ -21,7 +23,7 @@ pub(super) fn route_water(factory: &mut Factory) {
         for &p in &network.ports {
             let source = &factory.nodes[&p];
             if !source.enabled
-                || !matches!(source.kind, Kind::Pump | Kind::Tank)
+                || !matches!(source.kind, Kind::Pump | Kind::Tank | Kind::GasGenerator)
                 || moved.contains(&p)
             {
                 continue;
@@ -56,11 +58,14 @@ pub(super) fn route_water(factory: &mut Factory) {
                 if p == q
                     || !dest.enabled
                     || !(wants_coolant(dest)
-                        || (dest.kind == Kind::Tank && source_kind == Kind::Pump))
+                        || (dest.kind == Kind::Tank && matches!(source_kind, Kind::Pump | Kind::GasGenerator)))
                 {
                     continue;
                 }
-                let amount = budget.min(WATER_CAPACITY - dest.water);
+                let unit = u64::from(industry::WATER_UNIT_MG);
+                let mass = u64::from(dest.water) * unit + u64::from(dest.separator_water_mg);
+                let room = (u64::from(WATER_CAPACITY) * unit).saturating_sub(mass) / unit;
+                let amount = budget.min(room as u32);
                 if amount == 0 {
                     continue;
                 }
@@ -101,18 +106,19 @@ fn mana_fonts(world: &mut World, player_m: Vec3, dt: f32, size: i32) {
             (*p, (centre - player_m).length())
         })
         .filter(|(_, d)| *d <= 6.0)
-        .min_by(|a, b| a.1.total_cmp(&b.1));
+        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.to_array().cmp(&b.0.to_array())));
     let Some((p, _)) = nearest else {
         return;
     };
     let n = world.factory.nodes.get_mut(&p).unwrap();
-    let wanted = (20.0 * dt).min(deficit);
-    n.work_clock += wanted * 4.0;
-    let units = (n.work_clock.floor() as u32).min(n.energy);
-    n.work_clock -= units as f32;
+    let budget = n.work_clock + 20.0 * dt * 4.0;
+    let units = (budget.floor() as u32).min(n.energy).min((deficit * 4.0).floor() as u32);
+    n.work_clock = budget.fract();
     n.energy -= units;
     world.factory.stats.power(0, units);
-    n.activity = 1.0;
+    if units > 0 {
+        n.activity = 1.0;
+    }
     world.adventure.mana = (world.adventure.mana + units as f32 / 4.0).min(world.adventure.max_mana());
 }
 
@@ -143,7 +149,17 @@ pub(crate) fn tick_world(
             .factory
             .nodes
             .iter()
-            .filter(|(_, n)| (matches!(n.kind, Kind::MiningDrill | Kind::Pump) && n.enabled) || n.draining)
+            .filter(|(_, n)| {
+                ((n.kind.excavates() || n.kind == Kind::Pump) && n.enabled)
+                    || (n.kind.excavates() && n.blocks.output.iter().any(|&count| count > 0))
+                    || (n.kind == Kind::Quarry && n.placer.has_feed())
+                    || (n.kind == Kind::Washer && (n.output[GOLD_CONCENTRATE] > 0
+                        || n.blocks.output[blocks::Material::Sand.index()] > 0))
+                    || (n.kind.processor() && (n.enabled || super::chest_io::has_output(n)))
+                    || (n.kind == Kind::Furnace && n.blocks.output[blocks::Material::GoldBlock.index()] > 0)
+                    || (n.kind == Kind::Assembler && (n.enabled || super::assembler::has_output(n)) && n.target != 0)
+                    || (n.draining && n.kind.water_port())
+            })
             .map(|(&p, _)| p),
     );
     machines.sort_by_key(|p| (p.x, p.y, p.z));
@@ -155,7 +171,9 @@ pub(crate) fn tick_world(
     // distant or delayed machines retain time credit instead of losing it.
     for p in &machines {
         let n = world.factory.nodes.get_mut(p).unwrap();
-        n.work_clock = (n.work_clock + dt).min(0.5);
+        if n.enabled || n.draining || super::chest_io::has_output(n) {
+            n.work_clock = (n.work_clock + dt).min(0.5);
+        }
     }
     for &p in &machines {
         if !deadline.has_time() {
@@ -163,10 +181,36 @@ pub(crate) fn tick_world(
         }
         *cursor = cursor.wrapping_add(1);
         let mut n = world.factory.nodes.remove(&p).unwrap();
+        if n.kind == Kind::Assembler {
+            super::assembler::chests(world, p, &mut n, size, deadline);
+            world.factory.nodes.insert(p, n);
+            continue;
+        }
+        if n.kind.processor() {
+            super::chest_io::transfer(world, p, &mut n, size, deadline);
+        }
+        if matches!(n.kind, Kind::Quarry | Kind::Washer) {
+            super::placer::route(world, p, &mut n, size);
+        }
         if n.draining {
             drain(world, p, &mut n, sources, deadline, blocks, chunks);
             world.factory.nodes.insert(p, n);
             continue;
+        }
+        if n.kind.excavates() {
+            super::blocks::export(world, p, &mut n, size, deadline);
+            if !n.enabled {
+                world.factory.nodes.insert(p, n);
+                continue;
+            }
+        }
+        if n.kind.processor() {
+            super::blocks::export(world, p, &mut n, size, deadline);
+            world.factory.nodes.insert(p, n);
+            continue;
+        }
+        if super::industry::blocked(&n) {
+            n.status="Exhaust blocked";world.factory.nodes.insert(p,n);continue;
         }
         if !world.factory.chips.allows(p) {
             // The controller's output is off: no intake, and no time credit.
@@ -183,6 +227,16 @@ pub(crate) fn tick_world(
         };
         let mut edits = 0;
         while n.work_clock >= interval && edits < 16 && deadline.has_time() {
+            if n.kind.excavates()
+                && n.excavation >= super::quarry::limit(size, n.mode, n.target) as u32
+            {
+                n.status = if n.kind == Kind::MiningDrill && n.mode == 0 {
+                    "Shaft complete"
+                } else {
+                    "Quarry complete"
+                };
+                break;
+            }
             n.work_clock -= interval;
             edits += 1;
             let cost = if n.kind == Kind::Pump {
@@ -208,6 +262,7 @@ pub(crate) fn tick_world(
                 let mut pumped = false;
                 let mut waiting = false;
                 let mut sediment_blocked = false;
+                let mut polluted=false;
                 let mut budget = 128;
                 for z in 0..size {
                     for x in 0..size {
@@ -219,6 +274,7 @@ pub(crate) fn tick_world(
                             waiting = true;
                             continue;
                         }
+                        if world.industry.contamination(q,scale)>0 {polluted=true;continue;}
                         let old = sources.read(world, q).unwrap().1;
                         let available = if exact {
                             (world.environment.exact_water(q, old) / effects::WATER_UNIT_UL) as u32
@@ -261,15 +317,10 @@ pub(crate) fn tick_world(
                     n.status = "Waiting for world data";
                     break;
                 } else {
-                    n.status = if sediment_blocked { "Intake clogged: clear sediment or relocate pump" } else { "Intake dry" };
+                    n.status = if polluted { "Contaminated intake" } else if sediment_blocked { "Intake clogged: clear sediment or relocate pump" } else { "Intake dry" };
                 }
             } else {
-                let index = n.excavation as i32;
-                if index >= super::quarry::limit(size, n.mode) {
-                    n.status = if n.mode == 0 { "Shaft complete" } else { "Quarry complete" };
-                    break;
-                }
-                let q = p + super::quarry::offset(index, size, n.mode);
+                let q = super::quarry::cell(p, &n, size);
                 if q.y < world.sample_config().min_world_y() {
                     n.status = "Bedrock reached";
                     break;
@@ -291,36 +342,22 @@ pub(crate) fn tick_world(
                     n.status = "Waiting for world data";
                     break;
                 }
-                let b = sources.read(world, q).unwrap().0;
-                if b == B::Air {
-                    n.excavation += 1;
-                    continue;
-                }
-                let resource = match b {
-                    B::CopperOre => Some(0),
-                    B::TinOre => Some(1),
-                    B::IronOre => Some(2),
-                    B::CoalOre => Some(3),
-                    B::Crystal => Some(5),
-                    _ => None,
-                };
-                if resource.is_none()
-                    && !matches!(
-                        b,
-                        B::Stone
-                            | B::Dirt
-                            | B::Grass
-                            | B::Sand
-                            | B::Basalt
-                            | B::Gravel
-                            | B::Limestone
-                    )
-                {
-                    n.status = "Obstruction in shaft";
+                let Some((block, _)) = sources.read(world, q) else {
+                    n.status = "Waiting for world data";
                     break;
-                }
-                let yield_n = 64 / (size * size * size) as u32;
-                if resource.is_some_and(|i| n.output[i] > CAPACITY - yield_n) {
+                };
+                let product = match super::quarry::product(world, &n, q, block, size) {
+                    Ok(Some(product)) => product,
+                    Ok(None) => {
+                        n.excavation += 1;
+                        continue;
+                    }
+                    Err(status) => {
+                        n.status = status;
+                        break;
+                    }
+                };
+                if !product.fits(&n) {
                     n.status = "Output blocked";
                     break;
                 }
@@ -328,32 +365,37 @@ pub(crate) fn tick_world(
                     n.status = "Waiting for world data";
                     break;
                 }
-                match effects::replace(world, q, b, B::Air) {
+                match effects::replace(world, q, block, B::Air) {
                     Ok(commit) => { commit.publish(world, blocks, chunks); }
                     Err(Failure::Deferred) => {
                         n.work_clock = (n.work_clock + interval).min(0.5);
                         n.status = "Waiting for excavation";
                         break;
                     }
-                    Err(_) => { n.status = "Excavation unavailable"; break; }
+                    Err(_) => {
+                        n.status = "Excavation unavailable";
+                        break;
+                    }
                 }
-                if let Some(i) = resource {
-                    n.output[i] += yield_n;
-                    world.factory.stats.made(i, yield_n);
-                }
-                n.energy -= cost;
-                world.factory.stats.power(0, cost);
-                if n.burn == 0 {
-                    n.burn = (size * size * size) as u32;
-                }
-                n.burn -= 1;
-                n.excavation += 1;
-                n.status = "Processing";
+                product.store(world, &mut n);
+                charge_excavation(world, &mut n, size, cost);
             }
         }
         world.factory.nodes.insert(p, n);
     }
     world.factory.machine_scratch = machines;
+}
+
+fn charge_excavation(world: &mut World, n: &mut Node, size: i32, cost: u32) {
+    n.energy -= cost;
+    super::industry::produce(n, cost);
+    world.factory.stats.power(0, cost);
+    if n.burn == 0 {
+        n.burn = (size * size * size) as u32;
+    }
+    n.burn -= 1;
+    n.excavation += 1;
+    n.status = "Processing";
 }
 
 fn drain(
@@ -425,7 +467,7 @@ fn drain(
     }
     if n.water == 0 {
         n.draining = false;
-        n.status = "Drained";
+        n.status = if n.separator_water_mg > 0 { "Process water remains" } else { "Drained" };
     } else {
         n.status = if changed > 0 {
             "Draining"

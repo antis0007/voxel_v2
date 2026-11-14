@@ -56,6 +56,9 @@ fn check(row: &RecipeRow) -> Result<(), String> {
     if row.output.count == 0 {
         return Err(format!("{}: output count is 0", row.name));
     }
+    if row.pattern.is_empty() && row.ingredients.iter().any(|&(_, count)| count == 0) {
+        return Err(format!("{}: ingredient count is 0", row.name));
+    }
     if row.pattern.is_empty() && row.ingredients.is_empty() {
         return Err(format!("{}: no pattern or ingredients", row.name));
     }

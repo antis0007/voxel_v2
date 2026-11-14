@@ -41,34 +41,34 @@ fn depth_image(device: &wgpu::Device, queue: &wgpu::Queue, case: &Case) -> Vec<f
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[
-                wgpu::VertexBufferLayout {
+                Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex3>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32],
-                },
-                DrawTransform::LAYOUT,
+                }),
+                Some(DrawTransform::LAYOUT),
             ],
         },
         fragment: None,
         primitive: Default::default(),
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Greater,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Greater),
             stencil: Default::default(),
             bias: Default::default(),
         }),
         multisample: Default::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     });
     let eye_m = case.eye * f64::from(SCALE);
     let origin = RenderOrigin { voxel: case.origin };
-    let projection = Mat4::perspective_rh(90f32.to_radians(), 1.0, 0.1, 100.0);
+    let projection = glam::camera::rh::proj::directx::perspective(90f32.to_radians(), 1.0, 0.1, 100.0);
     let mut camera = CameraUniform::zeroed();
     // Oblique, so a horizontal position error changes depth, not only coverage.
     let forward = Vec3::new(0.5, -1.0, 0.3).normalize();
-    camera.view_proj = (REVERSE_Z * projection * Mat4::look_to_rh(Vec3::ZERO, forward, Vec3::Y)).to_cols_array_2d();
+    camera.view_proj = (REVERSE_Z * projection * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, forward, Vec3::Y)).to_cols_array_2d();
     camera.camera_pos = [eye_m.x as f32, eye_m.y as f32, eye_m.z as f32, 0.0];
     camera.world_params = [SCALE, SCALE.recip(), 0.0, 1000.0];
     camera.render_origin = [case.origin.x, case.origin.y, case.origin.z, 0];
@@ -126,6 +126,7 @@ fn depth_image(device: &wgpu::Device, queue: &wgpu::Queue, case: &Case) -> Vec<f
     let mut encoder = device.create_command_encoder(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("far chunk depth"),
             color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -161,7 +162,7 @@ fn depth_image(device: &wgpu::Device, queue: &wgpu::Queue, case: &Case) -> Vec<f
         .poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(std::time::Duration::from_secs(10)) })
         .unwrap();
     receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap().unwrap();
-    let depths = bytemuck::cast_slice::<u8, f32>(&readback.slice(..).get_mapped_range()).to_vec();
+    let depths = bytemuck::cast_slice::<u8, f32>(&readback.slice(..).get_mapped_range().expect("GPU readback range")).to_vec();
     readback.unmap();
     depths
 }

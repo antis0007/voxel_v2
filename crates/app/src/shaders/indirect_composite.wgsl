@@ -1,11 +1,15 @@
 @group(1) @binding(3) var indirect_tex:texture_2d<f32>;
 @fragment fn fs_main(@builtin(position) pixel:vec4<f32>)->@location(0) vec4<f32>{
- let uv=pixel.xy/vec2<f32>(textureDimensions(depth_tex));
- let receiver=textureLoad(receiver_tex,vec2<i32>(pixel.xy),0);
+ let center_pixel=vec2<i32>(pixel.xy);
+ let receiver=textureLoad(receiver_tex,center_pixel,0);
  if receiver.a==0.0{return vec4<f32>(0.0);}
  let water=receiver.a<0.0;
- let p=view_position(uv);let d=dot(p,cam.camera_forward.xyz);
- if d>select(80.0,700.0,water){return vec4<f32>(0.0);}
+ let crystal=receiver.a< -1.5;
+ let raw_depth=textureLoad(depth_tex,center_pixel,0);
+ if raw_depth<=0.00001{return vec4<f32>(0.0);}
+ let d=linear_depth(raw_depth);
+ let max_depth=select(select(80.0,700.0,water),60.0,crystal);
+ if d>max_depth{return vec4<f32>(0.0);}
  let dims=vec2<i32>(textureDimensions(depth_tex));
  let half_dims=vec2<i32>(textureDimensions(indirect_tex));
  // Filter individual gather texels AFTER rejecting their depth/material.
@@ -15,14 +19,18 @@
  var irradiance=vec4<f32>(0.0);var weights=0.0;
  for(var i=0;i<4;i++){
   let offset=vec2<i32>(i%2,i/2);
+  let spatial=select(vec2<f32>(1.0)-blend,blend,offset!=vec2<i32>(0));
+  let spatial_weight=spatial.x*spatial.y;
+  if spatial_weight==0.0 {continue;}
   let tap=clamp(base+offset,vec2<i32>(0),half_dims-1);
   let full_pixel=min(tap*2+1,dims-1);
-  let tap_uv=(vec2<f32>(full_pixel)+0.5)/vec2<f32>(dims);
-  let tap_depth=dot(view_position(tap_uv),cam.camera_forward.xyz);
   let tap_receiver=textureLoad(receiver_tex,full_pixel,0);
   if (tap_receiver.a<0.0)!=water {continue;}
-  let spatial=select(vec2<f32>(1.0)-blend,blend,offset!=vec2<i32>(0));
-  let w=exp(-abs(tap_depth-d)/max(0.18,d*0.003))*spatial.x*spatial.y;
+  if (tap_receiver.a< -1.5)!=crystal {continue;}
+  let tap_raw=textureLoad(depth_tex,full_pixel,0);
+  if tap_raw<=0.00001 {continue;}
+  let tap_depth=linear_depth(tap_raw);
+  let w=exp(-abs(tap_depth-d)/max(0.18,d*0.003))*spatial_weight;
   irradiance+=textureLoad(indirect_tex,tap,0)*w;weights+=w;
  }
  irradiance/=max(weights,0.0001);

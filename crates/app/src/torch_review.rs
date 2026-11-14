@@ -130,6 +130,10 @@ pub fn mode() -> &'static str {
 
 pub fn motion_camera(player: &mut Player, scale: f32, elapsed: f32) {
     camera(player, scale);
+    if mode() == "station" {
+        station_camera(player, scale, ((elapsed / 3.0) as usize).min(3));
+        return;
+    }
     if mode() == "motion" {
         // Retreat across the detail bands, then return through the same boundaries.
         let t = ((elapsed - 8.0) / 72.0).clamp(0.0, 1.0);
@@ -138,13 +142,43 @@ pub fn motion_camera(player: &mut Player, scale: f32, elapsed: f32) {
     }
 }
 
+/// Generated-wing poses in metres: spine, airlock, hull from outside, trade room.
+/// The habitat sits at (0, 100, 0); the wing starts 29 m along +x.
+fn station_camera(player: &mut Player, scale: f32, phase: usize) {
+    let (pos, yaw, pitch) = match phase {
+        0 => (Vec3::new(38.0, 100.05, 0.5), -std::f32::consts::FRAC_PI_2, -0.05),
+        1 => (Vec3::new(35.5, 100.05, -0.5), std::f32::consts::FRAC_PI_2, -0.05),
+        2 => (Vec3::new(52.0, 102.4, -34.0), 0.0 + std::f32::consts::PI, -0.12),
+        _ => (Vec3::new(44.0, 100.05, 0.5), -std::f32::consts::FRAC_PI_2, -0.05),
+    };
+    player.pos = pos / scale; // feet; the eye sits above
+    player.yaw = yaw;
+    player.pitch = pitch;
+    player.vel = Vec3::ZERO;
+    player.flying = true;
+    player.fly_mode = FlyMode::Noclip;
+    player.crouch_t = 0.0;
+}
+
 pub fn camera(player: &mut Player, scale: f32) {
+    if mode() == "combustion" {
+        player.pos = Vec3::new(15.5, 100.95, 3.8) / scale;
+        player.yaw = 0.0;
+        player.pitch = -0.10;
+        player.vel = Vec3::ZERO;
+        player.flying = true;
+        player.fly_mode = FlyMode::Noclip;
+        player.crouch_t = 0.0;
+        return;
+    }
     let z_dist = match mode() {
         "minerals" => 10.5,
-        "survival" => 2.2,
+        "survival" | "ui" => 2.2,
         "factory" => 7.5,
         _ => 4.5,
     };
+    // VOXEL_REVIEW_DIST=<m> overrides the stand-off, for close torch-on-wall reads.
+    let z_dist = std::env::var("VOXEL_REVIEW_DIST").ok().and_then(|v| v.parse().ok()).unwrap_or(z_dist);
     player.pos = if mode() == "factory" {
         Vec3::new(-0.5, 101.0, 3.6) / scale
     } else {
@@ -153,7 +187,7 @@ pub fn camera(player: &mut Player, scale: f32) {
     player.yaw = 0.0;
     player.pitch = if mode() == "factory" { -0.22 } else { -0.15 };
     player.vel = Vec3::ZERO;
-    player.flying = true;
+    player.flying = mode() != "ui";
     player.fly_mode = FlyMode::Noclip;
     player.crouch_t = 0.0;
     player.selected_block = BlockId::Stone;
@@ -161,6 +195,16 @@ pub fn camera(player: &mut Player, scale: f32) {
         && let Some(offset) = factory_review_focus() {
             player.pos = (Vec3::new(offset.x as f32 + 0.5, 101.5 + offset.y as f32, offset.z as f32 + 3.5)) / scale;
         }
+    // VOXEL_REVIEW_CAMERA=x,y,z,yaw,pitch places the feet in metres, for
+    // same-pose machine captures from any side of the fixture.
+    if let Some(v) = std::env::var("VOXEL_REVIEW_CAMERA").ok().map(|s| {
+        s.split(',').filter_map(|p| p.trim().parse::<f32>().ok()).collect::<Vec<_>>()
+    }) && v.len() == 5
+    {
+        player.pos = Vec3::new(v[0], v[1], v[2]) / scale;
+        player.yaw = v[3];
+        player.pitch = v[4];
+    }
 }
 
 fn factory_review_focus() -> Option<IVec3> {
@@ -291,6 +335,9 @@ fn install_factory(world: &mut World) {
         a.input[6] = 8 * 128;
         a.input[8] = 8 * 128;
         a.energy = 40;
+        if std::env::var("VOXEL_REVIEW_ASSEMBLER_BATCH").as_deref() == Ok("1") {
+            a.mode = factory::assembler::SINGLE_BATCH;
+        }
     }
     world.factory.focus = factory_review_focus().map(|p| at(p.x, p.y, p.z));
     if std::env::var("VOXEL_REVIEW_FOCUS").is_ok_and(|f| f == "pump" || f == "pile") {
@@ -299,12 +346,39 @@ fn install_factory(world: &mut World) {
 }
 
 pub fn install(world: &mut World) {
+    if matches!(mode(), "combustion" | "station") {
+        use crate::world::orbital::habitat;
+        assert_eq!(world.voxel_scale.meters(), 1.0, "combustion review uses metre voxels");
+        let origin = Vec3::new(0.0, 100.0, 0.0);
+        habitat::register(world, glam::IVec2::ZERO, origin, Vec3::ZERO);
+        for _ in 0..if mode() == "station" { 4000 } else { 90 } {
+            habitat::tick(world, &Player::new());
+            if mode() == "station" && world.orbital.habitats.habitats[0].ready { for _ in 0..30 { habitat::tick(world, &Player::new()); } break; }
+        }
+        assert!(world.orbital.habitats.habitats[0].ready);
+        if mode() == "station" {
+            return;
+        }
+        world.set_many_mechanism(&[
+            (IVec3::new(15, 101, 0), BlockId::StoneBricks),
+            (IVec3::new(16, 101, 0), BlockId::StoneBricks),
+            (IVec3::new(15, 102, 0), BlockId::Torch),
+            (IVec3::new(16, 102, 0), BlockId::Water),
+        ]);
+        return;
+    }
     if mode() == "minerals" {
         // Unsaved material comparison, left to right. Uses the normal terrain
         // mesher, skylight metadata and torch BRDF, not synthetic UI swatches.
-        let materials = [BlockId::CoalOre, BlockId::IronOre, BlockId::CopperOre,
+        let mut materials = [BlockId::CoalOre, BlockId::IronOre, BlockId::CopperOre,
             BlockId::TinOre, BlockId::Crystal, BlockId::CopperBlock,
             BlockId::MithrilBlock, BlockId::StarGlass];
+        // VOXEL_REVIEW_STONES=1 swaps in the plain stone family for texture reads.
+        if std::env::var_os("VOXEL_REVIEW_STONES").is_some() {
+            materials = [BlockId::Stone, BlockId::Cobblestone, BlockId::Gravel,
+                BlockId::Basalt, BlockId::Limestone, BlockId::Sandstone,
+                BlockId::StoneBricks, BlockId::Cobblestone];
+        }
         let n = (1.0 / world.voxel_scale.meters()) as i32;
         let mut edits = Vec::new();
         for x in -9 * n..9 * n {
@@ -362,12 +436,53 @@ pub fn install(world: &mut World) {
         Item::Armor(EquipSlot::Chest, ArmorTier::Steel),
         1,
     ));
-    world.inventory.hotbar[0] = Some(ItemStack::new(Item::Weapon(2), 1));
+    // VOXEL_REVIEW_FRESH=1: a new survival player's kit, with no wand or weapon, for progressive-UI captures.
+    let fresh = std::env::var_os("VOXEL_REVIEW_FRESH").is_some();
+    world.inventory.hotbar[0] = if fresh { None } else { Some(ItemStack::new(Item::Weapon(2), 1)) };
     world.inventory.hotbar[1] = Some(ItemStack::new(Item::Food(FoodKind::RoastedCap), 6));
     world.inventory.hotbar[2] = Some(ItemStack::new(Item::Block(BlockId::Torch), 24));
     world.inventory.hotbar[3] = Some(ItemStack::new(Item::Block(BlockId::StoneBricks), 48));
+    // A held wand puts the spell deck and mana instrument on screen in phase 2.
+    if !fresh {
+        let wand = crate::world::adventure::wand_items::generate(world.seed, 3);
+        if let Some(item) = world.adventure.mint_wand(wand) {
+            world.inventory.hotbar[8] = Some(ItemStack::new(item, 1));
+        }
+    }
+    if mode() == "ui" {
+        // Unsaved visual review: legal four-digit block stacks at quarter scale.
+        world.inventory.voxel_m = scale;
+        world.rules.mode = crate::world::rules::GameMode::Survival;
+        for (i, count) in [1, 16, 128, 999, 1024, 2048, 4096].into_iter().enumerate() {
+            let item = Item::Block(BlockId::StoneBricks);
+            let stack = Some(ItemStack { item, count: count.min(world.inventory.stack_limit(item)) });
+            world.inventory.hotbar[i] = stack;
+            world.inventory.pack[i] = stack;
+        }
+    }
     world.inventory.craft_grid[0] = Some(ItemStack::new(Item::Block(BlockId::Log), 3));
+    // Icon review: VOXEL_REVIEW_PACK=Apple,Cherry,... fills pack slots with those blocks.
+    if let Ok(list) = std::env::var("VOXEL_REVIEW_PACK") {
+        let blocks = list.split(',').filter_map(|name| {
+            crate::material::ALL_BLOCK_IDS.iter().copied().find(|b| format!("{b:?}") == name.trim())
+        });
+        for (slot, block) in world.inventory.pack.iter_mut().zip(blocks) {
+            *slot = Some(ItemStack::new(Item::Block(block), 8));
+        }
+    }
     world.sync_from_inventory();
+}
+
+pub fn combustion_phase(world: &mut World, phase: usize) {
+    let torch = IVec3::new(15, 102, 0);
+    let habitat = &mut world.orbital.habitats.habitats[0];
+    let index = habitat.index(torch - habitat.origin).expect("review torch inside habitat");
+    habitat.gas[index] = if phase == 1 { [0.0; 2] } else { [21_278.25, 80_046.75] };
+    let side = torch + IVec3::X;
+    let block = if phase == 0 { BlockId::Water } else { BlockId::Air };
+    if world.get(side) != block {
+        world.set_many_mechanism(&[(side, block)]);
+    }
 }
 
 pub fn apply_survival_phase(
@@ -380,6 +495,28 @@ pub fn apply_survival_phase(
     player.flying = false;
     creative.show_panel = false;
     creative.tool = crate::creative::ToolKind::Hand;
+    // HUD phases run in survival so vitals draw; later phases keep creative.
+    // VOXEL_REVIEW_SURVIVAL=1 keeps survival rules for the inventory phases too.
+    world.rules.mode = if phase <= 2 || std::env::var_os("VOXEL_REVIEW_SURVIVAL").is_some() {
+        crate::world::rules::GameMode::Survival
+    } else {
+        crate::world::rules::GameMode::Creative
+    };
+    world.adventure.review_affinity = match phase {
+        1 => Some(1.6),
+        2 => Some(2.3),
+        _ => None,
+    };
+    if phase == 2 {
+        world.adventure.review_cooldown(2.0);
+    }
+    review_effects(world, phase);
+    // A/B hook: VOXEL_REVIEW_RUNESIGHT=1 wears Rune Goggles so glyphs show their colours.
+    if std::env::var_os("VOXEL_REVIEW_RUNESIGHT").is_some() {
+        use crate::world::inventory::{ArmorTier, EquipSlot, Item, ItemStack};
+        world.inventory.equipment[EquipSlot::Head as usize] =
+            Some(ItemStack { item: Item::Armor(EquipSlot::Head, ArmorTier::Runesight), count: 1 });
+    }
     match phase {
         0 => {
             // Phase 0: HUD gameplay - full health & hunger, aimed at StoneBricks block (HWYLA top pill + hotbar + hearts + haunches)
@@ -405,7 +542,7 @@ pub fn apply_survival_phase(
         2 => {
             // Phase 2: HUD gameplay - low hunger / starvation state + full pack overflow notice
             creative.show_palette = false;
-            creative.selected_slot = 2;
+            creative.selected_slot = 8;
             world.adventure.health = 45.0;
             world.adventure.hunger = 5.0;
             world.inventory.eat_timer = 0.0;
@@ -510,6 +647,11 @@ pub fn apply_survival_phase(
                 creative.trade_page = Some(0);
             }
         }
+        15 => {
+            // Phase 15: the creative catalogue, with its Materials button on the tab row.
+            creative.show_palette = true;
+            egui_ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), 4u32));
+        }
         _ => {
             creative.show_palette = false;
         }
@@ -574,6 +716,24 @@ fn travel_scene(world: &mut World) {
     for _ in 0..8 {
         world.inventory.try_insert(crate::world::inventory::ItemStack::new(crate::world::inventory::Item::Resource(13), 64));
     }
+}
+
+/// Pins status effects for the HUD phases: buffs mid-sweep in phase 1, an
+/// expiring debuff beside the mana poisoning badge in phase 2.
+fn review_effects(world: &mut World, phase: usize) {
+    use crate::world::progression::effects::{Active, Kind};
+    let pin = |kind, seconds, level, total| Active { kind, seconds, level, total };
+    world.progression.effects.list = match phase {
+        1 => vec![
+            pin(Kind::Regeneration, 30.0, 2, 45.0),
+            pin(Kind::Resistance, 90.0, 1, 120.0),
+            pin(Kind::Absorption, 100.0, 1, 120.0),
+            pin(Kind::Haste, 170.0, 1, 180.0),
+        ],
+        2 => vec![pin(Kind::Strength, 60.0, 1, 180.0), pin(Kind::Poison, 3.0, 1, 4.0), pin(Kind::Slowness, 20.0, 1, 30.0)],
+        _ => Vec::new(),
+    };
+    world.adventure.absorption = if phase == 1 { 14.0 } else { 0.0 };
 }
 
 /// A row of assemblies on the survival room's floor, one per health state:

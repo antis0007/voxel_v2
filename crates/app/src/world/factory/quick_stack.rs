@@ -10,10 +10,20 @@ const UNITS_PER_ITEM: u32 = 64;
 /// Hotbar, cursor and grid stacks stay put, and `resources` (the legacy unit
 /// mirror of the inventory) drops by the same units so the post-action
 /// reconcile does not put the items back. Returns the item count moved.
-pub(super) fn quick_stack(
+#[cfg(test)]
+fn quick_stack(
     n: &mut Node,
     inv: &mut SurvivalInventory,
     resources: &mut [u32; RESOURCE_COUNT],
+) -> u32 {
+    quick_stack_reserved(n, inv, resources, |_| 0)
+}
+
+pub(super) fn quick_stack_reserved(
+    n: &mut Node,
+    inv: &mut SurvivalInventory,
+    resources: &mut [u32; RESOURCE_COUNT],
+    reserved: impl Fn(usize) -> u32,
 ) -> u32 {
     if n.kind != Kind::Storage {
         return 0;
@@ -23,7 +33,7 @@ pub(super) fn quick_stack(
         if n.input[i] == 0 || !n.accepts(i) {
             continue;
         }
-        let room = CAPACITY.saturating_sub(n.input[i]) / UNITS_PER_ITEM;
+        let room = CAPACITY.saturating_sub(n.input[i].saturating_add(reserved(i))) / UNITS_PER_ITEM;
         let items = inv.take_from_pack(
             Item::Resource(i as u8),
             room.min(resources[i] / UNITS_PER_ITEM),

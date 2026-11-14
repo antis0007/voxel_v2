@@ -1,6 +1,174 @@
 use glam::{IVec2, Vec2};
 
 use super::CloudControls;
+mod scroll;
+pub mod synoptic;
+
+/// Rows of one clipmap level re-sampled per update, so synoptic motion reaches the texture.
+const REFRESH_ROWS: usize = 2;
+const REFRESH_INTERVAL_S: f32 = 1.0 / 60.0;
+const MAX_REFRESH_TICKS: usize = 4;
+/// `CLOUD_ADVECTION_SPEED_SCALE * cloud_layer_speed_mult(low)` in cloud_shader.wgsl.
+const LOW_LAYER_WIND_MULT: f32 = 8.0 * 1.65;
+
+/// Time inputs of the shared weather state.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WeatherClock {
+    /// How far the low deck has drifted, `wind_offset` at the sky time.
+    pub drift_m: Vec2,
+    /// Synced weather day, `synoptic::days`.
+    pub days: f64,
+    pub(crate) planet: Option<engine_voxel::WorldSampleConfig>,
+}
+
+impl WeatherClock {
+    pub fn new(controls: &CloudControls, sky_time_s: f32, days: f64) -> Self {
+        Self { drift_m: wind_offset(controls, sky_time_s), days, planet: None }
+    }
+
+    pub fn with_planet(mut self, cfg: engine_voxel::WorldSampleConfig) -> Self {
+        self.planet = engine_worldgen::planetary::active(&cfg).then_some(cfg);
+        self
+    }
+}
+
+/// World-space offset the low cloud deck has drifted by at `time_s`, as the march applies it.
+pub fn wind_offset(controls: &CloudControls, time_s: f32) -> Vec2 {
+    let angle = controls.wind_dir_angle.to_radians();
+    Vec2::new(angle.cos(), angle.sin()) * time_s * controls.advection * controls.wind_speed.max(0.0) * LOW_LAYER_WIND_MULT
+}
+
+/// Solver model time the orbital shell starts publishing at.
+pub(crate) const WEATHER_SPIN_UP: f64 = 40.0;
+/// Model units per weather day. At the default 480 s day this keeps the old
+/// orbital pace of 0.04 units per real second (one front map about every 25 s).
+pub(crate) const WEATHER_UNITS_PER_DAY: f64 = 0.04 * super::DEFAULT_DAY_LENGTH_SECONDS as f64;
+
+/// Planetary weather model time at a synced weather day (`synoptic::days`), before spin-up.
+pub(crate) fn weather_model_time(days: f64) -> f64 { days.max(0.0) * WEATHER_UNITS_PER_DAY }
+
+/// Solver parameters of a world's planetary weather: the one source for the
+/// orbital shell solver and the ground wind.
+pub(crate) fn weather_params(seed: u32, planet: Option<engine_voxel::WorldSampleConfig>) -> engine_worldgen::sphere::WeatherParams {
+    use engine_core::planet_frame::PlanetAxis;
+    let settings = planet.and_then(|cfg| cfg.planet_settings());
+    engine_worldgen::sphere::WeatherParams {
+        seed,
+        axis: PlanetAxis::new(glam::DVec3::NEG_Z, settings.map_or(23.4, |s| 47.0 * s.unit(6)).to_radians()),
+        year_fraction: f64::from(engine_core::hash::hash01(seed ^ 0x7EA7_0001)),
+        spin: 1.0,
+        wetness: settings.map_or(0.5, |s| s.unit(5)),
+    }
+}
+
+/// Planetary flow (zonal belts plus storm templates) at a weather day, cached per
+/// small day step: the same `CloudSky` the orbital shell bakes and advects with.
+pub(crate) fn planet_sky(seed: u32, planet: Option<engine_voxel::WorldSampleConfig>, days: f64) -> std::sync::Arc<engine_worldgen::sphere::CloudSky> {
+    use std::sync::{Arc, Mutex};
+    type Key = (u32, u64, u64);
+    static CACHE: Mutex<Option<(Key, Arc<engine_worldgen::sphere::CloudSky>)>> = Mutex::new(None);
+    let step = (days.max(0.0) * 1024.0).floor();
+    let params = weather_params(seed, planet);
+    let key = (seed, params.axis.obliquity.to_bits(), step.to_bits());
+    if let Ok(cache) = CACHE.lock() && let Some((k, sky)) = cache.as_ref() && *k == key {
+        return sky.clone();
+    }
+    let time = WEATHER_SPIN_UP + weather_model_time(step / 1024.0);
+    let sky = Arc::new(engine_worldgen::sphere::CloudSky::at(seed, params.axis, params.year_fraction, time));
+    if let Ok(mut cache) = CACHE.lock() { *cache = Some((key, sky.clone())); }
+    sky
+}
+
+/// Ground wind in world xz metres per second at `xz_m`: the one wind truth for
+/// sim and presentation, in real m/s. Off-planet the day's authored dial sets a
+/// breeze (`ground.day_wind_ms` per unit), stiffened under cumulonimbus. On a
+/// planetary world it is the planet sky's flow at that point, including every
+/// cyclone's Holland vortex and tornado core, converted with `flow_per_ms`; the
+/// day's breeze is the floor. Gusts are a fixed positional pattern, never
+/// wall-clock noise. Dials: `ground` in `assets/climate.ron`.
+pub(crate) fn wind_at(day: &super::DayNightCycle, planet: Option<engine_voxel::WorldSampleConfig>, xz_m: glam::DVec2) -> Vec2 {
+    let dials = engine_content::climate::storm_dials();
+    let g = &dials.ground;
+    let days = synoptic::days(day);
+    let seed = day.weather_seed();
+    let planet = planet.filter(engine_worldgen::planetary::active);
+    let controls = synoptic::controls_at(day.cloud_controls(), planet, xz_m, days, seed);
+    let calm = controls.wind_speed.max(0.0) * g.day_wind_ms as f32
+        * (1.0 + g.storm_gust as f32 * controls.cumulonimbus.clamp(0.0, 1.0));
+    let (z, x) = controls.wind_dir_angle.to_radians().sin_cos();
+    let mut wind = Vec2::new(x, z) * calm;
+    if let Some(planet) = planet {
+        let dir = synoptic::body_dir(xz_m);
+        let flow = planet_sky(seed, Some(planet), days).wind(dir);
+        // Chart tangents at this point carry the body-frame flow into world xz.
+        let east = synoptic::body_dir(xz_m + glam::DVec2::X) - dir;
+        let south = synoptic::body_dir(xz_m + glam::DVec2::Y) - dir;
+        let local = Vec2::new(
+            (flow.dot(east) / east.length_squared().max(1e-30)) as f32,
+            (flow.dot(south) / south.length_squared().max(1e-30)) as f32,
+        ) * (east.length() as f32);
+        let flow_ms = local * (g.planet_gain / dials.flow_per_ms) as f32;
+        wind = flow_ms.normalize_or(Vec2::new(x, z)) * flow_ms.length().max(calm);
+    }
+    let range = g.gust_range as f32;
+    let gust = 1.0 - range + 2.0 * range * value_noise2((xz_m / g.gust_cell_m.max(1.0)).as_vec2(), seed ^ 0x6057_0001);
+    (wind * gust).clamp_length_max(g.max_ms as f32)
+}
+
+/// Rising air at `xz_m` in m/s: a tornado's updraft, zero elsewhere.
+pub(crate) fn updraft_at(day: &super::DayNightCycle, planet: Option<engine_voxel::WorldSampleConfig>, xz_m: glam::DVec2) -> f32 {
+    let lift = engine_content::climate::storm_dials().ground.tornado_lift_ms as f32;
+    let near = synoptic::tornado_at(planet, xz_m, synoptic::days(day), day.weather_seed());
+    lift * near * near
+}
+
+/// A review pose on the strongest tropical cyclone (`VOXEL_REVIEW_CYCLONE`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CycloneShot {
+    pub day_index: u32,
+    pub time_of_day: f32,
+    /// `--benchmark-terrain-camera` pose: x, z, clearance, yaw, pitch.
+    pub camera: [f32; 5],
+    pub max_wind_ms: f32,
+    pub category: u8,
+}
+
+/// Searches the first `days` weather days of a planet world for the strongest
+/// tropical cyclone in local daylight and frames it: `orbit` looks straight
+/// down from 9 km, `eyewall` stands 6 m over the sea just outside the radius of
+/// maximum wind, facing the eye. Pure in (seed, planet, mode).
+pub(crate) fn cyclone_review(seed: u32, planet: engine_voxel::WorldSampleConfig, mode: &str, days: f64) -> Option<CycloneShot> {
+    use engine_core::cube_sphere::atlas;
+    use engine_worldgen::sphere::StormKind as Kind;
+    if !engine_worldgen::planetary::active(&planet) {
+        return None;
+    }
+    let chart = |dir: glam::DVec3| atlas::from_body(dir.normalize() * atlas::RADIUS_M);
+    let mut best: Option<(f64, f64, glam::DVec3, glam::DVec3, f64, u8)> = None;
+    let mut t = 0.5;
+    while t < days {
+        let sky = planet_sky(seed, Some(planet), t);
+        for s in sky.storms().iter().filter(|s| s.kind == Kind::Tropical) {
+            let at = chart(s.centre);
+            let solar = crate::planet::solar_time(at, (t * 480.0 * 120.0) as u64);
+            if (0.38..0.62).contains(&solar) && best.is_none_or(|b| s.max_wind_ms > b.1) {
+                best = Some((t, s.max_wind_ms, s.centre, s.east, s.rmw, s.category()));
+            }
+        }
+        t += 0.05;
+    }
+    let (t, wind, centre, east, rmw, category) = best?;
+    let eye = chart(centre);
+    let camera = if mode == "eyewall" {
+        let stand = chart(centre + east * rmw * 1.3);
+        let to_eye = eye - stand;
+        let sea_m = planet.water_level() as f32 * planet.voxel_scale.meters();
+        [stand.x as f32, stand.z as f32, -(500.0 + sea_m + 6.0), (to_eye.x as f32).atan2(-to_eye.z as f32), 0.12]
+    } else {
+        [eye.x as f32, eye.z as f32, 9_000.0, 0.0, -1.55]
+    };
+    Some(CycloneShot { day_index: t.floor() as u32, time_of_day: t.fract() as f32, camera, max_wind_ms: wind as f32, category })
+}
 
 pub const WEATHER_TEXTURE_RESOLUTION: u32 = 128;
 pub const WEATHER_CLIPMAP_LEVEL_COUNT: usize = 3;
@@ -105,6 +273,8 @@ pub struct WeatherClipmapLevel {
     last_controls: CloudControls,
     last_seed: u32,
     last_time_s: f32,
+    clock: WeatherClock,
+    refresh_row: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -128,6 +298,9 @@ struct WeatherSample {
 #[derive(Debug)]
 pub struct CloudWeatherField {
     levels: [WeatherClipmapLevel; WEATHER_CLIPMAP_LEVEL_COUNT],
+    /// Level whose rows the next update re-samples.
+    refresh_level: usize,
+    next_refresh_s: f32,
 }
 
 pub struct WeatherRuntimeState {
@@ -155,20 +328,18 @@ impl WeatherRuntimeState {
         authoring: &CloudControls,
         weather_seed: u32,
         sky_time_s: f32,
+        weather_days: f64,
+        cfg: engine_voxel::WorldSampleConfig,
     ) -> Option<CloudWeatherUploadManifest> {
-        // Accumulate real time for future slow weather evolution (storm buildup etc).
-        // The 0.5 s fixed-step gate was removed: time no longer rebuilds the texture
-        // (advection was decoupled to the shader), so gating was just adding latency.
         self.simulation_time_s += dt_real_s.max(0.0);
-
-        let wind_angle = authoring.wind_dir_angle.to_radians();
-        let wind = Vec2::new(wind_angle.cos(), wind_angle.sin());
-        let advection = wind * sky_time_s * authoring.advection * authoring.wind_speed * 8.0;
-        self.field.update(
-            center_world_xz_m + advection,
+        // Centred where the march samples the player's column: the low-deck offset.
+        let clock = WeatherClock::new(authoring, sky_time_s, weather_days).with_planet(cfg);
+        self.field.update_at(
+            center_world_xz_m + clock.drift_m,
             self.simulation_time_s,
             *authoring,
             weather_seed,
+            clock,
         );
         self.field.take_gpu_upload_manifest()
     }
@@ -195,8 +366,10 @@ impl WeatherClipmapLevel {
             last_controls: CloudControls::default(),
             last_seed: seed,
             last_time_s: -1.0,
+            clock: WeatherClock::default(),
+            refresh_row: 0,
         };
-        level.update(Vec2::ZERO, 0.0, CloudControls::default(), seed);
+        level.update(Vec2::ZERO, 0.0, CloudControls::default(), seed, WeatherClock::default(), 0);
         level
     }
 
@@ -218,7 +391,10 @@ impl WeatherClipmapLevel {
         time_s: f32,
         controls: CloudControls,
         weather_seed: u32,
+        clock: WeatherClock,
+        refresh_rows: usize,
     ) {
+        self.clock = clock;
         let texel_size_m = self.texel_size_m();
 
         // Keep clipmaps snapped, but much less coarsely than before so the field
@@ -238,6 +414,7 @@ impl WeatherClipmapLevel {
         // so time changes do not require a texture rebuild.
 
         if !(origin_changed || seed_changed || controls_changed) {
+            self.refresh_rows(refresh_rows, controls, weather_seed);
             return;
         }
 
@@ -270,6 +447,45 @@ impl WeatherClipmapLevel {
     fn texel_world_position(&self, origin_m: Vec2, x: usize, y: usize) -> Vec2 {
         let texel_size_m = self.texel_size_m();
         origin_m + Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * texel_size_m
+    }
+
+    fn sample_texel(&self, world_xz_m: Vec2, controls: CloudControls, weather_seed: u32) -> WeatherSample {
+        canonical_sample(world_xz_m, self.clock, controls, weather_seed)
+    }
+
+    /// Re-samples the next `rows` rows in place and queues them for upload.
+    fn refresh_rows(&mut self, rows: usize, controls: CloudControls, weather_seed: u32) {
+        let resolution = self.region.resolution as usize;
+        if rows == 0 || resolution == 0 {
+            return;
+        }
+        let rows = rows.min(resolution);
+        let first = self.refresh_row % resolution;
+        for k in 0..rows {
+            let y = (first + k) % resolution;
+            for x in 0..resolution {
+                let world_xz_m = self.texel_world_position(self.region.origin_m, x, y);
+                let sample = self.sample_texel(world_xz_m, controls, weather_seed);
+                self.write_sample(self.texel_index(x, y), sample);
+            }
+        }
+        self.refresh_row = (first + rows) % resolution;
+        let full = WeatherUploadRect::full_level(self.region.resolution);
+        if !self.pending_gpu_uploads.contains(&full) {
+            // A wrapped band is two rects; each stays inside the level.
+            let tail = rows.min(resolution - first);
+            for (y, h) in [(first, tail), (0, rows - tail)] {
+                if h > 0 {
+                    self.pending_gpu_uploads.push(WeatherUploadRect {
+                        texel_x: 0,
+                        texel_y: y as u32,
+                        texel_width: self.region.resolution,
+                        texel_height: h as u32,
+                    });
+                }
+            }
+        }
+        self.rebuild_summary();
     }
 
     fn evaluate_sample(
@@ -519,7 +735,7 @@ impl WeatherClipmapLevel {
     fn full_refresh(
         &mut self,
         origin_m: Vec2,
-        time_s: f32,
+        _time_s: f32,
         controls: CloudControls,
         weather_seed: u32,
     ) {
@@ -529,52 +745,10 @@ impl WeatherClipmapLevel {
             for x in 0..resolution {
                 let index = self.texel_index(x, y);
                 let world_xz_m = self.texel_world_position(origin_m, x, y);
-                let sample = Self::evaluate_sample(world_xz_m, time_s, controls, weather_seed);
+                let sample = self.sample_texel(world_xz_m, controls, weather_seed);
                 self.write_sample(index, sample);
             }
         }
-        self.mark_full_level_dirty();
-        self.rebuild_summary();
-    }
-
-    fn scroll_to_origin(
-        &mut self,
-        origin_m: Vec2,
-        time_s: f32,
-        texel_offset: IVec2,
-        controls: CloudControls,
-        weather_seed: u32,
-    ) {
-        let resolution = self.region.resolution as i32;
-        if texel_offset.x.abs() >= resolution || texel_offset.y.abs() >= resolution {
-            self.full_refresh(origin_m, time_s, controls, weather_seed);
-            return;
-        }
-
-        let previous_primary = self.primary_rgba.clone();
-        let previous_secondary = self.secondary_rgba.clone();
-        let previous_shadow = self.shadow_rgba.clone();
-        self.region.origin_m = origin_m;
-
-        for y in 0..resolution {
-            for x in 0..resolution {
-                let index = self.texel_index(x as usize, y as usize);
-                let source_x = x + texel_offset.x;
-                let source_y = y + texel_offset.y;
-                if source_x >= 0 && source_x < resolution && source_y >= 0 && source_y < resolution
-                {
-                    let source_index = self.texel_index(source_x as usize, source_y as usize);
-                    self.primary_rgba[index] = previous_primary[source_index];
-                    self.secondary_rgba[index] = previous_secondary[source_index];
-                    self.shadow_rgba[index] = previous_shadow[source_index];
-                } else {
-                    let world_xz_m = self.texel_world_position(origin_m, x as usize, y as usize);
-                    let sample = Self::evaluate_sample(world_xz_m, time_s, controls, weather_seed);
-                    self.write_sample(index, sample);
-                }
-            }
-        }
-
         self.mark_full_level_dirty();
         self.rebuild_summary();
     }
@@ -610,9 +784,12 @@ impl CloudWeatherField {
                     seed,
                 )
             }),
+            refresh_level: 0,
+            next_refresh_s: 0.0,
         }
     }
 
+    /// `update_at` with the clock at its origin: no drift, weather day zero.
     pub fn update(
         &mut self,
         center_world_xz_m: Vec2,
@@ -620,8 +797,31 @@ impl CloudWeatherField {
         controls: CloudControls,
         weather_seed: u32,
     ) {
-        for level in &mut self.levels {
-            level.update(center_world_xz_m, time_s, controls, weather_seed);
+        self.update_at(center_world_xz_m, time_s, controls, weather_seed, WeatherClock::default());
+    }
+
+    /// Moves the clipmaps and refreshes weather rows at a bounded 60 Hz cadence.
+    pub fn update_at(
+        &mut self,
+        center_world_xz_m: Vec2,
+        time_s: f32,
+        controls: CloudControls,
+        weather_seed: u32,
+        clock: WeatherClock,
+    ) {
+        let ticks = if time_s >= self.next_refresh_s {
+            let elapsed = ((time_s - self.next_refresh_s) / REFRESH_INTERVAL_S).floor() + 1.0;
+            // Drop excess catch-up after stalls instead of stalling the next frame too.
+            self.next_refresh_s += elapsed * REFRESH_INTERVAL_S;
+            (elapsed as usize).min(MAX_REFRESH_TICKS)
+        } else { 0 };
+        let refreshing = self.refresh_level;
+        for (i, level) in self.levels.iter_mut().enumerate() {
+            let rows = if i == refreshing { REFRESH_ROWS * ticks } else { 0 };
+            level.update(center_world_xz_m, time_s, controls, weather_seed, clock, rows);
+        }
+        if ticks > 0 {
+            self.refresh_level = (refreshing + 1) % WEATHER_CLIPMAP_LEVEL_COUNT;
         }
     }
 
@@ -683,9 +883,109 @@ impl CloudWeatherField {
     }
 }
 
-/// Coverage the clipmap texels store, without a field: the globe shell bakes from it.
-pub fn coverage_at(world_xz_m: Vec2, controls: CloudControls, weather_seed: u32) -> f32 {
-    WeatherClipmapLevel::evaluate_sample(world_xz_m, 0.0, controls, weather_seed).primary[0]
+/// The one weather sample both cloud renderers store: the local field at
+/// advected position `q` under the controls the synoptic state gives the
+/// ground point beneath it, `q - clock.drift_m`.
+fn canonical_sample(q: Vec2, clock: WeatherClock, controls: CloudControls, weather_seed: u32) -> WeatherSample {
+    let mut sample = canonical_sample_raw(q, clock, controls, weather_seed);
+    // On planets the march stores the shell's front coverage, so descending
+    // through the handoff band keeps one deck instead of two weather maps.
+    if clock.planet.is_some() && let Some(cover) = fronts(weather_seed) {
+        let dir = synoptic::body_dir(q.as_dvec2() - clock.drift_m.as_dvec2());
+        let previous_cover = sample.primary[0];
+        sample.primary[0] = crate::render::globe::shell::front_coverage(sample.primary[0],
+            sample.secondary[0], cover(dir), controls.coverage, true);
+        // Keep cloud amount and its shadow attached to the same front. Merely
+        // replacing coverage left the old random deck active in clear slots.
+        let amount = sample.primary[0] / previous_cover.max(0.02);
+        sample.secondary[1] = (sample.secondary[1] * amount).clamp(0.0, 1.0);
+        sample.shadow[0] = (sample.shadow[0] * amount).clamp(0.0, 4.0);
+        sample.shadow[1] = (sample.shadow[1] * amount).clamp(0.0, 1.6);
+    }
+    sample
+}
+
+/// Pressure-solver cover the orbital shell bakes from, per weather seed.
+pub(crate) type FrontCover = std::sync::Arc<dyn Fn(glam::DVec3) -> f32 + Send + Sync>;
+static FRONTS: std::sync::RwLock<Option<(u32, FrontCover)>> = std::sync::RwLock::new(None);
+
+/// Makes the shell's newest solver snapshot the march's fronts too.
+pub(crate) fn publish_fronts(weather_seed: u32, cover: FrontCover) {
+    if let Ok(mut fronts) = FRONTS.write() { *fronts = Some((weather_seed, cover)); }
+}
+
+fn fronts(weather_seed: u32) -> Option<FrontCover> {
+    FRONTS.read().ok()?.as_ref().filter(|(seed, _)| *seed == weather_seed).map(|(_, cover)| cover.clone())
+}
+
+fn canonical_sample_raw(q: Vec2, clock: WeatherClock, controls: CloudControls, weather_seed: u32) -> WeatherSample {
+    use engine_core::cube_sphere::{Face, atlas};
+    let ground = q.as_dvec2() - clock.drift_m.as_dvec2();
+    let dir = synoptic::body_dir(ground);
+    let mut local = synoptic::apply(controls, synoptic::regional_at(clock.planet, dir, clock.days, weather_seed));
+    if let Some(site) = clock.planet.as_ref().and_then(|cfg| engine_worldgen::planetary::ready_weather_site(cfg, dir)) {
+        // The prevailing zonal wind is in body space, so lee and windward
+        // sides remain consistent through chart edges and camera motion.
+        let lat = dir.y.abs() as f32;
+        let wind = planet_sky(weather_seed, clock.planet, clock.days).wind(dir).normalize_or_zero();
+        let lift = (site.slope.dot(wind) as f32 * 2.0).clamp(-1.0, 1.0);
+        let humid = (site.moisture - 0.5) * site.land;
+        let coast = 4.0 * site.land * (1.0 - site.land);
+        // Terrain modulates the authored weather, with more headroom in a
+        // partly cloudy sky than in a clear or already overcast preset.
+        let room = 4.0 * local.coverage * (1.0 - local.coverage);
+        let change = (0.15 * lift + 0.14 * humid + 0.035 * coast) * room;
+        local.coverage = (local.coverage + change).max(local.cumulonimbus * 0.9).clamp(0.02, 0.98);
+        local.stratus = (local.stratus + (0.12 * coast + 0.18 * lift.max(0.0) * site.relief) * room).clamp(0.0, 1.0);
+        local.cumulus = (local.cumulus + 0.20 * humid * (1.0 - lat) * room).clamp(0.0, 1.0);
+    }
+    let largest = dir.abs().max_element();
+    let mut result = WeatherSample::default();
+    let mut total = 0.0;
+    // Blend overlapping face projections by body direction. A shared edge has
+    // the same contributors from either chart, including at three-face corners.
+    for face in Face::ALL {
+        let axes = face.basis();
+        let normal = dir.dot(axes.n.as_dvec3());
+        let weight = smoothstep(0.85, 1.0, (normal / largest) as f32);
+        if weight <= 0.0 { continue; }
+        let chart = Vec2::new(
+            (f64::from(face as u8) * atlas::PITCH_M
+                + (dir.dot(axes.u.as_dvec3()) / normal).atan()
+                    / std::f64::consts::FRAC_PI_4 * atlas::HALF_M) as f32,
+            ((dir.dot(axes.v.as_dvec3()) / normal).atan()
+                / std::f64::consts::FRAC_PI_4 * atlas::HALF_M) as f32,
+        );
+        let sample = WeatherClipmapLevel::evaluate_sample(chart + clock.drift_m, 0.0, local, weather_seed);
+        for channel in 0..4 {
+            result.primary[channel] += sample.primary[channel] * weight;
+            result.secondary[channel] += sample.secondary[channel] * weight;
+            result.shadow[channel] += sample.shadow[channel] * weight;
+        }
+        total += weight;
+    }
+    for channel in 0..4 {
+        result.primary[channel] /= total;
+        result.secondary[channel] /= total;
+        result.shadow[channel] /= total;
+    }
+    result
+}
+
+/// Coverage the clipmap stores at advected position `q`: the globe shell bakes from it.
+pub fn coverage_at(q: Vec2, clock: WeatherClock, controls: CloudControls, weather_seed: u32) -> f32 {
+    canonical_sample(q, clock, controls, weather_seed).primary[0]
+}
+
+/// Local coverage and storm before the fronts; the shell applies its own snapshot.
+pub(crate) fn cloud_shell_sample_raw(q: Vec2, clock: WeatherClock, controls: CloudControls, weather_seed: u32) -> (f32, f32) {
+    let sample = canonical_sample_raw(q, clock, controls, weather_seed);
+    (sample.primary[0], sample.secondary[0])
+}
+
+/// Precipitation the clipmap stores at advected position `q`, 0..1.
+pub fn precipitation_at(q: Vec2, clock: WeatherClock, controls: CloudControls, weather_seed: u32) -> f32 {
+    canonical_sample(q, clock, controls, weather_seed).shadow[3]
 }
 
 fn saturate(x: f32) -> f32 {

@@ -1,5 +1,5 @@
 //! Checksummed farming file beside a world: clock, plots, the tended herd and paid wild cells.
-//! A sidecar keeps the save format unchanged; a world without one has no plots.
+//! The same checksummed payload is embedded in world checkpoints from version 71.
 use super::{Key, MAX_PLOTS, MAX_WILD_PAID, Plot, State, table};
 use crate::world::World;
 use anyhow::{Context, Result, ensure};
@@ -24,6 +24,9 @@ impl<'a> Reader<'a> {
         let out = self.bytes.get(self.at..end).context("Truncated farming file")?;
         self.at = end;
         Ok(out)
+    }
+    pub(crate) fn remaining(&self) -> usize {
+        self.bytes.len() - self.at
     }
     pub(crate) fn u8(&mut self) -> Result<u8> {
         Ok(self.take(1)?[0])
@@ -64,6 +67,68 @@ pub fn encode(world: &World) -> Vec<u8> {
             out.extend_from_slice(&v.to_le_bytes());
         }
     }
+    if f.nursery_stock != 0 {
+        out.extend_from_slice(b"NUR1");
+        out.extend_from_slice(&f.nursery_stock.to_le_bytes());
+    }
+    if f.freight.market != 0 || f.freight.cargo != 0 || f.freight.last_crossing.is_some() {
+        out.extend_from_slice(b"FRT2");
+        out.extend_from_slice(&f.freight.market.to_le_bytes());
+        out.extend_from_slice(&f.freight.cargo.to_le_bytes());
+        out.push(f.freight.progress);
+        out.push(f.freight.last_crossing.map_or(0, |route| route as u8));
+        out.push(f.freight.cargo_lane.map_or(0, |route| route as u8));
+    }
+    if let Some(pantry) = &f.pantry {
+        out.extend_from_slice(b"PNT1");
+        for stock in [pantry.meals, pantry.biomass, pantry.purse] {
+            out.extend_from_slice(&stock.to_le_bytes());
+        }
+        out.extend_from_slice(&pantry.day.to_le_bytes());
+        out.extend_from_slice(&[pantry.demand, pantry.served]);
+    }
+    if let Some(freight) = &f.planet_freight {
+        out.extend_from_slice(b"PFR2");
+        for stock in [freight.stock[0], freight.stock[1], freight.market, freight.cargo] {
+            out.extend_from_slice(&stock.to_le_bytes());
+        }
+        out.extend_from_slice(&[freight.progress, freight.holding, freight.lane]);
+        for damage in freight.wounds {
+            out.extend_from_slice(&damage.to_le_bytes());
+        }
+        out.extend_from_slice(&freight.pause_until.to_le_bytes());
+    }
+    if f.jobs.used() {
+        let text = ron::to_string(&f.jobs.checkpoint(&world.adventure.enemies, f.clock)).expect("serializable settler jobs");
+        let bytes = text.as_bytes();
+        out.extend_from_slice(b"JOB1");
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
+    }
+    if let Some(bounds) = f.base.bounds {
+        let text = ron::to_string(&bounds).expect("serializable base bounds");
+        out.extend_from_slice(b"BAS1");
+        out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        out.extend_from_slice(text.as_bytes());
+    }
+    if f.base.stakes.used() {
+        let text = ron::to_string(&f.base.stakes).expect("serializable stake claims");
+        out.extend_from_slice(b"STK1");
+        out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        out.extend_from_slice(text.as_bytes());
+    }
+    if f.communities.used() {
+        let text = ron::to_string(&f.communities.checkpoint(&world.adventure.enemies, f.clock))
+            .expect("serializable settlement communities");
+        use std::io::Write;
+        let mut encoder=flate2::write::ZlibEncoder::new(Vec::new(),flate2::Compression::fast());
+        encoder.write_all(text.as_bytes()).expect("memory community encoder");
+        let packed=encoder.finish().expect("memory community encoder");
+        out.extend_from_slice(b"COM2");
+        out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(packed.len() as u32).to_le_bytes());
+        out.extend_from_slice(&packed);
+    }
     let sum = hash(&out);
     out.extend_from_slice(&sum.to_le_bytes());
     out
@@ -80,7 +145,7 @@ pub fn decode(bytes: &[u8]) -> Result<(State, &[u8])> {
     ensure!(count <= MAX_PLOTS, "Too many plots");
     for _ in 0..count {
         let k: Key = (r.u32()? as i32, r.u32()? as i32, r.u32()? as i32);
-        ensure!([k.0, k.1, k.2].iter().all(|v| v.abs() < COORD_LIMIT), "Plot outside the world");
+        ensure!([k.0, k.1, k.2].iter().all(|v| v.unsigned_abs() < COORD_LIMIT as u32), "Plot outside the world");
         let (crop, stage) = (r.u8()?, r.u8()?);
         let plot = Plot { crop, stage, planted: r.u64()?, rolled: r.u32()? };
         let row = table::get(crop).context("Unknown crop")?;
@@ -95,11 +160,125 @@ pub fn decode(bytes: &[u8]) -> Result<(State, &[u8])> {
         ensure!(count <= MAX_WILD_PAID, "Too many paid wild cells");
         for _ in 0..count {
             let k: Key = (r.u32()? as i32, r.u32()? as i32, r.u32()? as i32);
-            ensure!([k.0, k.1, k.2].iter().all(|v| v.abs() < COORD_LIMIT), "Wild cell outside the world");
+            ensure!([k.0, k.1, k.2].iter().all(|v| v.unsigned_abs() < COORD_LIMIT as u32), "Wild cell outside the world");
             state.wild_paid.insert(k);
         }
     }
+    if r.bytes.get(r.at..r.at + 4) == Some(b"NUR1") {
+        r.take(4)?;
+        state.nursery_stock = r.u32()?;
+        ensure!(state.nursery_stock <= super::watershed::CAPACITY, "Invalid nursery stock");
+    }
+    let tag = r.bytes.get(r.at..r.at + 4);
+    if tag == Some(b"FRT1") || tag == Some(b"FRT2") {
+        use super::freight::{LOAD, MARKET_CAPACITY, Route, TRIP_STEPS};
+        let format = r.take(4)?;
+        let f = &mut state.freight;
+        f.market = r.u32()?;
+        f.cargo = r.u32()?;
+        f.progress = r.u8()?;
+        if format == b"FRT2" {
+            f.last_crossing = match r.u8()? {
+                0 => None,
+                1 => Some(Route::North),
+                2 => Some(Route::South),
+                3 => Some(Route::Blocked),
+                _ => anyhow::bail!("Invalid bridge report"),
+            };
+            f.cargo_lane = match r.u8()? {
+                0 => None,
+                1 if f.cargo != 0 => Some(Route::North),
+                2 if f.cargo != 0 => Some(Route::South),
+                _ => anyhow::bail!("Invalid cargo lane"),
+            };
+        }
+        ensure!(
+            f.cargo <= LOAD && f.market <= MARKET_CAPACITY - f.cargo
+                && f.progress < TRIP_STEPS && (f.cargo != 0 || f.progress == 0),
+            "Invalid Fernwake freight"
+        );
+    }
+    if r.bytes.get(r.at..r.at + 4) == Some(b"PNT1") {
+        use super::pantry::{BIOMASS_CAPACITY, FOOD_CAPACITY, PURSE_CAPACITY, RESIDENTS, State};
+        ensure!(r.take(4)? == b"PNT1", "Unknown farming extension");
+        let pantry = State {
+            meals: r.u32()?,
+            biomass: r.u32()?,
+            purse: r.u32()?,
+            day: r.u64()?,
+            demand: r.u8()?,
+            served: r.u8()?,
+        };
+        ensure!(
+            pantry.meals <= FOOD_CAPACITY && pantry.biomass <= BIOMASS_CAPACITY
+                && pantry.purse <= PURSE_CAPACITY
+                && pantry.served <= pantry.demand && pantry.demand <= RESIDENTS
+                && pantry.day <= state.clock / crate::world::travel::DAY_TICKS,
+            "Invalid Fernwake pantry"
+        );
+        state.pantry = Some(pantry);
+    }
+    let crew_saved = r.bytes.get(r.at..r.at + 4) == Some(b"PFR2");
+    if crew_saved || r.bytes.get(r.at..r.at + 4) == Some(b"PFR1") {
+        r.take(4)?;
+        let mut freight = super::planet_freight::State::default();
+        freight.stock = [r.u32()?, r.u32()?];
+        freight.market = r.u32()?;
+        freight.cargo = r.u32()?;
+        freight.progress = r.u8()?;
+        freight.holding = r.u8()?;
+        freight.lane = r.u8()?;
+        if crew_saved {
+            freight.wounds = [r.f32()?, r.f32()?];
+            freight.pause_until = r.u64()?;
+            ensure!(freight.pause_until <= state.clock.saturating_add(super::planet_freight::DRIVER_PAUSE), "Invalid freight interruption");
+        }
+        ensure!(super::planet_freight::valid(&freight), "Invalid Planet freight");
+        state.planet_freight = Some(freight);
+    }
+    if r.bytes.get(r.at..r.at + 4) == Some(b"JOB1") {
+        r.take(4)?;
+        let len = r.u32()? as usize;
+        ensure!(len <= 256*1024, "Oversized settler jobs");
+        state.jobs = ron::de::from_bytes(r.take(len)?)?;
+        ensure!(state.jobs.valid(), "Invalid settler jobs");
+    }
+    if r.bytes.get(r.at..r.at + 4) == Some(b"BAS1") {
+        r.take(4)?;
+        let len = r.u32()? as usize;
+        ensure!(len <= 256, "Oversized base bounds");
+        let bounds: super::base::Bounds = ron::de::from_bytes(r.take(len)?)?;
+        ensure!(bounds.valid(), "Invalid base bounds");
+        state.base.bounds = Some(bounds);
+    }
+    if r.bytes.get(r.at..r.at + 4) == Some(b"STK1") {
+        r.take(4)?;
+        let len = r.u32()? as usize;
+        ensure!(len <= 4096, "Oversized stake claims");
+        state.base.stakes = ron::de::from_bytes(r.take(len)?)?;
+        ensure!(state.base.stakes.valid(), "Invalid stake claims");
+    }
+    if r.bytes.get(r.at..r.at + 4) == Some(b"COM2") {
+        use std::io::Read;
+        r.take(4)?;
+        let raw_len=r.u32()? as usize;
+        let packed_len=r.u32()? as usize;
+        ensure!(raw_len<=256*1024*1024 && packed_len<=32*1024*1024,"Oversized settlement communities");
+        let mut raw=Vec::new();
+        flate2::read::ZlibDecoder::new(r.take(packed_len)?).take(raw_len as u64+1).read_to_end(&mut raw)?;
+        ensure!(raw.len()==raw_len,"Invalid community expansion length");
+        state.communities=ron::de::from_bytes(&raw)?;
+        ensure!(state.communities.valid(&state.jobs,state.clock),"Invalid settlement communities");
+    } else if r.bytes.get(r.at..r.at + 4) == Some(b"COM1") {
+        r.take(4)?;
+        let len = r.u32()? as usize;
+        ensure!(len <= 32 * 1024 * 1024, "Oversized settlement communities");
+        state.communities = ron::de::from_bytes(r.take(len)?)?;
+        ensure!(state.communities.valid(&state.jobs, state.clock), "Invalid settlement communities");
+    }
     ensure!(r.at == r.bytes.len(), "Trailing bytes in farming file");
+    super::jobs::crew::migrate_legacy_commitments(&mut state.jobs, state.clock);
+    state.communities.migrate_legacy_commitments(state.clock);
     Ok((state, herd))
 }
 

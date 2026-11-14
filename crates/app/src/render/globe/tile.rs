@@ -2,7 +2,7 @@
 
 use super::chart::{self, HALF_M, RADIUS_M};
 use engine_core::cube_sphere::Face;
-use glam::{DVec2, DVec3};
+use glam::{DVec2, DVec3, Vec4};
 
 pub const TILE_CELLS: u32 = 64;
 pub const TILE_SAMPLES: u32 = 65;
@@ -68,6 +68,16 @@ impl TileId {
         self.body_at((self.chart_min() + self.chart_max()) * 0.5)
     }
 
+    /// Nearest projected patch point, without the culling bounds' height slack.
+    fn distance_to_patch(self, eye: DVec3) -> f64 {
+        let axes = Face::ALL[usize::from(self.face)].basis();
+        let normal = eye.dot(axes.n.as_dvec3());
+        if normal <= 0.0 { return eye.distance(self.centre_body()); }
+        let chart = DVec2::new(eye.dot(axes.u.as_dvec3()).atan2(normal),
+            eye.dot(axes.v.as_dvec3()).atan2(normal)) * (HALF_M/std::f64::consts::FRAC_PI_4);
+        eye.distance(self.body_at(chart.clamp(self.chart_min(),self.chart_max())))
+    }
+
     pub fn corners_body(self) -> [DVec3; 4] {
         let (a, b) = (self.chart_min(), self.chart_max());
         [a, DVec2::new(b.x, a.y), b, DVec2::new(a.x, b.y)].map(|p| self.body_at(p))
@@ -75,9 +85,11 @@ impl TileId {
 
     /// Terrain height is not in the corners, so a slack term covers it.
     pub fn bounding_radius_m(self) -> f64 {
-        let c = self.centre_body();
-        let reach = self.corners_body().iter().map(|p| p.distance(c)).fold(0.0, f64::max);
-        reach + 2_000.0
+        self.corner_radius(self.centre_body()) + 2_000.0
+    }
+
+    fn corner_radius(self, centre: DVec3) -> f64 {
+        self.corners_body().iter().map(|p| p.distance(centre)).fold(0.0, f64::max)
     }
 
     pub fn key(self) -> u64 {
@@ -90,16 +102,28 @@ impl TileId {
 
 /// Screen-space size of one cell; zero for tiles hidden behind the limb.
 pub fn projected_error_px(id: TileId, eye_body: DVec3, focal_px: f64) -> f64 {
+    projected_error_in_view(id, eye_body, focal_px, &[])
+}
+
+/// Frustum planes are in camera-relative body space, like the globe vertices.
+pub(super) fn projected_error_in_view(id: TileId, eye_body: DVec3, focal_px: f64, planes: &[Vec4]) -> f64 {
     let centre = id.centre_body();
+    let corner_radius = id.corner_radius(centre);
+    // Allow for the full terrain height range and the longest mesh skirt.
+    let view_radius = corner_radius + 600.0 + 4.0 * id.cell_m();
+    let relative = (centre - eye_body).as_vec3();
+    if planes.iter().any(|p| p.truncate().dot(relative) + p.w < -(view_radius as f32)) {
+        return 0.0;
+    }
     let angle = centre.normalize().dot(eye_body.normalize()).clamp(-1.0, 1.0).acos();
-    let tile_reach = (id.bounding_radius_m() / RADIUS_M).min(1.0).asin();
+    let tile_reach = ((corner_radius + 2_000.0) / RADIUS_M).min(1.0).asin();
     let horizon = (RADIUS_M / eye_body.length()).min(1.0).acos();
     if angle - tile_reach > horizon {
         return 0.0;
     }
-    // Centre distance, not the sphere surface: the sphere carries 2 km of height slack
-    // that would otherwise force every fine tile near the eye to split.
-    focal_px * id.cell_m() / eye_body.distance(centre).max(id.cell_m())
+    // A patch straddling the eye can be much nearer than its centre. Use its
+    // nearest projected surface point, excluding the 2 km culling slack.
+    focal_px * id.cell_m() / id.distance_to_patch(eye_body).max(id.cell_m())
 }
 
 #[cfg(test)]
@@ -118,12 +142,12 @@ mod tests {
     #[test]
     fn levels_halve_the_cell_and_quarter_the_rect() {
         let root = TileId::root(2);
-        assert_eq!(root.cell_m(), 500.0);
+        assert_eq!(root.cell_m(), 2.0 * HALF_M / 64.0);
         let kids = root.children();
-        assert!(kids.iter().all(|k| k.cell_m() == 250.0 && k.parent() == Some(root)));
+        assert!(kids.iter().all(|k| k.cell_m() == HALF_M / 64.0 && k.parent() == Some(root)));
         assert_eq!(
             TileId { face: 2, level: 10, x: 1023, y: 1023 }.cell_m(),
-            32_000.0 / 65_536.0
+            2.0 * HALF_M / 65_536.0
         );
     }
 

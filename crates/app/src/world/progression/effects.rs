@@ -11,10 +11,14 @@ pub enum Kind {
     Weakness = 4,
     Poison = 5,
     FireResistance = 6,
+    Resistance = 7,
+    Absorption = 8,
+    Haste = 9,
+    JumpBoost = 10,
 }
 
 impl Kind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 11] = [
         Self::Regeneration,
         Self::Speed,
         Self::Slowness,
@@ -22,6 +26,10 @@ impl Kind {
         Self::Weakness,
         Self::Poison,
         Self::FireResistance,
+        Self::Resistance,
+        Self::Absorption,
+        Self::Haste,
+        Self::JumpBoost,
     ];
 
     pub fn from_u8(raw: u8) -> Option<Self> {
@@ -37,6 +45,10 @@ impl Kind {
             Self::Weakness => "Weakness",
             Self::Poison => "Poison",
             Self::FireResistance => "Fire Resistance",
+            Self::Resistance => "Resistance",
+            Self::Absorption => "Absorption",
+            Self::Haste => "Haste",
+            Self::JumpBoost => "Jump Boost",
         }
     }
 
@@ -59,12 +71,17 @@ const REGEN_PER_SECOND: f32 = 2.0;
 const POISON_PER_SECOND: f32 = 4.0;
 /// Poison never takes the player below this health.
 pub const POISON_FLOOR: f32 = 5.0;
+/// Absorption health per level on the 100-point scale.
+pub const ABSORPTION_PER_LEVEL: f32 = 20.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Active {
     pub kind: Kind,
     pub seconds: f32,
     pub level: u8,
+    /// Duration when applied, for the HUD timer sweep.
+    #[serde(default)]
+    pub total: f32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -80,11 +97,12 @@ impl Effects {
         if seconds <= 0.0 {
             return;
         }
+        let fresh = Active { kind, seconds, level, total: seconds };
         match self.list.iter_mut().find(|a| a.kind == kind) {
-            Some(a) if level > a.level => *a = Active { kind, seconds, level },
-            Some(a) if level == a.level => a.seconds = a.seconds.max(seconds),
+            Some(a) if level > a.level => *a = fresh,
+            Some(a) if level == a.level && seconds > a.seconds => *a = fresh,
             Some(_) => {}
-            None => self.list.push(Active { kind, seconds, level }),
+            None => self.list.push(fresh),
         }
     }
 
@@ -129,6 +147,26 @@ impl Effects {
 
     pub fn fire_immune(&self) -> bool {
         self.level(Kind::FireResistance) > 0
+    }
+
+    /// Incoming damage multiplier: 20% less per Resistance level, never below 20%.
+    pub fn damage_factor(&self) -> f32 {
+        (1.0 - 0.2 * f32::from(self.level(Kind::Resistance))).max(0.2)
+    }
+
+    /// Mining speed multiplier from Haste.
+    pub fn mining_factor(&self) -> f32 {
+        1.0 + 0.25 * f32::from(self.level(Kind::Haste))
+    }
+
+    /// Jump velocity multiplier: each level adds about 40% to the jump height.
+    pub fn jump_factor(&self) -> f32 {
+        (1.0 + 0.4 * f32::from(self.level(Kind::JumpBoost))).sqrt()
+    }
+
+    /// Most absorption health the active Absorption level allows.
+    pub fn absorption_cap(&self) -> f32 {
+        ABSORPTION_PER_LEVEL * f32::from(self.level(Kind::Absorption))
     }
 }
 

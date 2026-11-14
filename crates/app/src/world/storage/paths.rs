@@ -132,7 +132,11 @@ pub(super) fn import_world(id: &str) -> Result<()> {
                     || name == super::super::farming::sidecar::FILE
                     || name == super::super::block_data::sidecar::FILE
                     || name == super::super::travel::sidecar::FILE
-                    || name == super::super::progression::sidecar::FILE)
+                    || name == super::super::progression::sidecar::FILE
+                    || name == super::super::stats::sidecar::FILE
+                    || name == super::super::goals::sidecar::FILE
+                    || name == super::super::portals::sidecar::FILE
+                    || name == super::super::lightless_life::FILE)
             {
                 copy_writable(&p, &temporary.join(&name))?;
             } else if name == "checkpoints" && entry.file_type()?.is_dir() {

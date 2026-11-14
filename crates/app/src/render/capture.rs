@@ -85,6 +85,20 @@ fn enqueue(job: EncodeJob) {
     }
 }
 
+// One opt-in acceptance capture is observed at a time. The writer acknowledges
+// only after PNG encoding and the filesystem write have succeeded; requesting
+// a capture or draining the writer alone does not prove GPU readback completed.
+static WATCHED: std::sync::Mutex<Option<(PathBuf, Option<bool>)>> = std::sync::Mutex::new(None);
+pub(crate) fn watch(path: PathBuf) { *WATCHED.lock().unwrap() = Some((path, None)); }
+pub(crate) fn watched_result(path: &std::path::Path) -> Option<bool> {
+    WATCHED.lock().unwrap().as_ref().filter(|(p, _)| p == path).and_then(|(_, result)| *result)
+}
+fn acknowledge(path: &std::path::Path, success: bool) {
+    if let Some((p, result)) = WATCHED.lock().unwrap().as_mut() && p == path {
+        *result = Some(success);
+    }
+}
+
 fn write_png(job: EncodeJob) {
     let result = (|| -> anyhow::Result<()> {
         if let Some(parent) = job.path.parent() {
@@ -100,6 +114,7 @@ fn write_png(job: EncodeJob) {
         )?;
         Ok(())
     })();
+    acknowledge(&job.path, result.is_ok());
     match result {
         Ok(()) => println!("[capture] saved {}", job.path.display()),
         Err(error) => eprintln!("[capture] write failed {}: {error}", job.path.display()),
@@ -244,7 +259,13 @@ impl PendingCapture {
                 return true;
             }
         }
-        let mapped = self.buffer.slice(..).get_mapped_range();
+        let mapped = match self.buffer.slice(..).get_mapped_range() {
+            Ok(mapped) => mapped,
+            Err(error) => {
+                eprintln!("[capture] invalid readback {}: {error}", self.path.display());
+                return true;
+            }
+        };
         let mut rgba = Vec::with_capacity((self.width * self.height * 4) as usize);
         for row in mapped.chunks_exact(self.padded_row as usize) {
             for pixel in row[..self.width as usize * 4].chunks_exact(4) {
@@ -295,5 +316,23 @@ mod tests {
         assert_eq!(decoded.dimensions(), (2, 1));
         assert_eq!(decoded.into_raw(), pixels);
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod acknowledgement_tests {
+    use super::*;
+    #[test]
+    fn only_matching_writer_result_completes_the_watch() {
+        let path = PathBuf::from("acceptance-ack-test.png");
+        watch(path.clone());
+        assert_eq!(watched_result(&path), None);
+        acknowledge(std::path::Path::new("different.png"), true);
+        assert_eq!(watched_result(&path), None);
+        acknowledge(&path, false);
+        assert_eq!(watched_result(&path), Some(false));
+        watch(path.clone());
+        acknowledge(&path, true);
+        assert_eq!(watched_result(&path), Some(true));
     }
 }

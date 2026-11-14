@@ -4,6 +4,7 @@ use super::{BlockId as B, World, adventure};
 use crate::mesh::models::Model;
 use glam::{IVec3, Quat, Vec3};
 mod persistence;
+mod automation;
 pub(crate) use engine_worldgen::habitats_region as region;
 pub(crate) mod review;
 
@@ -74,6 +75,33 @@ impl Resident {
         }
     }
 }
+/// Nests and the mobs they spawn are drawn (and fade out) within this many metres.
+pub const DRAW_M: f32 = 90.0;
+pub const BEACON_RANGE: f32 = 6.0;
+pub const MEND_MANA: u32 = 2;
+pub const MEND_HEALTH: f32 = 4.0;
+pub const HARVEST_MANA: u32 = 4;
+pub const HARVEST_DAMAGE: f32 = 8.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
+pub enum Beacon {
+    #[default]
+    Off,
+    Mending,
+    Harvest,
+}
+
+impl Beacon {
+    pub fn color(self) -> [f32; 3] {
+        match self {
+            Self::Off => [0.55, 0.74, 0.82],
+            Self::Mending => [0.34, 0.95, 0.65],
+            Self::Harvest => [0.93, 0.41, 0.69],
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Source {
     pub id: u32,
@@ -92,6 +120,7 @@ pub struct Source {
     pub receiver: bool,
     pub automatic: bool,
     pub emitter: bool,
+    pub beacon: Beacon,
     pub reserve: bool,
     pub emit_ticks: u32,
     pub births: u32,
@@ -104,6 +133,22 @@ pub struct Source {
     pub blocker: &'static str,
 }
 impl Source {
+    fn breeding_reserve(&self) -> u32 {
+        self.family.mana_cost()
+    }
+
+    pub fn usable_mana(&self) -> u32 {
+        self.mana + self.charge.saturating_sub(self.breeding_reserve())
+    }
+
+    pub(super) fn spend_mana(&mut self, cost: u32) {
+        debug_assert!(self.usable_mana() >= cost);
+        let stored = self.mana.min(cost);
+        self.mana -= stored;
+        self.charge -= cost - stored;
+        self.mana_used = self.mana_used.saturating_add(cost);
+    }
+
     fn new(id: u32, family: Family, pos: Option<Vec3>) -> Self {
         Self {
             id,
@@ -121,6 +166,7 @@ impl Source {
             receiver: false,
             automatic: false,
             emitter: false,
+            beacon: Beacon::Off,
             reserve: true,
             emit_ticks: 0,
             births: 0,
@@ -170,6 +216,7 @@ pub struct View {
     pub mastered: u32,
 }
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action {
     Feed(u32),
     Charge(u32),
@@ -185,6 +232,7 @@ pub enum Action {
     ImprintMoss,
     Emitter(u32),
     Reserve(u32),
+    SetBeacon(u32, Beacon),
 }
 
 fn cell(world: &World, p: Vec3) -> IVec3 {
@@ -234,7 +282,7 @@ pub fn view(world: &World, player: Vec3) -> View {
         lantern: world.habitats.lantern,
         lantern_near: world.generator_version >= 27
             && world.world_type != super::WorldType::Superflat
-            && player.distance(region::LANTERN) <= 7.0,
+            && player.distance(region::lantern(&world.sample_config())) <= 7.0,
         loose_xp: world.habitats.releases.iter().map(|r| r.xp as u64).sum(),
         mastered: world.habitats.mastered,
     }
@@ -256,13 +304,19 @@ pub(crate) fn tick(world: &mut World, player: Vec3, dt: f32) {
             .into_iter()
             .enumerate()
         {
-            let mut s = Source::new(i as u32 + 1, family, Some(region::SOURCES[i]));
+            let mut s = Source::new(i as u32 + 1, family, Some(region::sources(&world.sample_config())[i]));
             s.feed = family.feed_cost() * 2;
             // A finite, visible starting charge; later Matrons need supplied mana.
             s.charge = family.mana_cost();
             state.sources.push(s);
         }
         state.next_id = 4;
+        if let Some(p) = engine_worldgen::fernwake::nursery(&world.sample_config()) {
+            let mut source = Source::new(4, Family::Nursery, Some(p));
+            source.feed = Family::Nursery.feed_cost() * 2;
+            state.sources.push(source);
+            state.next_id = 5;
+        }
     }
     state.clock += dt as f64;
     while state.clock >= STEP {
@@ -273,12 +327,12 @@ pub(crate) fn tick(world: &mut World, player: Vec3, dt: f32) {
                 source.blocker = "Carried; development paused";
                 continue;
             };
-            // A receiver exchanges real stock with the nearest storage crate.
-            // Pipes can supply/drain that crate using their existing rules.
+            // Ports use finite stock; separate crates may supply and receive.
             if source.receiver {
+                automation::supply_mana(world,source,p);
                 let scale = world.voxel_scale.meters();
                 let half = super::factory::step(world) as f32 * 0.5;
-                let port = world
+                let mut ports: Vec<_> = world
                     .factory
                     .nodes
                     .iter()
@@ -290,17 +344,15 @@ pub(crate) fn tick(world: &mut World, player: Vec3, dt: f32) {
                         )
                     })
                     .filter(|(_, d)| *d <= 2.5 * 2.5)
-                    .min_by(|(a, da), (b, db)| {
-                        da.total_cmp(db).then((a.x, a.y, a.z).cmp(&(b.x, b.y, b.z)))
-                    })
-                    .map(|(q, _)| q);
-                if let Some(q) = port {
+                    .collect();
+                ports.sort_by(|(a,da),(b,db)|da.total_cmp(db).then((a.x,a.y,a.z).cmp(&(b.x,b.y,b.z))));
+                for (q,_) in ports {
                     world.factory.habitat_exchange(
                         q,
                         source.family.resource(),
                         &mut source.feed,
                         &mut source.harvested,
-                        CAP,
+                        source.family.feed_cost()*2,
                     );
                 }
             }
@@ -397,7 +449,8 @@ pub(crate) fn tick(world: &mut World, player: Vec3, dt: f32) {
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| {
-                    s.receiver && s.pos.is_some_and(|p| p.distance(release.pos) <= 6.0)
+                    s.receiver && ((release.mana>0 && s.mana<CAP) || (release.xp>0 && s.xp<CAP))
+                        && s.pos.is_some_and(|p| p.distance(release.pos) <= 6.0)
                 })
                 .min_by(|(_, a), (_, b)| {
                     a.pos
@@ -441,6 +494,39 @@ fn harvest(source: &mut Source) {
 }
 
 impl State {
+    /// Sends a flower's pulse to the nearest installed receiver with room.
+    pub(super) fn store_flower_mana(&mut self, pos: Vec3, radius: f32, amount: u32) -> u32 {
+        let Some(receiver) = self.sources.iter_mut()
+            .filter(|s| s.receiver && s.mana < CAP)
+            .filter_map(|s| Some((s.pos?.distance_squared(pos), s)))
+            .filter(|(distance, _)| *distance <= radius * radius)
+            .min_by(|(da, a), (db, b)| da.total_cmp(db).then(a.id.cmp(&b.id)))
+            .map(|(_, s)| s)
+        else {
+            return 0;
+        };
+        let stored = amount.min(CAP - receiver.mana);
+        receiver.mana += stored;
+        receiver.mana_made = receiver.mana_made.saturating_add(stored);
+        stored
+    }
+
+    /// Takes `amount` from the nearest receiver within `radius` holding that much; all or nothing.
+    pub(super) fn draw_flower_mana(&mut self, pos: Vec3, radius: f32, amount: u32) -> bool {
+        let Some(receiver) = self.sources.iter_mut()
+            .filter(|s| s.receiver && s.mana >= amount)
+            .filter_map(|s| Some((s.pos?.distance_squared(pos), s)))
+            .filter(|(distance, _)| *distance <= radius * radius)
+            .min_by(|(da, a), (db, b)| da.total_cmp(db).then(a.id.cmp(&b.id)))
+            .map(|(_, s)| s)
+        else {
+            return false;
+        };
+        receiver.mana -= amount;
+        receiver.mana_used = receiver.mana_used.saturating_add(amount);
+        true
+    }
+
     pub(crate) fn release(&mut self, pos: Vec3, mana: u32, xp: u32) {
         // At most one packet per source/site location; coalescing never discards rewards.
         if let Some(r) = self.releases.iter_mut().find(|r| r.pos == pos) {
@@ -464,7 +550,8 @@ impl State {
             let resource = if s.family == Family::Matron { 13 } else { 18 };
             s.xp_made = s.xp_made.saturating_add(xp);
             s.deaths = s.deaths.saturating_add(1);
-            if s.family == Family::Matron && s.deaths >= 3 && s.receiver && s.emitter && !s.reserve
+            if s.family == Family::Matron && s.deaths >= 3 && s.receiver && !s.reserve
+                && (s.emitter || s.beacon == Beacon::Harvest)
             {
                 self.mastered |= 1 << s.family as u32;
             }
@@ -476,12 +563,14 @@ impl State {
         None
     }
 
-    pub fn models(&self, model: &mut Model, viewer: Vec3) {
+    pub fn models(&self, model: &mut Model, viewer: Vec3, cfg: &super::WorldSampleConfig) {
         let previous_material = model.set_surface_kind(58.0);
         for s in &self.sources {
-            let Some(p) = s.pos.filter(|p| p.distance(viewer) < 90.0) else {
+            let Some(p) = s.pos else { continue };
+            let coverage = crate::mesh::models::range_fade(p.distance(viewer), DRAW_M);
+            if coverage <= 0.0 {
                 continue;
-            };
+            }
             let color = match s.family {
                 Family::Nursery => [0.42, 0.58, 0.32],
                 Family::Spider => [0.74, 0.82, 0.86],
@@ -519,12 +608,13 @@ impl State {
                     p + Vec3::new(-0.7, 0.3, 0.0),
                     Vec3::splat(0.35),
                     Quat::IDENTITY,
-                    [0.55, 0.74, 0.82],
+                    s.beacon.color(),
                     crate::mesh::models::AUTHORED_SURFACE,
-                    0.0,
+                    if s.beacon != Beacon::Off && s.usable_mana() > 0 { 0.65 } else { 0.0 },
                 );
             }
             model.bake_model_uv_since(mark, p, 58.0);
+            model.fade_since(mark, coverage);
         }
         for r in self
             .releases
@@ -539,9 +629,10 @@ impl State {
                 0.3,
             );
         }
-        if self.seeded && !self.lantern && viewer.distance(region::LANTERN) < 90.0 {
+        let lantern = region::lantern(cfg);
+        if self.seeded && !self.lantern && viewer.distance(lantern) < 90.0 {
             model.cuboid(
-                region::LANTERN + Vec3::Y * 1.3,
+                lantern + Vec3::Y * 1.3,
                 Vec3::new(0.3, 0.5, 0.3),
                 Quat::IDENTITY,
                 [0.9, 0.72, 0.42],
@@ -582,7 +673,7 @@ pub fn action(world: &mut World, player: Vec3, action: Action) {
         | Action::Place(id)
         | Action::Propagate(id)
         | Action::Destroy(id) => id,
-        Action::Emitter(id) | Action::Reserve(id) => id,
+        Action::Emitter(id) | Action::Reserve(id) | Action::SetBeacon(id, _) => id,
         _ => return,
     };
     let Some(index) = world.habitats.sources.iter().position(|s| s.id == id) else {
@@ -647,6 +738,7 @@ pub fn action(world: &mut World, player: Vec3, action: Action) {
             if s.receiver
                 && !s.automatic
                 && !s.emitter
+                && s.beacon == Beacon::Off
                 && s.mana == 0
                 && s.xp == 0
                 && world.expedition.resources[12] <= 64_000_000 - 64
@@ -660,7 +752,18 @@ pub fn action(world: &mut World, player: Vec3, action: Action) {
             s.receiver = true
         }
         Action::Automatic(_) if s.receiver => s.automatic = !s.automatic,
-        Action::Emitter(_) if s.receiver => s.emitter = !s.emitter,
+        Action::Emitter(_) if s.receiver => {
+            s.emitter = !s.emitter;
+            if s.emitter {
+                s.beacon = Beacon::Off;
+            }
+        }
+        Action::SetBeacon(_, mode) if s.receiver && s.beacon != mode => {
+            s.beacon = mode;
+            if mode != Beacon::Off {
+                s.emitter = false;
+            }
+        }
         Action::Reserve(_) => s.reserve = !s.reserve,
         Action::Carry(_) if !carried && s.resident.is_none() => {
             s.pos = None;

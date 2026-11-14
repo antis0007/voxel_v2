@@ -6,7 +6,7 @@ fn fixture(coord: IVec3) -> GeneratedChunk {
     GeneratedChunk::new(coord, vec![BlockId::Air; PADDED_CHUNK_SIZE.pow(3) as usize])
 }
 fn build(chunk: &GeneratedChunk) -> ChunkMesh {
-    memory::MeshPlan::for_chunk(chunk, &AtomicBool::new(false)).unwrap().build_lod(chunk, 0)
+    memory::MeshPlan::for_chunk(chunk, &AtomicBool::new(false), 0).unwrap().build_lod(chunk, 0)
 }
 fn kind(v: &Vertex3) -> u32 { v.surface[2] as u32 % 64 }
 

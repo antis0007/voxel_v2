@@ -9,7 +9,7 @@ use super::super::coverage::ResidentCoverage;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -81,6 +81,53 @@ struct Bounds {
     structural: bool,
 }
 pub(super) type Omitted = Vec<(Vec3, Vec3)>;
+/// Most padded procedural chunks kept for edit publications (about 50 KB each).
+/// An edit publication regenerates every edited chunk in reach, and that
+/// generation was 80% or more of the publication time. Sized above the usual
+/// working set so a publication does not evict its own inputs.
+const PROCEDURAL_CACHE_CHUNKS: usize = 512;
+
+#[derive(Default)]
+struct ProceduralCache {
+    cfg: Option<crate::world::WorldSampleConfig>,
+    chunks: HashMap<IVec3, Arc<crate::mesh::GeneratedChunk>>,
+    order: std::collections::VecDeque<IVec3>,
+}
+
+static PROCEDURAL: Mutex<Option<ProceduralCache>> = Mutex::new(None);
+
+/// Padded procedural chunk for `q`, generated once per config. Generation is a
+/// pure function of the config and coordinate, so a cached copy is exact. A
+/// cancelled generation returns `None` and is not cached.
+fn procedural_chunk(
+    cfg: &crate::world::WorldSampleConfig,
+    q: IVec3,
+    cancel: &AtomicBool,
+) -> Option<Arc<crate::mesh::GeneratedChunk>> {
+    {
+        let mut guard = PROCEDURAL.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = guard.get_or_insert_with(ProceduralCache::default);
+        if cache.cfg.as_ref() != Some(cfg) {
+            *cache = ProceduralCache { cfg: Some(*cfg), ..ProceduralCache::default() };
+        }
+        if let Some(chunk) = cache.chunks.get(&q) {
+            return Some(Arc::clone(chunk));
+        }
+    }
+    let chunk = Arc::new(crate::world::generate_padded(cfg, q, cancel)?);
+    let mut guard = PROCEDURAL.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = guard.get_or_insert_with(ProceduralCache::default);
+    if cache.cfg.as_ref() == Some(cfg) && cache.chunks.insert(q, Arc::clone(&chunk)).is_none() {
+        cache.order.push_back(q);
+        while cache.order.len() > PROCEDURAL_CACHE_CHUNKS {
+            if let Some(old) = cache.order.pop_front() {
+                cache.chunks.remove(&old);
+            }
+        }
+    }
+    Some(chunk)
+}
+
 fn add_bounds(out: &mut HashMap<IVec3, Bounds>, low: IVec3, high: IVec3) {
     add_kind(out,low,high,false)
 }
@@ -113,12 +160,13 @@ fn compact(mesh: &mut ChunkMesh) {
 
 // Clip fragments can duplicate complete vertices. Weld only bit-identical
 // attributes: normals, material IDs, water metadata and AO remain unchanged.
-fn weld(mesh: &mut ChunkMesh) {
+pub(super) fn weld(mesh: &mut ChunkMesh) {
     let mut order: Vec<u32> = (0..mesh.vertices.len() as u32).collect();
     let key = |i:u32| bytemuck::cast::<Vertex3,[u32;14]>(mesh.vertices[i as usize]);
     order.sort_unstable_by_key(|&i| key(i));
     let mut remap=vec![0u32;mesh.vertices.len()];
-    let mut vertices=Vec::new();
+    // One bounded destination allocation; no geometric-growth/realloc overlap.
+    let mut vertices=Vec::with_capacity(mesh.vertices.len());
     let mut previous=None;
     for i in order {
         let value=key(i);
@@ -159,6 +207,22 @@ pub(super) fn apply(
     cancel: &AtomicBool,
     trees: &[super::vegetation::TreeSource],
 ) -> Option<Omitted> {
+    apply_with_budget(mesh, snapshot, center, eye, hidden, coverage, cancel, trees, super::budget::BASE_LIMIT, &mut false)
+}
+
+pub(super) fn apply_with_budget(
+    mesh: &mut ChunkMesh,
+    snapshot: &WorldSnapshot,
+    center: (i32, i32),
+    eye: Vec3,
+    hidden: f32,
+    coverage: &ResidentCoverage,
+    cancel: &AtomicBool,
+    trees: &[super::vegetation::TreeSource],
+    publication_limit: usize,
+    budget_exhausted: &mut bool,
+) -> Option<Omitted> {
+    *budget_exhausted = false;
     let scale = snapshot.cfg.voxel_meters();
     let c = chunk(IVec3::new(
         (center.0 as f32 / scale) as i32,
@@ -190,7 +254,7 @@ pub(super) fn apply(
             water.entry(q).or_default().extend(loaded.water.iter().map(|(&p, &v)| (p, v)));
             loaded.chunk
         };
-        let procedural = crate::world::generate_padded(&snapshot.cfg, q, cancel)?;
+        let procedural = procedural_chunk(&snapshot.cfg, q, cancel)?;
         for y in 0..32 {
             for z in 0..32 {
                 for x in 0..32 {
@@ -372,17 +436,18 @@ pub(super) fn apply(
         }
         if owner_patch.is_none() {
             owner_patch = Some(if structural_owners.contains(q) {
-                let plan = crate::mesh::MeshPlan::for_chunk(source, cancel)?;
+                let plan = crate::mesh::MeshPlan::for_chunk(source, cancel, 0)?;
                 let raw_bytes = plan.vertices * std::mem::size_of::<Vertex3>() + plan.indices * 4;
                 if raw_bytes > 64 * 1024 * 1024 {
                     eprintln!("[horizon] edit scratch output exceeds 64MiB q={q:?} bytes={raw_bytes}");
+                    *budget_exhausted = true;
                     return None;
                 }
                 plan.build_lod(source, 0)
             } else {
                 let admitted=crate::mesh::exact_water_mesh_bytes_upper_bound(source);
                 if admitted>64*1024*1024 {
-                    eprintln!("[horizon] water edit scratch admission exceeds 64MiB q={q:?} bytes={admitted}"); return None;
+                    eprintln!("[horizon] water edit scratch admission exceeds 64MiB q={q:?} bytes={admitted}"); *budget_exhausted = true; return None;
                 }
                 crate::mesh::water_mesh(source)
             });
@@ -437,7 +502,7 @@ pub(super) fn apply(
             }
             v.ao_strength = -2.0 - v.ao_strength;
         }
-        if super::mesh_bytes(mesh) + super::mesh_bytes(&clipped) > super::MAX_MESH_BYTES {
+        if !super::budget::admits(super::mesh_bytes(mesh), super::mesh_bytes(&clipped), publication_limit) {
             if parent_dirty {
                 let before=super::mesh_bytes(mesh);
                 weld(mesh);
@@ -445,13 +510,14 @@ pub(super) fn apply(
             }
             weld(&mut clipped);
         }
-        if super::mesh_bytes(mesh) + super::mesh_bytes(&clipped) > super::MAX_MESH_BYTES {
+        if !super::budget::admits(super::mesh_bytes(mesh), super::mesh_bytes(&clipped), publication_limit) {
             eprintln!(
                 "[horizon] edited output budget q={q:?} current={} patch={} limit={}",
                 super::mesh_bytes(mesh),
                 super::mesh_bytes(&clipped),
-                super::MAX_MESH_BYTES
+                publication_limit
             );
+            *budget_exhausted = true;
             return None;
         }
         let base = mesh.vertices.len() as u32;
@@ -510,7 +576,7 @@ fn edited_source(
             |d| d.blocks[ChunkData::local_index(p.x, p.y, p.z)],
         )
     };
-    let mut source = crate::world::generate_padded(&snapshot.cfg, q, cancel)?;
+    let mut source = (*procedural_chunk(&snapshot.cfg, q, cancel)?).clone();
     let origin = source.origin();
     let size = crate::mesh::PADDED_CHUNK_SIZE;
     for z in 0..size {
@@ -655,11 +721,16 @@ pub(super) fn changes_visible_resident(old: &WorldSnapshot, new: &WorldSnapshot,
 }
 
 fn changes_visible_inner(old: &WorldSnapshot, new: &WorldSnapshot, eye: Vec3, hidden: f32, coverage: &ResidentCoverage, trace: bool) -> bool {
+    // Reject an unproven target conservatively instead of stalling rendering
+    // while comparing a simulation burst cell by cell. Authority is untouched.
+    let proof_start = std::time::Instant::now();
+    let over_budget = || proof_start.elapsed() >= std::time::Duration::from_millis(1);
     let mut bounds: HashMap<IVec3, Bounds> = HashMap::new();
     let mut add = |_q: IVec3, lo: IVec3, hi: IVec3, structural: bool| {
         add_kind(&mut bounds, lo - IVec3::splat(2), hi + IVec3::splat(2),structural);
     };
     for (q, data) in new.chunks.iter() {
+        if !trace && over_budget() { return true; }
         let scale=new.cfg.voxel_meters();
         if coverage.contains_bounds((q.as_vec3()*32.0-Vec3::splat(2.0))*scale,
             ((q.as_vec3()+Vec3::ONE)*32.0+Vec3::splat(2.0))*scale,scale) { continue; }
@@ -672,7 +743,9 @@ fn changes_visible_inner(old: &WorldSnapshot, new: &WorldSnapshot, eye: Vec3, hi
                 (Some(a),None)|(None,Some(a))=>a,
                 (Some((a,b)),Some((c,d)))=>(a.min(c),b.max(d)),
             };
-            for y in lo.y..hi.y { for z in lo.z..hi.z { for x in lo.x..hi.x {
+            for y in lo.y..hi.y {
+                if !trace && over_budget() { return true; }
+                for z in lo.z..hi.z { for x in lo.x..hi.x {
                 let i=ChunkData::local_index(x,y,z);
                 if previous.blocks[i]!=data.blocks[i] {
                     let p=*q*32+IVec3::new(x,y,z);
@@ -708,6 +781,7 @@ fn changes_visible_inner(old: &WorldSnapshot, new: &WorldSnapshot, eye: Vec3, hi
         }
     }
     for (q,previous,current) in new.water_levels.changed_chunks(&old.water_levels) {
+        if !trace && over_budget() { return true; }
         if new.water_levels.precision.changed(&old.water_levels.precision,q) {
             add(q,q*32,(q+IVec3::ONE)*32,false);
         }
@@ -722,6 +796,7 @@ fn changes_visible_inner(old: &WorldSnapshot, new: &WorldSnapshot, eye: Vec3, hi
         } }
     }
     bounds.into_values().any(|b| {
+        if !trace && over_budget() { return true; }
         let visible=if b.structural {
             let scale=new.cfg.voxel_meters(); let lo=b.low.as_vec3()*scale; let hi=b.high.as_vec3()*scale;
             if coverage.header[3]==0 {
@@ -1159,20 +1234,65 @@ pub(super) fn visible_fingerprint(snapshot: &WorldSnapshot, eye: Vec3, hidden: f
         }
         result ^= h.finish();
     }
-    // Partial water-volume changes need not replace the chunk Arc (Water stays
-    // Water). Hash only relevant cells, never the global simulation revision.
-    for (p, volume) in snapshot.water_levels.iter() {
-        if !*relevance
-            .entry(chunk(*p))
-            .or_insert_with(|| relevant(snapshot, chunk(*p), eye, hidden))
-        {
-            continue;
-        }
+    // Water maps are immutable and chunk-partitioned. Hash retained identities,
+    // not every fluid cell on the render thread; include fractional-only edits.
+    for (q, identity, tag) in snapshot.water_levels.chunk_identities().map(|(q,id)|(q,id,0x7761746572u64))
+        .chain(snapshot.water_levels.precision.chunk_identities().map(|(q,id)|(q,id,0x6672616374u64))) {
+        if !*relevance.entry(q).or_insert_with(|| relevant(snapshot,q,eye,hidden)) {continue;}
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        p.hash(&mut h);
-        volume.hash(&mut h);
-        0x7761746572u64.hash(&mut h);
+        q.hash(&mut h); identity.hash(&mut h); tag.hash(&mut h);
         result ^= h.finish();
     }
     result
+}
+
+#[cfg(test)]
+mod weld_contract {
+    use super::*;
+    fn expanded(mesh:&ChunkMesh)->Vec<[u32;14]> {
+        mesh.indices.iter().map(|&index|bytemuck::cast(mesh.vertices[index as usize])).collect()
+    }
+    fn fixture()->ChunkMesh {
+        let a=Vertex3 {pos:[0.0;3],color:[0.0,0.3,0.4],normal:[0.0,1.0,0.0],surface:[0.9,0.0,8.0,0.5],ao_strength:-2.0};
+        let b=Vertex3 {pos:[1.0,0.0,0.0],..a};let c=Vertex3 {pos:[0.0,0.0,1.0],..a};
+        let mut mesh=ChunkMesh {vertices:vec![a,b,c,a,b,c],indices:vec![0,1,2,3,4,5]};
+        // Every attribute word participates in the key, including water/material
+        // metadata, normal, AO, signed zero and distinct NaN payloads.
+        for word in 0..14 {
+            let mut bits:[u32;14]=bytemuck::cast(a);bits[word]^=1;
+            let index=mesh.vertices.len() as u32;mesh.vertices.push(bytemuck::cast(bits));mesh.indices.extend([index,1,2]);
+        }
+        for bits in [0x8000_0000,0x7fc0_0001,0x7fc0_0002] {
+            let mut words:[u32;14]=bytemuck::cast(a);words[3]=bits;
+            let index=mesh.vertices.len() as u32;mesh.vertices.push(bytemuck::cast(words));mesh.indices.extend([index,1,2]);
+        }
+        mesh
+    }
+    #[test]
+    fn full_attribute_weld_preserves_expanded_triangle_order_and_is_idempotent() {
+        let mut mesh=fixture();let before=expanded(&mesh);
+        let unique:std::collections::BTreeSet<[u32;14]>=mesh.vertices.iter().copied().map(bytemuck::cast).collect();
+        weld(&mut mesh);
+        assert_eq!(expanded(&mesh),before);
+        assert_eq!(mesh.vertices.len(),unique.len());
+        let vertices:Vec<[u32;14]>=mesh.vertices.iter().copied().map(bytemuck::cast).collect();
+        let indices=mesh.indices.clone();weld(&mut mesh);
+        assert_eq!(mesh.vertices.iter().copied().map(bytemuck::cast).collect::<Vec<[u32;14]>>(),vertices);
+        assert_eq!(mesh.indices,indices);
+    }
+    #[test]
+    fn weld_preserves_variant_batch_ownership_and_packed_triangle_data() {
+        let mut original=fixture();let mut welded=ChunkMesh {vertices:original.vertices.clone(),indices:original.indices.clone()};
+        weld(&mut welded);
+        let ranges=super::super::collar::Ranges {collared:0..3,uncollared:3..6};
+        let a=super::super::batches::partition_variants(&mut original,1.0,(0,0),Some(&ranges));
+        let b=super::super::batches::partition_variants(&mut welded,1.0,(0,0),Some(&ranges));
+        assert_eq!(a.len(),b.len());
+        for (a,b) in a.iter().zip(&b) {assert!(a.variant==b.variant);assert_eq!(a.indices,b.indices);}
+        let expected=expanded(&original);assert_eq!(expanded(&welded),expected);
+        let cancel=AtomicBool::new(false);
+        let pages=super::super::pages::pack(welded,b,168,1024*1024,&cancel).unwrap();
+        let actual:Vec<_>=pages.iter().flat_map(|page|expanded(&page.mesh)).collect();
+        assert_eq!(actual,expected);
+    }
 }

@@ -150,7 +150,8 @@ fn atmosphere_sky_view_uv(view_dir: vec3<f32>, sun_dir: vec3<f32>) -> vec2<f32> 
 fn sample_atmosphere_sky_view_lut(view_dir: vec3<f32>, sun_dir: vec3<f32>) -> vec3<f32> {
     let uv = atmosphere_sky_view_uv(view_dir, sun_dir);
     let dims = vec2<i32>(textureDimensions(atmosphere_sky_view_lut));
-    let p = uv * vec2<f32>(dims) - vec2<f32>(0.5);
+    // Rows are pole-inclusive (see generate_sky_view_lut); columns are centred.
+    let p = vec2<f32>(uv.x * f32(dims.x) - 0.5, uv.y * f32(dims.y - 1));
     let base = vec2<i32>(floor(p));
     let x0 = (base.x + dims.x) % dims.x;
     let x1 = (x0 + 1) % dims.x;

@@ -6,29 +6,32 @@
 //! is ever taken away.
 use super::*;
 
-/// The spells every fresh adventurer begins with: Spark, Mend, Frost lance and
-/// Mirror ward, matching what a tier-1 wand is seeded with.
+/// The spells seeded into a tier-1 wand.
 pub const STARTER_SPELLS: [u32; 4] = [0, 1, 2, 4];
 
-const WORDS: usize = 3;
-const _: () = assert!(MAX_SPELL_ID < (WORDS as u32) * 32);
+const WORDS: usize = 4;
+pub(super) const LAST_SPELL_BIT: u32 = WORDS as u32 * 32 - 1;
 
-/// Bit set over spell ids 0..=95. Persisted from save version 19.
+/// Spell knowledge. The fourth word was added in save version 56.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpellLog {
-    bits: [u32; WORDS],
+    bits: [u32; 3],
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    extra: u32,
 }
 
 impl SpellLog {
     /// Every spell found. This is the default so legacy state is never reduced.
     pub const fn all() -> Self {
         Self {
-            bits: [!0; WORDS],
+            bits: [!0; 3],
+            extra: !0,
         }
     }
 
     pub fn starter() -> Self {
-        let mut log = Self { bits: [0; WORDS] };
+        let mut log = Self { bits: [0; 3], extra: 0 };
         for id in STARTER_SPELLS {
             log.add(id);
         }
@@ -36,7 +39,7 @@ impl SpellLog {
     }
 
     pub fn has(&self, id: u32) -> bool {
-        id <= MAX_SPELL_ID && self.bits[(id / 32) as usize] & (1 << (id % 32)) != 0
+        id <= MAX_SPELL_ID && self.words()[(id / 32) as usize] & (1 << (id % 32)) != 0
     }
 
     /// Marks a spell found; true if it was new.
@@ -44,7 +47,11 @@ impl SpellLog {
         if id > MAX_SPELL_ID || self.has(id) {
             return false;
         }
-        self.bits[(id / 32) as usize] |= 1 << (id % 32);
+        if id < 96 {
+            self.bits[(id / 32) as usize] |= 1 << (id % 32);
+        } else {
+            self.extra |= 1 << (id % 32);
+        }
         true
     }
 
@@ -55,11 +62,12 @@ impl SpellLog {
     }
 
     pub fn words(&self) -> [u32; WORDS] {
-        self.bits
+        [self.bits[0], self.bits[1], self.bits[2], self.extra]
     }
 
     pub fn from_words(bits: [u32; WORDS]) -> Self {
-        Self { bits }
+        let [a, b, c, extra] = bits;
+        Self { bits: [a, b, c], extra }
     }
 }
 
@@ -79,7 +87,7 @@ pub fn spell_tier(id: u32) -> u32 {
 /// True for ids that name a real spell and are found by the log (not by the
 /// rare-magic reliquary path).
 fn discoverable(id: u32) -> bool {
-    id != wands::EMPTY && !matches!(id, 6 | 7) && spell_name(id) != "Unknown spell"
+    id != wands::EMPTY && !matches!(id, 6 | 7 | spells::STORM_SURGE) && spell_name(id) != "Unknown spell"
 }
 
 pub(super) fn mix32(mut x: u32) -> u32 {
@@ -101,7 +109,7 @@ pub fn drop_roll(site: IVec3, slot: u32, menace: u8) -> Option<u32> {
             ^ slot.wrapping_mul(0x27d4_eb2f)
             ^ 0xd15c_0000,
     );
-    let chance = 28 + 9 * u32::from(menace.min(3));
+    let chance = 65 + 10 * u32::from(menace.min(3));
     (h % 100 < chance).then_some(mix32(h ^ 0x51ed_270b))
 }
 
@@ -138,23 +146,55 @@ impl Adventure {
         self.spell_log = SpellLog::starter();
     }
 
+    pub(super) fn effective_spell_log(&self) -> SpellLog {
+        let mut log = self.spell_log;
+        // Every adventurer can inscribe a basic return circle, including existing saves.
+        log.add(super::fieldcraft::RECALL);
+        use crate::world::progression::study;
+        study::grant_spells(&mut log, self.study_lessons);
+        let id = spells::STORM_SURGE;
+        let mut bits = log.words();
+        let word = &mut bits[(id / 32) as usize];
+        let bit = 1 << (id % 32);
+        if self.study_lessons & study::CONDUCTION_OBSERVED != 0 {
+            *word |= bit;
+        } else {
+            *word &= !bit;
+        }
+        SpellLog::from_words(bits)
+    }
+
     /// Can this spell be placed and cast right now: right wand tier (and rare
     /// progress where required) *and* found.
     pub fn can_wield(&self, spell: u32) -> bool {
-        spell_available(spell, self.wand, self.rare_spells) && self.spell_log.grants(spell)
+        self.can_wield_at(spell, self.wand, self.loadout.mode)
+    }
+
+    pub(crate) fn can_wield_at(&self, spell: u32, tier: u32, mode: u32) -> bool {
+        wands::fits_instrument(spell, mode)
+            && spell_available(spell, tier, self.available_rare_spells())
+            && (self.creative || self.effective_spell_log().grants(spell))
+    }
+
+    /// Creative access is temporary; earned rare-magic progress stays intact.
+    pub(super) fn available_rare_spells(&self) -> u32 {
+        if self.creative { u32::MAX } else { self.rare_spells }
     }
 
     /// The deck with every unfound spell blanked out, for evaluation. Slot
     /// positions are preserved so the evaluator's slot indices still match.
     pub(super) fn usable_loadout(&self) -> wands::Loadout {
         let mut deck = self.loadout;
+        let log = self.effective_spell_log();
         for idx in 0..wands::MAX_SLOTS {
             let s = deck.slot(idx);
-            if s != wands::EMPTY && !self.spell_log.grants(s) {
+            if !wands::fits_instrument(s, deck.mode) || (s != wands::EMPTY && !self.creative && !log.grants(s)) {
                 deck.set_slot(idx, wands::EMPTY);
             }
         }
-        if deck.mode == 3 || super::wand_items::shuffled(deck.seed, self.wand) {
+        if !wands::is_grimoire(deck.mode)
+            && (deck.mode == 3 || super::wand_items::shuffled(deck.seed, self.wand))
+        {
             shuffle_deck(&mut deck, self.shuffle_seed, wands::capacity(self.wand));
         }
         deck
@@ -164,9 +204,11 @@ impl Adventure {
     /// above the current wand, so a good drop can pull the player forward.
     pub fn discovery_pool(&self) -> Vec<u32> {
         let reach = self.wand.max(1) + 1;
+        let log = self.effective_spell_log();
         (0..=MAX_SPELL_ID)
             .filter(|&id| {
-                discoverable(id) && !self.spell_log.has(id) && spell_tier(id) <= reach
+                discoverable(id) && !log.has(id)
+                    && (spell_tier(id) <= reach || spell_available(id, self.wand.max(1), self.rare_spells))
             })
             .collect()
     }
@@ -176,13 +218,11 @@ impl Adventure {
         let tier = self.wand.max(1);
         self.discovery_pool()
             .into_iter()
-            .filter(|&id| spell_tier(id) <= tier)
+            .filter(|&id| spell_available(id, tier, self.rare_spells))
             .collect()
     }
 
-    /// Finds one spell, chosen deterministically by `salt`. Mostly it is a spell
-    /// this wand can use now; one find in six peeks a tier ahead, which gives a
-    /// reason to upgrade without flooding the player with unusable spells.
+    /// Finds a usable spell first; future tiers only after that pool is exhausted.
     pub fn discover_with(&mut self, salt: u32) -> Option<u32> {
         let usable = self.current_tier_pool();
         let ahead: Vec<u32> = self
@@ -190,7 +230,7 @@ impl Adventure {
             .into_iter()
             .filter(|id| !usable.contains(id))
             .collect();
-        let peek = !ahead.is_empty() && (usable.is_empty() || mix32(salt ^ 0xa11e).is_multiple_of(6));
+        let peek = usable.is_empty();
         let pool = if peek { &ahead } else { &usable };
         if pool.is_empty() {
             return None;
@@ -200,15 +240,8 @@ impl Adventure {
         Some(id)
     }
 
-    /// A guardian drop. Rarer as the current tier's spells run out, so the
-    /// hunt stretches across the tier instead of ending in the first hours.
+    /// The guardian already passed its drop roll; never roll away the reward.
     pub fn discover_drop(&mut self, salt: u32) -> Option<u32> {
-        let remaining = self.current_tier_pool().len() as f32;
-        let keep = (remaining / 24.0).clamp(0.35, 1.0);
-        let roll = (mix32(salt ^ 0x7e57) % 1000) as f32 / 1000.0;
-        if roll >= keep {
-            return None;
-        }
         self.discover_with(salt)
     }
 
@@ -228,35 +261,32 @@ impl Adventure {
         let Some(id) = found else {
             return;
         };
-        world.expedition.say(format!(
-            "Spell discovered: {}. {}",
-            spell_name(id),
-            spell_hint(id)
-        ));
+        world.expedition.say(format!("Discovered · {}", spell_name(id)));
         sound(&mut self.sounds, Cue::Treasure, Some(at), 0.8);
         self.effect(at, spell_color(id), 1.1);
         self.spawn_voxel_burst(at, spell_color(id), 16, 2.4, 0.04);
     }
 
-    /// A wand upgrade teaches two spells, so new slots are never empty-handed.
+    /// A wand upgrade teaches four spells for immediate deck experimentation.
     /// Returns what was found, for the caller to announce.
     pub fn grant_upgrade_spells(&mut self, tier: u32) -> Vec<u32> {
         let base = 0x7a11_0000 ^ tier.wrapping_mul(0x9e37_79b1);
-        (0..2u32)
+        (0..4u32)
             .filter_map(|n| self.discover_with(base ^ n.wrapping_mul(0x85eb_ca6b)))
             .collect()
     }
 
-    pub fn encode_spell_log(&self, bytes: &mut Vec<u8>) {
-        for word in self.spell_log.words() {
+    pub fn encode_spell_log(&self, bytes: &mut Vec<u8>, extended: bool) {
+        for word in self.spell_log.words().into_iter().take(if extended { WORDS } else { 3 }) {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
     }
 
     pub fn decode_spell_log(
         read: &mut impl FnMut() -> anyhow::Result<u32>,
+        extended: bool,
     ) -> anyhow::Result<SpellLog> {
-        Ok(SpellLog::from_words([read()?, read()?, read()?]))
+        Ok(SpellLog::from_words([read()?, read()?, read()?, if extended { read()? } else { 0 }]))
     }
 }
 
@@ -357,18 +387,18 @@ mod tests {
                 .filter(|&i| drop_roll(IVec3::new(i as i32 * 7, 1, -(i as i32)), i % 7, menace).is_some())
                 .count();
             let rate = hits as f32 / 2000.0;
-            let want = (28 + 9 * menace as u32) as f32 / 100.0;
+            let want = (65 + 10 * menace as u32) as f32 / 100.0;
             assert!((rate - want).abs() < 0.05, "menace {menace}: rate {rate} vs {want}");
         }
     }
 
     #[test]
-    fn upgrades_teach_two_spells_and_never_duplicate() {
+    fn upgrades_teach_four_spells_and_never_duplicate() {
         let mut a = Adventure::default();
         a.wand = 2;
         a.begin_journey();
         let found = a.grant_upgrade_spells(2);
-        assert_eq!(found.len(), 2);
+        assert_eq!(found.len(), 4);
         assert_ne!(found[0], found[1]);
         assert!(found.iter().all(|&id| a.spell_log.has(id)));
     }
@@ -436,15 +466,15 @@ mod tests {
         a.spell_log.add(29);
         a.spell_log.add(70);
         let mut bytes = Vec::new();
-        a.encode_spell_log(&mut bytes);
-        assert_eq!(bytes.len(), 12);
+        a.encode_spell_log(&mut bytes, true);
+        assert_eq!(bytes.len(), 16);
         let mut cursor = 0usize;
         let mut read = || {
             let w = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
             cursor += 4;
             Ok(w)
         };
-        let back = Adventure::decode_spell_log(&mut read).unwrap();
+        let back = Adventure::decode_spell_log(&mut read, true).unwrap();
         assert_eq!(back, a.spell_log);
         assert!(back.has(29) && back.has(70) && !back.has(3));
     }

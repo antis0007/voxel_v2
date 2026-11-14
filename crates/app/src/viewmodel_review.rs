@@ -1,5 +1,17 @@
 //! The shipped held wand plus opt-in art candidates; no world/save data changes.
+use flate2::read::GzDecoder;
+use std::io::Read;
 use std::sync::LazyLock;
+
+const ATLAS_BYTES: usize = 256 * 256 * 4;
+
+fn unpack_atlas(compressed: &[u8]) -> Box<[u8; ATLAS_BYTES]> {
+    let mut pixels = Vec::with_capacity(ATLAS_BYTES);
+    GzDecoder::new(compressed)
+        .read_to_end(&mut pixels)
+        .expect("embedded viewmodel atlas");
+    pixels.into_boxed_slice().try_into().ok().expect("viewmodel atlas size")
+}
 
 pub struct Item {
     pub name: &'static str,
@@ -12,13 +24,19 @@ pub const DEFAULT: Item = Item {
     geometry: include_bytes!("../../../assets/runtime/viewmodels/artificer_tally/wand.glb"),
     muzzle: [0.006, 0.338, 0.0],
 };
-pub const DEFAULT_ATLAS: &[u8; 256 * 256 * 4] = include_bytes!("../../../assets/runtime/viewmodels/artificer_tally/atlas.rgba");
-pub const DEFAULT_HAND: &[u8] = include_bytes!("../../../assets/runtime/viewmodels/hand_v5/hand.glb");
-pub const DEFAULT_HAND_ATLAS: &[u8; 256 * 256 * 4] = include_bytes!("../../../assets/runtime/viewmodels/hand_v5/atlas.rgba");
+pub static DEFAULT_ATLAS: LazyLock<Box<[u8; ATLAS_BYTES]>> = LazyLock::new(|| {
+    unpack_atlas(include_bytes!("../../../assets/runtime/viewmodels/artificer_tally/atlas.rgba.gz"))
+});
+pub const DEFAULT_HAND: &[u8] = include_bytes!("../../../assets/runtime/viewmodels/hand_v6/hand.glb");
+pub static DEFAULT_HAND_ATLAS: LazyLock<Box<[u8; ATLAS_BYTES]>> = LazyLock::new(|| {
+    unpack_atlas(include_bytes!("../../../assets/runtime/viewmodels/hand_v6/atlas.rgba.gz"))
+});
 
 pub fn current() -> &'static Item { selected().unwrap_or(&DEFAULT) }
 
-pub const ATLAS: &[u8; 256 * 256 * 4] = include_bytes!("../../../assets/source/wand_ecosystem/minimal_v2/atlas.rgba");
+pub static ATLAS: LazyLock<Box<[u8; ATLAS_BYTES]>> = LazyLock::new(|| {
+    unpack_atlas(include_bytes!("../../../assets/source/wand_ecosystem/minimal_v2/atlas.rgba.gz"))
+});
 pub const HAND_ATLAS: &[u8; 256 * 256 * 4] = include_bytes!("../../../assets/source/wand_ecosystem/minimal_v2/hand_atlas.rgba");
 pub const HAND: &[u8] = include_bytes!("../../../assets/source/wand_ecosystem/hand_v3/plane_hand.glb");
 

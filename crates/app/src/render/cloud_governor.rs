@@ -26,10 +26,22 @@ impl CloudGovernor {
         self.bump
     }
 
+    /// Terrain/shadow uploads should not reduce cloud detail when the march
+    /// itself is already cheap. Only sustained reducible work pays for a drop.
+    pub fn update_cloud_cost(&mut self, gpu_ms: f32, cloud_ms: f32, dt: f32) -> bool {
+        if !cloud_ms.is_finite() || cloud_ms < 0.0 { return false; }
+        if gpu_ms > OVER_MS && cloud_ms < 3.0 {
+            self.over_s=0.0;
+            self.under_s=0.0;
+            return false;
+        }
+        self.update(gpu_ms,dt)
+    }
+
     /// Feed one frame. `gpu_ms` is the measured GPU pass total, `dt` the
     /// wall-clock seconds the frame took. Returns true when the bump changed.
     pub fn update(&mut self, gpu_ms: f32, dt: f32) -> bool {
-        if !gpu_ms.is_finite() || gpu_ms <= 0.0 || gpu_ms > HITCH_MS || dt <= 0.0 {
+        if !gpu_ms.is_finite() || gpu_ms <= 0.0 || gpu_ms > HITCH_MS || !dt.is_finite() || dt <= 0.0 {
             return false;
         }
         let dt = dt.min(0.25);

@@ -4,6 +4,8 @@ use crate::{creative::{CreativeState, ToolKind}, player::{Input, Player}, world:
 use glam::{IVec3, Vec3};
 use std::collections::HashSet;
 mod checkpoint;
+mod completion;
+mod freight;
 
 pub struct Review {
     phase: usize,
@@ -20,9 +22,10 @@ pub struct Review {
     interacted: bool,
     capture: Option<String>,
     checkpoint: checkpoint::Checkpoint,
+    freight: Option<freight::Route>,
     pub done: bool,
-    pub reloaded: bool,
-    finished_since: Option<std::time::Instant>,
+    reloaded: bool,
+    completion: completion::Completion,
 }
 impl Review {
     pub fn from_env(benchmark: bool) -> Option<Self> {
@@ -33,14 +36,39 @@ impl Review {
         Some(Self { phase: 0, clock: 0.0, phase_start: 0.0, last: Vec3::NAN,
             stuck: 0.0, distance: 0.0, grounded: 0, airborne: 0, collision: false,
             cast_seen: false, mined: Vec::new(), interacted: false, capture: None,
-            checkpoint: Default::default(), done: false, reloaded: false, finished_since: None })
+            checkpoint: Default::default(), freight: freight::Route::from_env(),
+            done: false, reloaded: false, completion: Default::default() })
     }
-    pub fn finished(&mut self) -> bool {
-        if self.done && self.finished_since.is_none() {
-            self.capture = Some("stage-22-reloaded-world.png".into());
-            println!("[workshop-loop] reloaded world rendered; audio_device={}", crate::audio::status());
+    pub fn take_reloaded(&mut self) -> bool { std::mem::take(&mut self.reloaded) }
+    fn acceptance_path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from(std::env::var_os("VOXEL_CAPTURE_DIR").expect("review capture root"))
+            .join("stage-22-reloaded-world.png")
+    }
+    pub fn prepare_playable_capture(&mut self) -> Option<std::path::PathBuf> {
+        if self.done && self.checkpoint.reloaded && self.checkpoint.passed
+            && self.completion.arm(std::time::Instant::now()) {
+            return Some(self.acceptance_path());
         }
-        self.done && self.finished_since.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f32() > 2.0
+        None
+    }
+    pub fn after_present(&mut self, playable: bool, rendered: bool) -> bool {
+        if !self.done { return false; }
+        if !self.checkpoint.reloaded || !self.checkpoint.passed {
+            eprintln!("[workshop-loop] FAIL post_reload_playable=false checkpoint_failed=true");
+            return true;
+        }
+        let saved = crate::render::acceptance_capture_result(&self.acceptance_path());
+        match self.completion.observe(std::time::Instant::now(), playable, rendered, saved) {
+            completion::Outcome::Pending => false,
+            completion::Outcome::Passed => {
+                println!("[workshop-loop] PASS post_reload_playable=true capture_saved=true");
+                true
+            }
+            completion::Outcome::Failed(reason) => {
+                eprintln!("[workshop-loop] FAIL post_reload_playable={} capture_saved={} reason={}", self.completion.presented(), saved == Some(true), reason.label());
+                true
+            }
+        }
     }
     fn next(&mut self, label: &str, p: Vec3) {
         println!("[workshop-loop] stage={} label={label} time={:.2} feet={p:.2}", self.phase, self.clock);
@@ -71,6 +99,10 @@ impl Review {
         self.last = feet;
         if p.on_ground { self.grounded += 1; } else { self.airborne += 1; }
         self.cast_seen |= !w.adventure.projectiles.is_empty() || w.adventure.mana < 95.0;
+        if self.phase == 21 && let Some(route) = self.freight.as_mut() {
+            route.input(w, p, i, self.clock);
+            return;
+        }
         let Some(heart) = world::sites::workshop_heart(&w.sample_config()) else { return; };
         let g = heart.y + 18.0;
         let target = match self.phase {
@@ -124,8 +156,7 @@ impl Review {
                 aim(p, Vec3::new(-5.5, g + floor + s + 0.5, -42.0 - depth), s);
                 i.break_block = true;
             }
-        } else if self.phase == 14
-            && w.adventure.best_wand_tier() >= 2 { self.next("wand-upgraded", feet); }
+        }
         if self.clock - self.phase_start > 55.0 && self.phase != 21 {
             eprintln!("[workshop-loop] stalled phase={} feet={feet:.2} target={target:.2}", self.phase);
             self.done = true;
@@ -154,30 +185,59 @@ impl Review {
                 if let Some((cell,_)) = world::raycast_block(w, p.eye(w.voxel_scale), p.forward_dir(), 6.0 / s)
                     && w.get(cell) == if self.phase == 12 { world::BlockId::Smelter } else { world::BlockId::Workbench } {
                     world::expedition::interact(w, cell, p.pos, blocks, chunks);
+                    if self.phase == 2 {
+                        use world::inventory::{Item, all_recipes};
+                        let pickaxe = Item::Tool(7);
+                        let bench = world::factory::at_bench(w, p.pos);
+                        if let Some(recipe) = all_recipes().iter().find(|r| r.output.item == pickaxe)
+                            && w.inventory.stage_recipe_into_grid(recipe, bench)
+                            && w.inventory.craft_from_grid(true, bench).is_some()
+                            && let Some(slot) = w.inventory.pick_into_hotbar(pickaxe, c.selected_slot)
+                        {
+                            c.selected_slot = slot;
+                            crate::simulation::tools::select(w, p, slot);
+                            println!("[workshop-loop] equipped Stone Pickaxe");
+                        } else {
+                            eprintln!("[workshop-loop] FAIL could not craft and equip Stone Pickaxe");
+                            self.done = true;
+                            return;
+                        }
+                    }
                     self.interacted = true;
                     self.next(if self.phase == 12 { "processed" } else { "workbench" }, feet);
                 }
             }
         }
         if self.phase == 14 && self.clock - self.phase_start > 0.5 {
-            world::factory::action(w, p.pos, world::factory::Action::Wand);
-            if w.adventure.wand >= 2 {
-                for slot in 0..world::adventure::wands::capacity(w.adventure.wand) {
-                    world::factory::action(w, p.pos, world::factory::Action::SetWandSlot(slot as u32,
-                        if slot == 0 { 0 } else { world::adventure::wands::EMPTY }));
+            if w.adventure.best_wand_tier() == 0 {
+                world::factory::action(w, p.pos, world::factory::Action::Wand);
+            } else if let Some(slot) = w.inventory.hotbar.iter().position(|stack| {
+                matches!(stack.map(|s| s.item), Some(world::inventory::Item::Wand { .. }))
+            }) {
+                c.selected_slot = slot;
+                crate::simulation::tools::select(w, p, slot);
+                if w.adventure.wand > 0 {
+                    self.next("wand-equipped", feet);
                 }
-                world::factory::action(w, p.pos, world::factory::Action::SetWandMode(0));
             }
         }
         if self.phase == 17 && world::workshop::cleared(&w.adventure) {
             self.next("dungeon-cleared", feet);
         }
         if self.phase == 21 {
+            if let Some(route) = self.freight.as_mut() {
+                match route.tick(w, p, self.clock, blocks, chunks) {
+                    freight::Progress::Pending => return,
+                    freight::Progress::Failed => { self.done = true; return; }
+                    freight::Progress::Complete => {}
+                }
+            }
             self.done = self.checkpoint.tick(w,p,day,saves,&self.mined, self.distance,
                 self.grounded, self.airborne, self.collision, self.cast_seen);
             if self.done && self.checkpoint.reloaded {
                 self.reloaded = true;
                 self.capture = Some("stage-21-reloaded.png".into());
+                if let Some(route) = self.freight.as_ref() { route.check_reload(w); }
             }
         }
         if (self.clock * 2.0) as u32 != ((self.clock - crate::simulation::STEP_SECONDS) * 2.0) as u32 {

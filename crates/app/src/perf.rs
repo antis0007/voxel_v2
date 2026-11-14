@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 
 pub mod route;
+pub(crate) mod profile_log;
+pub(crate) mod capture_gate;
 
 use crate::render::{
     ChunkStreamerStats, RenderDistanceSettings, RenderFrameStats, WeatherUploadStats,
@@ -23,6 +25,9 @@ pub struct CpuFrameStats {
     /// Globe tiles still wanted after this frame's driver pass.
     pub globe_wanted: f32,
     pub globe_bake_ms: f32,
+    pub orbital_cloud_bake_ms: f32,
+    pub orbital_cloud_pending: f32,
+    pub orbital_cloud_resolution: f32,
     pub culling_ms: f32,
     pub torch_ms: f32,
     pub weather_ms: f32,
@@ -225,6 +230,9 @@ fn average_cpu(samples: &[PerfSample]) -> CpuFrameStats {
             acc.globe_upload_bytes += sample.cpu.globe_upload_bytes;
             acc.globe_wanted += sample.cpu.globe_wanted;
             acc.globe_bake_ms += sample.cpu.globe_bake_ms;
+            acc.orbital_cloud_bake_ms += sample.cpu.orbital_cloud_bake_ms;
+            acc.orbital_cloud_pending += sample.cpu.orbital_cloud_pending;
+            acc.orbital_cloud_resolution += sample.cpu.orbital_cloud_resolution;
             acc.culling_ms += sample.cpu.culling_ms;
             acc.torch_ms += sample.cpu.torch_ms;
             acc.weather_ms += sample.cpu.weather_ms;
@@ -245,6 +253,9 @@ fn average_cpu(samples: &[PerfSample]) -> CpuFrameStats {
         globe_upload_bytes: sum.globe_upload_bytes / denom,
         globe_wanted: sum.globe_wanted / denom,
         globe_bake_ms: sum.globe_bake_ms / denom,
+        orbital_cloud_bake_ms: sum.orbital_cloud_bake_ms / denom,
+        orbital_cloud_pending: sum.orbital_cloud_pending / denom,
+        orbital_cloud_resolution: sum.orbital_cloud_resolution / denom,
         culling_ms: sum.culling_ms / denom,
         torch_ms: sum.torch_ms / denom,
         weather_ms: sum.weather_ms / denom,
@@ -289,8 +300,10 @@ fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
                 acc.gpu_cloud_raymarch_ms += sample.render.gpu_cloud_raymarch_ms;
                 acc.gpu_cloud_temporal_ms += sample.render.gpu_cloud_temporal_ms;
                 acc.gpu_sky_ms += sample.render.gpu_sky_ms;
+                acc.gpu_sky_probe_ms += sample.render.gpu_sky_probe_ms;
                 acc.gpu_cloud_composite_ms += sample.render.gpu_cloud_composite_ms;
                 acc.gpu_outline_ms += sample.render.gpu_outline_ms;
+                acc.gpu_postprocess_ms += sample.render.gpu_postprocess_ms;
                 acc.gpu_ui_ms += sample.render.gpu_ui_ms;
             }
             acc.gpu_timestamps_supported |= sample.render.gpu_timestamps_supported;
@@ -338,8 +351,10 @@ fn average_render(samples: &[PerfSample]) -> RenderFrameStats {
         gpu_cloud_raymarch_ms: sum.gpu_cloud_raymarch_ms / gpu_denom,
         gpu_cloud_temporal_ms: sum.gpu_cloud_temporal_ms / gpu_denom,
         gpu_sky_ms: sum.gpu_sky_ms / gpu_denom,
+        gpu_sky_probe_ms: sum.gpu_sky_probe_ms / gpu_denom,
         gpu_cloud_composite_ms: sum.gpu_cloud_composite_ms / gpu_denom,
         gpu_outline_ms: sum.gpu_outline_ms / gpu_denom,
+        gpu_postprocess_ms: sum.gpu_postprocess_ms / gpu_denom,
         gpu_ui_ms: sum.gpu_ui_ms / gpu_denom,
         gpu_timestamps_supported: sum.gpu_timestamps_supported,
         cloud_history_invalidations: (sum.cloud_history_invalidations as f32 / denom).round()

@@ -25,11 +25,11 @@ fn distant_seeds_wait_until_the_player_comes_near() {
     assert_eq!(sim.dormant_chunks(), 1);
 
     // Standing still keeps the distant seed asleep.
-    sim.wake_dormant(&mut world, chunk_coord_from_world_block(player));
+    sim.wake_dormant(&mut world, &[chunk_coord_from_world_block(player)]);
     assert_eq!(world.activity.pending(), 1);
 
     // Walking one chunk toward it brings it inside the radius.
-    sim.wake_dormant(&mut world, chunk_coord_from_world_block(player) + IVec3::X);
+    sim.wake_dormant(&mut world, &[chunk_coord_from_world_block(player) + IVec3::X]);
     assert_eq!(world.activity.pending(), 2, "the held seed is merged, not lost");
     assert_eq!(sim.dormant_chunks(), 0);
 }
@@ -43,7 +43,7 @@ fn cave_water_under_the_player_waits_until_the_player_digs_down() {
     let cave = center - IVec3::Y * (SEED_DEPTH + 1);
     sim.seed(&mut world, player, cave, one_cell());
     assert_eq!(world.activity.pending(), 0, "a cave floor below the reach stays asleep");
-    sim.wake_dormant(&mut world, center - IVec3::Y);
+    sim.wake_dormant(&mut world, &[center - IVec3::Y]);
     assert_eq!(world.activity.pending(), 1, "descending one chunk wakes it");
 }
 
@@ -58,7 +58,7 @@ fn repeated_distant_seeds_for_one_chunk_merge() {
     sim.seed(&mut world, player, far, one_cell());
     sim.seed(&mut world, player, far, other);
     assert_eq!(sim.dormant_chunks(), 1);
-    sim.wake_dormant(&mut world, far);
+    sim.wake_dormant(&mut world, &[far]);
     assert_eq!(world.activity.pending(), 2, "both cells survive the merge");
 }
 

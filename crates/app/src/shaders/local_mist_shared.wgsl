@@ -51,7 +51,7 @@ fn local_mist(ray: vec3<f32>, distance_m: f32, sky_access: f32, environment: vec
     // Smooth vertex-baked sky access at cave mouths and overhangs.
     let access = smoothstep(0.0, 0.42, sky_access);
     let near_fade = smoothstep(MIST_NEAR_CLEARANCE_M, MIST_NEAR_CLEARANCE_M + 5.0, distance_m);
-    if MIST_STRENGTH == 0.0 || cam.scene_seed.z != 0u || length_m < 0.1 || cam.camera_pos.w > 0.5 || access < 0.001 {
+    if MIST_STRENGTH == 0.0 || cam.scene_seed.z != 0u || length_m < 0.1 || abs(cam.camera_pos.w) > 0.5 || access < 0.001 {
         return vec4<f32>(0.0,0.0,0.0,1.0);
     }
     let y0 = cam.camera_pos.y+ray.y*MIST_NEAR_CLEARANCE_M;
@@ -60,12 +60,13 @@ fn local_mist(ray: vec3<f32>, distance_m: f32, sky_access: f32, environment: vec
     let sun = normalize(light.sun_dir_intensity.xyz);
     let cover = clamp(light.weather_clip_summaries[0].y,0.0,1.0);
     let low_sun = 1.0-smoothstep(0.08,0.45,sun.y);
-    let extinction = 0.00014+cover*0.00085+low_sun*0.00032;
+    let extinction = 0.00014+cover*0.00085+low_sun*0.00032+light.mana_ambience.w*0.00065;
     let optical_depth = min(extinction*length_m*density*access*MIST_STRENGTH*near_fade,0.22);
     let transmission = exp(-optical_depth);
     // Use the same atmospheric radiance as terrain/sky; no independent gray
     // palette or unshadowed directional term that brightens enclosed spaces.
     // Caller reuses its existing sky radiance. Re-evaluating the atmosphere in
     // this overdrawn geometry path caused a severe low-sun shader-cost spike.
-    return vec4<f32>(environment*(1.0-transmission),transmission);
+    let local_colour = mix(environment, environment*light.location_mood.xyz, light.location_mood.w);
+    return vec4<f32>(local_colour*(1.0-transmission),transmission);
 }

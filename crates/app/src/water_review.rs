@@ -13,6 +13,9 @@ pub struct WaterReview {
     flew: bool,
     reported: u8,
     captured_jump: bool,
+    splash_view: bool,
+    seam_view: bool,
+    splash_count: u32,
     /// Open-air block scene instead of the walled pool.
     block: bool,
 }
@@ -21,6 +24,14 @@ pub struct WaterReview {
 pub const OPEN_BLOCK_ELEVATION: i32 = 79;
 
 impl WaterReview {
+    pub fn seam_view() -> Self {
+        Self { seam_view: true, ..Self::default() }
+    }
+
+    pub fn splash_view() -> Self {
+        Self { splash_view: true, ..Self::default() }
+    }
+
     pub fn open_block() -> Self {
         Self {
             block: true,
@@ -31,6 +42,30 @@ impl WaterReview {
     pub fn install(&mut self, world: &mut World, player: &mut Player) {
         if self.block {
             return Self::install_block(world, player);
+        }
+        if self.seam_view {
+            let mut edits = Vec::new();
+            for z in -3..=3 {
+                for x in -5..=5 {
+                    let floor = if x < 0 { 95 } else { 94 };
+                    edits.push((IVec3::new(x, floor, z), BlockId::StoneBricks));
+                    edits.push((IVec3::new(x, floor + 1, z), BlockId::Water));
+                }
+            }
+            world.set_many(&edits);
+            for z in -3..=3 {
+                for x in 0..=5 {
+                    world.set_water_volume(IVec3::new(x, 95, z), 5);
+                }
+            }
+            Self::reset(player, world.voxel_scale.meters());
+            player.pos = Vec3::new(6.0, 99.0, 5.5);
+            player.precise_pos = player.pos.as_dvec3();
+            player.flying = true;
+            let look = (Vec3::new(0.0, 95.7, 0.0) - player.pos - Vec3::Y * 1.6).normalize();
+            player.yaw = look.x.atan2(-look.z);
+            player.pitch = look.y.asin();
+            return;
         }
         let n = (1.0 / world.voxel_scale.meters()).round() as i32;
         let mut edits = Vec::new();
@@ -55,6 +90,12 @@ impl WaterReview {
         }
         world.set_many(&edits);
         Self::reset(player, world.voxel_scale.meters());
+        if self.splash_view {
+            player.pos = Vec3::new(0.5, 100.8, 3.4) / world.voxel_scale.meters();
+            player.precise_pos = player.pos.as_dvec3();
+            player.flying = true;
+            player.pitch = -0.64;
+        }
     }
 
     /// A stone floor with one free-standing 3×2 water block in open air: the
@@ -90,10 +131,24 @@ impl WaterReview {
         player.fly_mode = FlyMode::Creative;
         player.pitch = 0.15;
     }
-    pub fn input(&mut self, player: &mut Player, input: &mut Input, scale: f32, dt: f32) {
+    pub fn input(&mut self, player: &mut Player, input: &mut Input, world: &mut World, dt: f32) {
         self.elapsed += dt;
+        if self.seam_view {
+            input.clear();
+            return;
+        }
+        if self.splash_view {
+            input.clear();
+            if self.elapsed >= 4.0 + self.splash_count as f32 * 1.4
+                && let Some(surface) = world.water_surface_at(Vec3::new(0.5, 99.9, 0.5))
+            {
+                world.adventure.splash(surface, 0.8);
+                self.splash_count += 1;
+            }
+            return;
+        }
         if self.elapsed >= 6.0 && !self.reset_flight {
-            Self::reset(player, scale);
+            Self::reset(player, world.voxel_scale.meters());
             self.reset_flight = true;
         }
         input.clear();
@@ -102,6 +157,7 @@ impl WaterReview {
             || (6.68..10.5).contains(&self.elapsed);
     }
     pub fn observe(&mut self, player: &Player, scale: f32) -> Option<&'static str> {
+        if self.splash_view || self.seam_view { return None; }
         let y = player.pos.y * scale;
         if self.elapsed < 6.0 {
             self.jump_max = self.jump_max.max(y);

@@ -20,7 +20,7 @@ struct Set {
 
 macro_rules! asset {
     ($name:literal) => {
-        VoxelModel::parse(include_str!(concat!("../../../../../assets/models/factory/", $name, ".vox")), $name)
+        VoxelModel::with_preview(include_str!(concat!("../../../../../assets/models/factory/", $name, ".vox")), $name)
     };
 }
 
@@ -77,19 +77,14 @@ pub(super) fn draw(mesh: &mut Model, world: &World, p: IVec3, n: &Node, o: Vec3,
     };
     let tint = tint(n);
     let target = |side: usize| world.factory.nodes.get(&(p + DIRS[side] * step));
-    let joins = |side: usize| {
-        target(side).is_some_and(|other| {
-            ((other.kind == n.kind && (n.kind != Kind::Cable || other.upgrade == n.upgrade))
-                || (!other.kind.conduit() && !other.kind.structural()))
-                && world.factory.link_open(p, side, step)
-        })
-    };
+    let joins = |side: usize| world.factory.conduit_join(p, side, step);
     let arms: Vec<usize> = (0..6).filter(|s| joins(*s)).collect();
     let straight = arms.len() == 2 && arms[0] ^ 1 == arms[1];
     let c = o + Vec3::splat(0.5);
 
     if !near {
-        let half = 0.125;
+        // Matches the near tube: four 1/8 m voxels across.
+        let half = if n.kind == Kind::Pipe { 0.25 } else { 0.125 };
         for &s in &arms {
             let dir = DIRS[s].as_vec3();
             let size = dir.abs() * 0.5 + (Vec3::ONE - dir.abs()) * (half * 2.0);
@@ -108,7 +103,16 @@ pub(super) fn draw(mesh: &mut Model, world: &World, p: IVec3, n: &Node, o: Vec3,
     let extractor = n.kind == Kind::Pipe && (n.mode == 1 || n.mode == 2);
     for &s in &arms {
         let q = turn(s);
-        set.arm.draw(mesh, o, q, &tint);
+        if n.kind == Kind::Pipe && n.activity > 0.0 {
+            // Flow: a brightness wave whose phase advances with cell position
+            // along the run, so busy pipes read as moving goods.
+            let along = (p.x + p.y + p.z) as f32 * 1.3;
+            let wave = 0.5 + 0.5 * (world.adventure.time * 5.0 - along).sin();
+            let lit = 1.0 + n.activity.min(1.0) * 1.4 * wave;
+            set.arm.draw(mesh, o, q, &Tint { stripe: tint.stripe, trim: tint.trim, glow: lit });
+        } else {
+            set.arm.draw(mesh, o, q, &tint);
+        }
         let to_machine = target(s).is_some_and(|other| other.kind != n.kind);
         if extractor && let Some(mouth) = &set.mouth {
             let pulse = 0.65 + 0.35 * (world.adventure.time * 4.0).sin().abs();
@@ -140,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn a_straight_item_pipe_is_a_quarter_metre_tube_through_the_cell() {
+    fn a_straight_item_pipe_is_a_half_metre_tube_with_edge_collars() {
         let mut world = World::new(WorldType::Superflat, crate::fluid::VoxelScalePreset::OneMeter);
         for x in 0..3 {
             factory::fixture_place(&mut world, IVec3::new(x, 100, 0), Kind::Pipe);
@@ -150,7 +154,8 @@ mod tests {
         let mut mesh = Model::with_vertices(1.0, Vec::new());
         draw(&mut mesh, &world, p, &n, p.as_vec3(), 1, true);
         let (lo, hi) = bounds(&mesh.vertices);
-        assert!(hi.y - lo.y <= 0.51 && hi.z - lo.z <= 0.51, "tube is {:?}", hi - lo);
+        // Tube is 0.5 m; the cell-edge collars reach 0.75 m.
+        assert!(hi.y - lo.y <= 0.76 && hi.z - lo.z <= 0.76, "tube is {:?}", hi - lo);
         assert!((hi.x - lo.x - 1.0).abs() < 0.01, "length {}", hi.x - lo.x);
     }
 }

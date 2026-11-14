@@ -5,8 +5,10 @@
 use crate::world::zones::Archetype;
 
 pub const MAX_POISON_STACKS: u8 = 5;
+pub const WET_SECONDS: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Element {
     Fire,
     Frost,
@@ -122,7 +124,7 @@ impl Affix {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Affixes(u16);
 
 impl Affixes {
@@ -175,7 +177,7 @@ impl Affixes {
 }
 
 /// Live status on one enemy. Timers are seconds remaining.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Status {
     pub burn: f32,
     pub poison: f32,
@@ -208,6 +210,15 @@ impl Reaction {
 }
 
 impl Status {
+    /// Continuous contact refreshes a duration, independent of frame rate.
+    /// It changes creature status only; world water remains in its own ledger.
+    pub(super) fn water_contact(&mut self, affixes: Affixes) {
+        if !affixes.immune(Element::Wet) {
+            self.wet = self.wet.max(WET_SECONDS);
+            self.burn = 0.0;
+        }
+    }
+
     pub fn any(&self) -> bool {
         self.burn > 0.0 || self.poison > 0.0 || self.shock > 0.0 || self.wet > 0.0
     }
@@ -265,7 +276,7 @@ impl Status {
                 self.stacks = (self.stacks + 1).min(MAX_POISON_STACKS);
             }
             Element::Wet => {
-                self.wet = (self.wet + 6.0).min(10.0);
+                self.wet = (self.wet + WET_SECONDS).min(10.0);
                 if self.burn > 0.0 {
                     self.burn = 0.0;
                     r.quenched = true;

@@ -19,6 +19,8 @@ pub(super) struct BrowserState {
     editing_name: String,
     original_name: String,
     revision: u64,
+    /// The delete-all button waits for a second, explicit confirmation.
+    confirm_delete_all: bool,
 }
 fn age(saved: u64) -> String {
     let now = std::time::SystemTime::now()
@@ -37,6 +39,12 @@ fn kind(e: &WorldEntry) -> &'static str {
     match e.kind {
         WorldType::Hills => "Wildlands",
         WorldType::Ridged => "Highlands",
+        WorldType::Nether => "Nether",
+        WorldType::Planet => "Planet",
+        WorldType::Manyfold => "Manyfold",
+        WorldType::Hall => "Hall",
+        WorldType::Realm(kind) => kind.short(),
+        WorldType::Realm(engine_voxel::RealmKind::Gilded) => "Gilded Cave",
         WorldType::Superflat => "Open canvas",
     }
 }
@@ -186,8 +194,7 @@ fn details(ui: &mut egui::Ui, owner: &mut EguiUi, result: &mut UiAction) {
         ui.small("Save this world once to rename it.");
     }
 }
-pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
-    let ctx = owner.ctx.clone();
+pub(super) fn draw(root: &mut egui::Ui, owner: &mut EguiUi) -> UiAction {
     let entries = std::sync::Arc::clone(&owner.library_entries);
     if owner.browser.revision != owner.library_revision {
         owner.browser.revision = owner.library_revision;
@@ -210,12 +217,12 @@ pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
         }
     }
     let mut result = UiAction::None;
-    egui::CentralPanel::default().frame(egui::Frame::NONE).show(&ctx,|ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE).show(root,|ui| {
         egui::ScrollArea::vertical().id_salt("library_screen").show(ui,|ui| {
             ui.add_space(22.0);
             ui.vertical_centered(|ui| {
                 ui.set_max_width((ui.available_width()-32.0).clamp(220.0,1080.0));
-                surface().show(ui,|ui| {
+                surface(ui.ctx()).show(ui,|ui| {
                     caption(ui,"MERIDIAN / SAVED WORLDS");
                     heading(ui,"Worlds","");
                     if !entries.is_empty() { ui.horizontal_wrapped(|ui| {
@@ -225,7 +232,17 @@ pub(super) fn draw(owner: &mut EguiUi) -> UiAction {
                         }
                         if tab(ui,"★ Only favorites",owner.browser.only_favorites).clicked(){owner.browser.only_favorites = !owner.browser.only_favorites;}
                         if ui.small_button("Refresh").clicked(){result=UiAction::RefreshWorlds;}
-                    }); }
+                        if !owner.browser.confirm_delete_all {
+                            if ui.small_button("Delete All Worlds").clicked(){owner.browser.confirm_delete_all=true;}
+                        }
+                    });
+                    if owner.browser.confirm_delete_all {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new(format!("Delete all {} saved worlds? This cannot be undone.",entries.len())).color(Color32::from_rgb(230,120,100)));
+                            if ui.small_button("Delete Everything").clicked(){result=UiAction::DeleteAllWorlds;owner.browser.confirm_delete_all=false;}
+                            if ui.small_button("Cancel").clicked(){owner.browser.confirm_delete_all=false;}
+                        });
+                    } }
                     if owner.library_loading {ui.label(RichText::new("Loading world…").color(Color32::LIGHT_GREEN));}
                     else if owner.library_busy {ui.small("Refreshing…");}
                     if let Some(status)=&owner.library_status {ui.label(status);}

@@ -21,14 +21,15 @@ pub const MIN_FREE: usize = 64;
 pub struct TilePool {
     pub height_view: wgpu::TextureView,
     pub climate_view: wgpu::TextureView,
+    pub normal_view: wgpu::TextureView,
     height: wgpu::Texture,
     climate: wgpu::Texture,
+    normal: wgpu::Texture,
     slots: HashMap<TileId, u32>,
     free: Vec<u32>,
     // Reused every frame so the steady state does not allocate.
     evict_scratch: Vec<(f64, TileId)>,
     height_scratch: Vec<u16>,
-    climate_scratch: Vec<u8>,
 }
 
 impl TilePool {
@@ -46,18 +47,20 @@ impl TilePool {
             })
         };
         let height = atlas("globe height atlas", wgpu::TextureFormat::Rg16Uint);
-        let climate = atlas("globe climate atlas", wgpu::TextureFormat::Rg8Unorm);
+        let climate = atlas("globe surface fields", wgpu::TextureFormat::Rgba8Unorm);
+        let normal = atlas("globe cached normals", wgpu::TextureFormat::Rg8Unorm);
         TilePool {
             height_view: height.create_view(&Default::default()),
             climate_view: climate.create_view(&Default::default()),
+            normal_view: normal.create_view(&Default::default()),
             height,
             climate,
+            normal,
             slots: HashMap::new(),
             // Popped from the back, so slot 0 is used first.
             free: (0..MAX_RESIDENT as u32).rev().collect(),
             evict_scratch: Vec::new(),
             height_scratch: Vec::with_capacity((TILE_SAMPLES * TILE_SAMPLES * 2) as usize),
-            climate_scratch: Vec::with_capacity((TILE_SAMPLES * TILE_SAMPLES * 2) as usize),
         }
     }
 
@@ -77,13 +80,14 @@ impl TilePool {
         self.slots.insert(tile.id, slot);
         self.height_scratch.clear();
         for ((h, m), w) in tile.height_m.iter().zip(&tile.material).zip(&tile.water) {
-            let flags = u16::from(*m) | if *w != 0 { WATER_BIT } else { 0 };
+            let flags = u16::from(*m) | if *w != 0 {
+                WATER_BIT | (u16::from(w.saturating_sub(1).min(127)) << 9)
+            } else { 0 };
             self.height_scratch.extend_from_slice(&[(i32::from(*h) + HEIGHT_BIAS) as u16, flags]);
         }
-        self.climate_scratch.clear();
-        self.climate_scratch.extend(tile.climate.iter().flatten());
         write(queue, &self.height, slot, bytemuck::cast_slice(&self.height_scratch), 4);
-        write(queue, &self.climate, slot, &self.climate_scratch, 2);
+        write(queue, &self.climate, slot, bytemuck::cast_slice(&tile.climate), 4);
+        write(queue, &self.normal, slot, bytemuck::cast_slice(&tile.normals), 2);
         true
     }
 

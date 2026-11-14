@@ -7,22 +7,35 @@ use super::Vertex3;
 use crate::world::{
     World,
     factory::{self, Kind},
+    inventory::ItemStack,
 };
 
 use glam::{IVec3, Quat, Vec3};
 
 mod conduit;
-mod voxel_asset;
+pub(crate) mod chest;
+mod freight;
+mod particle;
+mod spell_fx;
+mod precipitation;
+mod realm_air;
+pub(crate) mod voxel_asset;
 mod machine_casing;
 mod wand;
 pub(crate) mod held_item;
 pub(crate) mod wand_kit;
+pub(crate) mod reference_sprites;
+pub(crate) mod sword_art;
 pub(crate) mod wand_sprite;
+mod network_player;
+mod traversal;
 mod wayfarer;
 mod wand_asset;
 mod wand_pose;
 #[cfg(test)]
 mod wand_checks;
+#[cfg(test)]
+mod cuboid_tests;
 mod hart;
 mod orbital;
 pub mod posed;
@@ -30,6 +43,22 @@ pub use hart::HartPose;
 
 /// Vertex-coloured moving geometry, never a terrain/biome material (family 0).
 pub const AUTHORED_SURFACE: f32 = 39.0;
+
+/// Metre-sized remote player geometry; all positions remain in block coordinates.
+#[cfg(feature = "multiplayer")]
+pub fn append_network_player(vertices: &mut Vec<Vertex3>, scale: f32, position: Vec3, yaw: f32,
+    pitch: f32, phase: f32, stride: f32, flying: bool, attack: f32, id: u32, frame: Quat) {
+    let mut mesh=Model::with_vertices(scale,std::mem::take(vertices));
+    mesh.set_surface_kind(AUTHORED_SURFACE);
+    let begin = mesh.vertices.len();
+    network_player::draw(&mut mesh,position*scale,yaw,pitch,phase,stride,flying,attack,id);
+    let origin = position * scale;
+    for vertex in &mut mesh.vertices[begin..] {
+        vertex.pos = (origin + frame * (Vec3::from_array(vertex.pos) - origin)).to_array();
+        vertex.normal = (frame * Vec3::from_array(vertex.normal)).to_array();
+    }
+    *vertices=mesh.vertices;
+}
 
 pub struct Model {
     pub vertices: Vec<Vertex3>,
@@ -40,9 +69,8 @@ pub struct Model {
 
     alpha: f32,
 
-    /// 0 = intact, 1 = fully consumed. Written into the mesh specular channel
-    /// for glow voxels; `world_shader.wgsl` reads it as a 3D pixel-dissolve
-    /// threshold for micro-voxel particles.
+    /// Transient erosion-front marker in the unused glow specular channel.
+    /// Ordinary glow keeps 0.42; negative values drive the shader's rim light.
     dissolve: f32,
 }
 
@@ -52,14 +80,39 @@ impl Model {
         color: [f32;3], kind: f32, energy: f32) {
         let mark = self.mark();
         let previous = self.surface_kind;
-        self.surface_kind = kind;
+        // Creature finishes extend the model palette without aliasing packed
+        // voxel keys. Neutral family 39 carries the creature finish in w.
+        let creature=(69.0..=72.0).contains(&kind);
+        self.surface_kind = if creature { AUTHORED_SURFACE } else { kind };
         self.cuboid(c, size, Quat::IDENTITY, color, 0.0);
-        self.bake_model_uv_since(mark, c, kind);
-        for vertex in &mut self.vertices[mark..] { vertex.surface[3] = energy.clamp(0.0,1.0); }
+        self.bake_model_uv_since(mark, c, self.surface_kind);
+        for vertex in &mut self.vertices[mark..] { vertex.surface[3] = if creature {kind} else {energy.clamp(0.0,1.0)}; }
         self.rotate_since(mark, c, rotation);
         self.surface_kind = previous;
     }
     pub fn scale_meters(&self) -> f32 { self.scale }
+
+    /// Dithered distance fade for everything drawn since `mark`, using the
+    /// chunk-arrival screen dither: coverage 1 draws whole, lower drops an
+    /// ordered share of pixels. Carried as the normal's length (2 - coverage);
+    /// the vertex shader decodes it per vertex and re-normalises. Call last:
+    /// `scale_since` re-normalises normals and would erase it.
+    pub fn fade_since(&mut self, mark: usize, coverage: f32) {
+        if coverage >= 0.999 { return; }
+        let length = 2.0 - coverage.clamp(0.0, 1.0);
+        for vertex in &mut self.vertices[mark..] {
+            vertex.normal = (Vec3::from_array(vertex.normal).normalize_or(Vec3::Y) * length).to_array();
+        }
+    }
+
+    /// Closed rectangular limb, with material coordinates aligned to the bone.
+    pub fn material_beam(&mut self, a: Vec3, b: Vec3, radius: f32, color: [f32;3], kind: f32) {
+        let delta=b-a;
+        if delta.length_squared()<1e-8 { return; }
+        self.material_box((a+b)*0.5,Vec3::new(radius*2.0,delta.length(),radius*2.0),
+            Quat::from_rotation_arc(Vec3::Y,delta.normalize()),color,kind,0.0);
+    }
+
     pub fn mark(&self) -> usize {
         self.vertices.len()
     }
@@ -129,16 +182,32 @@ impl Model {
         }
     }
 
-    fn triangle(&mut self, mut p: [Vec3; 3], normal: Vec3, color: [f32; 3], glow: f32) {
-        if (p[1] - p[0]).cross(p[2] - p[0]).dot(normal) < 0.0 {
-            p.swap(1, 2);
-        }
-
+    fn triangle_surface(&self, glow: f32) -> [f32; 4] {
         let roughness_or_alpha = if glow > 0.0 && self.alpha < 0.995 {
             -self.alpha.clamp(0.06, 0.98)
         } else {
             0.48
         };
+        [
+            roughness_or_alpha,
+            // Negative is the dissolve tag. Normal glow meshes keep the
+            // old 0.42 specular value, so they are never mistaken for a
+            // particle half-way through its erosion.
+            if self.dissolve > 0.0 {
+                -self.dissolve.clamp(0.0, 1.0)
+            } else {
+                0.42
+            },
+            if glow > 0.0 { 40.0 } else { self.surface_kind },
+            glow,
+        ]
+    }
+
+    fn triangle(&mut self, mut p: [Vec3; 3], normal: Vec3, color: [f32; 3], glow: f32) {
+        if (p[1] - p[0]).cross(p[2] - p[0]).dot(normal) < 0.0 {
+            p.swap(1, 2);
+        }
+        let surface = self.triangle_surface(glow);
 
         for p in p {
             self.vertices.push(Vertex3 {
@@ -148,19 +217,7 @@ impl Model {
 
                 color,
 
-                surface: [
-                    roughness_or_alpha,
-                    // Negative is the dissolve tag. Normal glow meshes keep the
-                    // old 0.42 specular value, so they are never mistaken for a
-                    // particle half-way through its erosion.
-                    if self.dissolve > 0.0 {
-                        -self.dissolve.clamp(0.0, 1.0)
-                    } else {
-                        0.42
-                    },
-                    if glow > 0.0 { 40.0 } else { self.surface_kind },
-                    glow,
-                ],
+                surface,
 
                 ao_strength: 1.0,
             });
@@ -168,30 +225,49 @@ impl Model {
     }
 
     pub fn cuboid(&mut self, c: Vec3, size: Vec3, rot: Quat, color: [f32; 3], glow: f32) {
-        for (n, u, v) in [
-            (Vec3::X, Vec3::Y, Vec3::Z),
-            (-Vec3::X, Vec3::Z, Vec3::Y),
-            (Vec3::Y, Vec3::Z, Vec3::X),
-            (-Vec3::Y, Vec3::X, Vec3::Z),
-            (Vec3::Z, Vec3::X, Vec3::Y),
-            (-Vec3::Z, Vec3::Y, Vec3::X),
+        // Adjacent faces share corners, including rotation, translation and scale.
+        let half = size * 0.5;
+        let corners = [
+            Vec3::new(-half.x, -half.y, -half.z),
+            Vec3::new(half.x, -half.y, -half.z),
+            Vec3::new(-half.x, half.y, -half.z),
+            Vec3::new(half.x, half.y, -half.z),
+            Vec3::new(-half.x, -half.y, half.z),
+            Vec3::new(half.x, -half.y, half.z),
+            Vec3::new(-half.x, half.y, half.z),
+            Vec3::new(half.x, half.y, half.z),
+        ].map(|p| c + rot * p);
+        let positions = corners.map(|p| (p / self.scale).to_array());
+        let surface = self.triangle_surface(glow);
+        for (normal, [a, b, c, d]) in [
+            (Vec3::X, [1, 3, 7, 5]),
+            (-Vec3::X, [0, 4, 6, 2]),
+            (Vec3::Y, [2, 6, 7, 3]),
+            (-Vec3::Y, [0, 1, 5, 4]),
+            (Vec3::Z, [4, 5, 7, 6]),
+            (-Vec3::Z, [0, 2, 3, 1]),
         ] {
-            let face = n * size * 0.5;
-
-            let u = u * size * 0.5;
-
-            let v = v * size * 0.5;
-
-            let p = [
-                c + rot * (face - u - v),
-                c + rot * (face + u - v),
-                c + rot * (face + u + v),
-                c + rot * (face - u + v),
-            ];
-
-            self.triangle([p[0], p[1], p[2]], rot * n, color, glow);
-
-            self.triangle([p[0], p[2], p[3]], rot * n, color, glow);
+            let normal = rot * normal;
+            // Test both triangles in world space, as triangle() does. Negative
+            // or collapsed dimensions still preserve the original winding.
+            let vertex = |index: usize| Vertex3 {
+                pos: positions[index], normal: normal.to_array(), color,
+                surface, ao_strength: 1.0,
+            };
+            let vertices = [vertex(a), vertex(b), vertex(c), vertex(d)];
+            let first = if (corners[b] - corners[a]).cross(corners[c] - corners[a]).dot(normal) < 0.0 {
+                [vertices[0], vertices[2], vertices[1]]
+            } else {
+                [vertices[0], vertices[1], vertices[2]]
+            };
+            let second = if (corners[c] - corners[a]).cross(corners[d] - corners[a]).dot(normal) < 0.0 {
+                [vertices[0], vertices[3], vertices[2]]
+            } else {
+                [vertices[0], vertices[2], vertices[3]]
+            };
+            self.vertices.extend_from_slice(&[
+                first[0], first[1], first[2], second[0], second[1], second[2],
+            ]);
         }
     }
 
@@ -259,11 +335,8 @@ impl Model {
         self.glow_voxel_with_dissolve(c, size, rot, color, glow, alpha, 0.0);
     }
 
-    /// Glow voxel with a 0..1 pixel-dissolve threshold. The threshold is packed
-    /// as a negative value in the specular channel (otherwise unused by glow
-    /// particles) and read by the world shader, which erodes a 3D micro-voxel
-    /// grid instead of shrinking a translucent billboard. A negative tag lets
-    /// ordinary glow glyphs and beams keep their old 0.42 specular value.
+    /// Legacy shrinking glow voxel with an erosion-front marker. Volumetric
+    /// particle erosion uses `eroding_particle`, including actual cut faces.
     pub fn glow_voxel_with_dissolve(
         &mut self,
         c: Vec3,
@@ -309,6 +382,25 @@ impl Model {
         self.alpha = alpha;
         self.beam(a, b, radius, color, glow.max(0.1));
         self.alpha = prev;
+    }
+
+    /// Opt-in spell current, measured along the beam in metres. Values below
+    /// -2 in the unused glow specular channel distinguish it from particles'
+    /// [-1, 0] dissolve tag and orbital mesh tags. The coordinate continues
+    /// across segments, so a moving pulse follows bends without restarting.
+    pub fn spell_current(
+        &mut self, a: Vec3, b: Vec3, radius: f32, color: [f32; 3],
+        glow: f32, alpha: f32, distance: f32,
+    ) {
+        let delta = b - a;
+        if delta.length_squared() < 1e-8 { return; }
+        let direction = delta.normalize();
+        let mark = self.mark();
+        self.glow_beam(a, b, radius, color, glow, alpha);
+        for vertex in &mut self.vertices[mark..] {
+            let along = (Vec3::from_array(vertex.pos) * self.scale - a).dot(direction);
+            vertex.surface[1] = -2.0 - (distance + along).max(0.0);
+        }
     }
 
     /// Renders a 5x5 3D voxel-pixel arcane temple glyph (inspired by Noita's Holy Mountain
@@ -393,11 +485,11 @@ pub fn recycle(vertices: Vec<Vertex3>) {
 /// (a test keeps them equal). Exact in f32: integers are exact below 2^24.
 const CAMERA_RELATIVE_FLAG: f32 = 262_144.0;
 
-/// Sub-f32 part of the precise eye in metres. `upload_camera` rounds the eye to
-/// f32 for the camera uniform and folds this remainder into the view matrix, so
-/// camera-relative vertices must carry it to stay rigid with the lens.
-fn camera_residual(precise_eye_m: glam::DVec3) -> Vec3 {
-    (precise_eye_m - precise_eye_m.as_vec3().as_dvec3()).as_vec3()
+/// How much of a prop to draw at `distance` from the viewer: 1 inside 85% of
+/// `range`, falling to 0 at `range`. The one place a draw range is decided;
+/// callers skip the prop at 0 and pass the rest to `Model::fade_since`.
+pub fn range_fade(distance: f32, range: f32) -> f32 {
+    ((range - distance) / (range * 0.15).max(1e-3)).clamp(0.0, 1.0)
 }
 
 /// Mark vertices as camera-relative (see `CAMERA_RELATIVE_FLAG`).
@@ -407,7 +499,9 @@ fn tag_camera_relative(vertices: &mut [Vertex3]) {
     }
 }
 
-pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::DayNightCycle, pixel_angle: f32) -> Vec<Vertex3> {
+pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::DayNightCycle, pixel_angle: f32, chunks: &crate::render::ChunkCache) -> Vec<Vertex3> {
+    let mut trace = crate::gameplay_trace::Trace::new();
+    crate::egui_ui::held_art::sync_tools(held_item::review_bank().unwrap_or(&world.adventure.tool_bank));
     let scale = world.voxel_scale.meters();
 
     let viewer = player.pos * scale;
@@ -424,7 +518,42 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         Model::with_vertices(scale, recycled)
     });
     posed::begin_frame();
-    orbital::build(&mut mesh, world, day, viewer, pixel_angle);
+    trace.mark("scene-prepare");
+    chest::build(&mut mesh, world, viewer);
+    crate::world::hell_gate::appearance::draw(&mut mesh, world, viewer);
+    crate::world::adventure::hedrons::draw(&mut mesh, world, viewer);
+    trace.mark("scene-ground-props");
+    crate::manyfold::weave::draw(&mut mesh, world);
+    crate::manyfold::undercroft::draw(&mut mesh, world);
+    if world.world_type == crate::world::WorldType::Manyfold
+        && !engine_worldgen::manyfold::flat_maze(world.generator_version)
+    {
+        if let Some(socket) = engine_worldgen::manyfold::socket(&world.sample_config()) {
+            let up = -engine_worldgen::manyfold::acceleration_for(world.generator_version, socket).normalize_or_zero();
+            let q = Quat::from_rotation_arc(Vec3::Y, up);
+            let colour = if world.manyfold_weight.opened { [0.28, 0.56, 0.40] } else { [0.65, 0.43, 0.16] };
+            mesh.cuboid(socket - up * 0.35, Vec3::new(1.2, 0.25, 1.2), q, [0.22, 0.19, 0.14], 0.0);
+            for x in [-0.5, 0.5] { mesh.cuboid(socket + q * Vec3::new(x, -0.12, 0.0), Vec3::new(0.12, 0.4, 1.1), q, colour, 0.0); }
+            for z in [-0.5, 0.5] { mesh.cuboid(socket + q * Vec3::new(0.0, -0.12, z), Vec3::new(0.9, 0.4, 0.12), q, colour, 0.0); }
+        }
+        let c = world.manyfold_weight.position;
+        let g = engine_worldgen::manyfold::acceleration_for(world.generator_version, c);
+        let up = if g.length_squared() > 1e-4 { -g.normalize() } else { Vec3::Y };
+        let q = Quat::from_rotation_arc(Vec3::Y, up);
+        mesh.cuboid(c, Vec3::splat(0.4), q, [0.65, 0.43, 0.16], 0.0);
+        mesh.cuboid(c, Vec3::new(0.42, 0.12, 0.42), q, [0.22, 0.16, 0.09], 0.0);
+    }
+    // Skyhooks and stations belong to the home planet's sky, not to other realms.
+    trace.mark("scene-realm");
+    if !matches!(world.world_type, crate::world::WorldType::Manyfold | crate::world::WorldType::Nether) {
+        orbital::build(&mut mesh, world, day, viewer, pixel_angle);
+    }
+    trace.mark("scene-orbital");
+    if player.anchor.is_some() && world.sample_config().is_planet() {
+        crate::planet::ground_mesh::draw(&mut mesh.vertices, world, player);
+    }
+    network_player::review(&mut mesh,player,world.adventure.time);
+    traversal::draw(&mut mesh, player, world.adventure.time);
 
     let mut nodes: Vec<_> = world
         .factory
@@ -474,6 +603,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         let o = p.as_vec3() * scale;
 
         let c = o + Vec3::splat(0.5);
+        if crate::world::industry::presentation::machine(&mut mesh,world,p,n,o) { continue; }
 
         let active = n.enabled && matches!(n.status, "Processing" | "Generating");
 
@@ -652,8 +782,8 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
             continue;
         }
 
-        if let Some(asset) = machine_casing::authored(n.kind) {
-            machine_casing::draw_authored(&mut mesh, asset, o, n, active);
+        if let Some(asset) = machine_casing::authored(n, active) {
+            machine_casing::draw_authored(&mut mesh, asset, o, n, active, world.adventure.time);
             continue;
         }
         machine_casing::draw(&mut mesh, o, n, active);
@@ -663,15 +793,36 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
 
     mesh.surface_kind = AUTHORED_SURFACE;
 
-    world.habitats.models(&mut mesh, viewer);
+    world.habitats.models(&mut mesh, viewer, &world.sample_config());
+    freight::draw(&mut mesh, world, viewer);
     for enemy in &world.adventure.enemies {
-        if enemy.habitat.is_some() && enemy.pos.distance(viewer)>90.0 {continue;}
-        mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| enemy.model(mesh, world.adventure.time));
+        let coverage = if enemy.habitat.is_some() {
+            range_fade(enemy.pos.distance(viewer), crate::world::habitats::DRAW_M)
+        } else {
+            1.0
+        };
+        if coverage <= 0.0 { continue; }
+        let mark = mesh.mark();
+        mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| enemy.model(mesh, world.adventure.time, world));
+        mesh.fade_since(mark, coverage);
     }
-    if let Some(companion) = &world.adventure.companion {
-        mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| companion.model(mesh, world.adventure.time));
+    for companion in world.adventure.companions() {
+        mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| companion.model(mesh, world.adventure.time, viewer));
     }
     for shot in &world.adventure.projectiles {
+        if let Some(tether) = shot.tether() {
+            let color = tether.color(shot.color());
+            let slack = tether.anchor.distance(shot.pos).min(5.0)
+                * if tether.returning { 0.016 } else { 0.048 };
+            let path = std::array::from_fn(|i| {
+                let t = i as f32 / 6.0;
+                tether.anchor.lerp(shot.pos, t) - Vec3::Y * (4.0 * t * (1.0 - t) * slack)
+            });
+            mesh.spell_thread(&path, color, tether.returning);
+            mesh.orb(shot.pos, 0.052, color, 1.1);
+            mesh.glow_orb(shot.pos, 0.082, color, 1.2, 0.40);
+            continue;
+        }
         let shot_mark = mesh.mark();
         let color = shot.color();
         let dir = shot.velocity.normalize_or_zero();
@@ -731,70 +882,87 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                 mesh.glow_voxel(shot.pos-dir*0.13,Vec3::new(body*0.55,body*0.55,0.24),rotation,color,1.0,0.9);
                 mesh.glow_voxel(shot.pos-dir*0.25,Vec3::new(body*0.30,body*0.30,0.08),rotation,color,0.7,0.8);
             } else {
-                mesh.orb(shot.pos, body * 0.38, hot, 1.5);
-                mesh.glow_orb(shot.pos, body * 0.95, color, 1.45, 0.48);
-                mesh.glow_beam(shot.pos - dir * 0.28, shot.pos, 0.016, color, 1.05, 0.38);
-            }
-            if !shot.hostile {
-                let side = dir.any_orthonormal_vector();
-                let up = dir.cross(side).normalize_or_zero();
-                let beads: usize = match shot.spell {
-                    2 | 13 => 3,
-                    3 | 14 => 6,
-                    12 => 4,
-                    _ => 4,
-                };
-                for i in 0..beads {
-                    let u = i as f32 / beads as f32;
-                    let phase = world.adventure.time * 1.1 + shot.pos.x * 0.2 + i as f32 * 1.4;
-                    let (offset, scale, tint) = match shot.spell {
-                        2 | 13 => (
-                            dir * (0.16 - u * 0.10) + up * (u - 0.5) * 0.04,
-                            0.028,
+                // Fixed in the flight direction. A spinning ring of beads reads as sparkle.
+                let face = if dir.length_squared() > 0.5 { dir } else { Vec3::Z };
+                let rot = Quat::from_rotation_arc(Vec3::Z, face);
+                match shot.spell {
+                    2 | 13 | 81 => {
+                        let len = if shot.spell == 13 { 0.36 } else { 0.48 };
+                        mesh.glow_voxel(
+                            shot.pos,
+                            Vec3::new(0.016, 0.016, len),
+                            rot,
+                            hot,
+                            1.15,
+                            0.5,
+                        );
+                        mesh.glow_voxel(
+                            shot.pos + face * (len * 0.42),
+                            Vec3::new(0.01, 0.01, 0.06),
+                            rot,
                             color,
-                        ),
-                        3 | 14 => {
-                            let a = phase + i as f32 * 1.05;
-                            ((side * a.cos() + up * a.sin()) * 0.16, 0.022, color)
-                        }
-                        12 => (
-                            dir * -u * 0.22 + Vec3::Y * -u * 0.06,
-                            0.034 - u * 0.01,
+                            0.9,
+                            0.38,
+                        );
+                    }
+                    12 | 28 | 82 => {
+                        mesh.orb(shot.pos, body * 0.72, hot, 1.15);
+                        mesh.glow_orb(shot.pos, body * 1.1, color, 1.2, 0.4);
+                        mesh.glow_voxel(
+                            shot.pos - face * 0.16 - Vec3::Y * 0.04,
+                            Vec3::splat(body * 0.32),
+                            Quat::IDENTITY,
                             color,
-                        ),
-                        _ => {
-                            let spiral =
-                                (phase.cos() * side + phase.sin() * up) * (0.04 + u * 0.04);
-                            (
-                                spiral - dir * (0.12 + u * 0.40),
-                                0.024 * (1.0 - u * 0.4),
-                                color,
-                            )
+                            0.85,
+                            0.32,
+                        );
+                    }
+                    3 | 85 => {
+                        mesh.orb(shot.pos, body * 0.72, hot, 1.25);
+                        mesh.glow_orb(shot.pos, body * 1.4, color, 1.15, 0.38);
+                    }
+                    5 => {
+                        for i in 0..3 {
+                            let a = i as f32 * 2.094 + shot.pos.x;
+                            let p = shot.pos + Vec3::new(a.cos(), 0.02, a.sin()) * 0.055;
+                            mesh.glow_voxel(p, Vec3::splat(0.02), Quat::IDENTITY, color, 0.85, 0.38);
                         }
-                    };
-                    mesh.glow_voxel(
-                        shot.pos + offset,
-                        Vec3::splat(scale.max(0.012)),
-                        Quat::from_rotation_y(phase),
-                        tint,
-                        1.15 * (1.0 - u * 0.25),
-                        0.42,
-                    );
+                    }
+                    14 | 83 | 86 => {
+                        mesh.glow_beam(shot.pos - face * 0.4, shot.pos + face * 0.06, 0.01, color, 1.15, 0.4);
+                        mesh.glow_voxel(shot.pos, Vec3::splat(0.014), Quat::IDENTITY, hot, 1.2, 0.45);
+                    }
+                    0 | 71 | 80 | 87 => {
+                        mesh.orb(shot.pos, body * 0.26, hot, 1.2);
+                        mesh.glow_beam(shot.pos - face * 0.14, shot.pos, 0.008, color, 0.75, 0.28);
+                    }
+                    _ => {
+                        mesh.orb(shot.pos, body * 0.38, hot, 1.35);
+                        mesh.glow_orb(shot.pos, body * 0.9, color, 1.15, 0.4);
+                        mesh.glow_voxel(
+                            shot.pos - face * 0.16,
+                            Vec3::splat(0.014),
+                            Quat::IDENTITY,
+                            color,
+                            0.7,
+                            0.28,
+                        );
+                    }
                 }
                 if let Some(element) = shot.mods.element {
-                    let tint = element.color();
                     let lift = match element {
-                        crate::world::adventure::status::Element::Fire => Vec3::Y * 0.12,
-                        crate::world::adventure::status::Element::Frost => Vec3::Y * -0.04,
+                        crate::world::adventure::status::Element::Fire => Vec3::Y * 0.04,
+                        crate::world::adventure::status::Element::Frost => Vec3::Y * -0.02,
                         _ => Vec3::ZERO,
                     };
-                    for i in 0..2 {
-                        let a = world.adventure.time * 0.8 + i as f32 * std::f32::consts::PI;
-                        let p = shot.pos
-                            + (side * a.cos() + up * a.sin()) * (0.1 + i as f32 * 0.02)
-                            + lift;
-                        mesh.glow_voxel(p, Vec3::splat(0.014), Quat::IDENTITY, tint, 1.15, 0.4);
-                    }
+                    mesh.glow_voxel(
+                        shot.pos - face * 0.06 + lift,
+                        Vec3::splat(0.012),
+                        Quat::IDENTITY,
+                        element.color(),
+                        0.8,
+                        0.32,
+                    );
                 }
             }
         }
@@ -842,113 +1010,30 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
     }
     let time = world.adventure.time;
     for (idx, drop) in world.inventory.dropped.iter().enumerate() {
-        use crate::world::inventory::{ArmorTier, Item};
-        let phase = time * 2.4 + idx as f32 * 1.13 + drop.pos.x * 0.7;
-        let bob = (phase.sin() * 0.055) + 0.06;
-        let rot = Quat::from_rotation_y(time * 1.65 + idx as f32 * 0.8)
-            * Quat::from_rotation_z((phase * 0.7).cos() * 0.14);
-        let (color, emissive, beam_col) = match drop.stack.item {
-            Item::PowerKit(_) => ([0.48, 0.76, 0.88], 0.2, None),
-            Item::Block(b) => {
-                let c = b.color((drop.pos / world.voxel_scale.meters()).as_ivec3());
-                let em = if matches!(
-                    b,
-                    crate::material::BlockId::Crystal
-                        | crate::material::BlockId::GlowCap
-                        | crate::material::BlockId::Lava
-                ) {
-                    1.2
-                } else {
-                    0.0
-                };
-                (c, em, if em > 0.2 { Some(c) } else { None })
-            }
-            Item::Weapon(tier) => (
-                [0.86, 0.74, 0.36],
-                1.4,
-                Some(if tier >= 3 {
-                    [0.98, 0.78, 0.32]
-                } else {
-                    [0.82, 0.68, 0.38]
-                }),
-            ),
-            Item::Armor(_, tier) => {
-                let col = match tier {
-                    ArmorTier::Copper => [0.84, 0.50, 0.28],
-                    ArmorTier::Steel => [0.54, 0.68, 0.90],
-                    ArmorTier::Lumen => [0.44, 0.92, 0.98],
-                };
-                (col, 1.1, Some(col))
-            }
-            Item::Resource(r) => {
-                let col = match r {
-                    0 | 1 => [0.88, 0.52, 0.28],
-                    2 | 3 => [0.76, 0.80, 0.86],
-                    4 => [0.86, 0.68, 0.32],
-                    5 => [0.58, 0.72, 0.94],
-                    6 | 7 => [0.44, 0.86, 0.98],
-                    _ => [0.75, 0.58, 0.28],
-                };
-                (col, 0.65, Some(col))
-            }
-            Item::Food(_) => ([0.84, 0.52, 0.30], 0.35, None),
-            Item::Tool(_) => ([0.68, 0.82, 0.92], 0.9, Some([0.68, 0.82, 0.92])),
-            Item::Wand { look, .. } => {
-                crate::world::adventure::wand_items::draw_dropped(&mut mesh, drop.pos + Vec3::Y * bob, rot, look);
-                continue;
-            }
-        };
-
-        let center = drop.pos + Vec3::Y * bob;
-        let copies = if drop.stack.count >= 16 {
-            3
-        } else if drop.stack.count > 1 {
-            2
-        } else {
-            1
-        };
-        for c_i in 0..copies {
-            let offset = if c_i == 0 {
-                Vec3::ZERO
-            } else {
-                let a = c_i as f32 * 2.1 + time * 0.8;
-                Vec3::new(a.cos() * 0.045, c_i as f32 * 0.028, a.sin() * 0.045)
-            };
-            mesh.cuboid(center + offset, Vec3::splat(0.20), rot, color, emissive);
-        }
-        // Subtle ground shadow ring + vertical loot beacon for notable gear/resources
-        if let Some(bc) = beam_col {
-            mesh.glow_voxel(
-                center + Vec3::Y * 0.24,
-                Vec3::new(0.025, 0.38, 0.025),
-                Quat::from_rotation_y(time * 0.9),
-                bc,
-                2.6,
-                0.38,
-            );
-            let mote_t = (time * 1.4 + idx as f32 * 0.6).fract();
-            mesh.glow_voxel(
-                center
-                    + Vec3::new(
-                        (phase * 1.5).cos() * 0.08,
-                        mote_t * 0.48,
-                        (phase * 1.5).sin() * 0.08,
-                    ),
-                Vec3::splat(0.024 * (1.0 - mote_t * 0.5)),
-                rot,
-                bc,
-                3.2,
-                0.72 * (1.0 - mote_t),
-            );
-        }
+        draw_loose_item(&mut mesh, world, drop.stack, drop.pos, idx, time);
+    }
+    for (idx, (pos, item)) in crate::world::undercrown::plinth_displays(world).into_iter().enumerate() {
+        draw_loose_item(&mut mesh, world, ItemStack::new(item, 1), pos, idx, time);
     }
 
+    crate::world::industry::presentation::draw(&mut mesh, world, viewer);
     crate::tool_effects::draw(&mut mesh, &world.adventure.tool_debris);
     crate::tool_effects::draw_blasts(&mut mesh, &world.adventure.blasts);
     crate::tool_effects::draw_splashes(&mut mesh, &world.adventure.splashes);
+    precipitation::draw(&mut mesh, world, player, day, chunks);
+    realm_air::draw(&mut mesh, world, player, chunks);
+    realm_air::draw_hush(&mut mesh, world, player);
+    trace.mark("scene-local-effects");
 
     for effect in &world.adventure.effects {
         let t = 1.0 - effect.life / effect.total;
+        if let Some(normal) = effect.impact_normal {
+            if effect.pos.distance_squared(viewer) < 48.0 * 48.0 {
+                mesh.spell_impact(effect.pos, normal, effect.color, effect.radius,
+                    (1.0 - t).clamp(0.0, 1.0), effect.family);
+            }
+            continue;
+        }
 
         for i in 0..10 {
             let a = i as f32 * 2.39996 + effect.pos.x * 0.37;
@@ -972,16 +1057,21 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
 
     let forward = player.forward_dir();
 
-    let right = forward.cross(Vec3::Y).normalize_or_zero();
+    let right = forward.cross(player.up_dir()).normalize_or_zero();
 
     let up = right.cross(forward).normalize_or_zero();
 
-    world.adventure.magic_models(&mut mesh, eye, forward);
-    world
-        .adventure
-        .quest_beacon_models(&world.sample_config(), viewer, &mut mesh);
+    let shell = (world.world_type == crate::world::WorldType::Manyfold
+        && !engine_worldgen::manyfold::flat_maze(world.generator_version))
+        .then_some(world.generator_version);
+    world.adventure.magic_models(&mut mesh, eye, forward, shell,
+        crate::world::workshop::has_lanterncap(&world.sample_config()));
+    world.portals.circles.draw(&mut mesh, eye);
+    let quest = crate::egui_ui::quest_log::marker(world, viewer);
+    world.adventure.quest_beacon_models(quest.as_ref(), &mut mesh);
 
     for rem in &world.adventure.remains {
+        if rem.model(&mut mesh, world.adventure.time) { continue; }
         let t = 0.65 - rem.life;
 
         for i in 0..7 {
@@ -1007,191 +1097,14 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
     // Everything glued to the camera (tool swing, hand, wand) is authored
     // camera-relative: an absolute f32 position far from the origin quantises
     // to millimetres or worse, which made the hand shimmer. The shader treats
-    // vertices tagged `CAMERA_RELATIVE_FLAG` as offsets from the camera, so
-    // the only world term left is the eye's sub-f32 residual.
+    // vertices tagged `CAMERA_RELATIVE_FLAG` as offsets from the lens and
+    // projects them without the view matrix, so no world term may enter: the
+    // eye's sub-f32 remainder made the hand jump by a texel-sized step per frame.
     let viewmodel_mark = mesh.mark();
     mesh.set_surface_kind(AUTHORED_SURFACE);
-    let eye = camera_residual(player.precise_eye(world.voxel_scale) * scale as f64);
-
-    if world.adventure.swing() > 0.0 {
-        let heavy = world.adventure.finisher();
-
-        let duration = world.adventure.swing_duration();
-
-        let elapsed = (1.0 - world.adventure.swing()) * duration;
-
-        let ease = |v: f32| {
-            let t = v.clamp(0.0, 1.0);
-
-            t * t * (3.0 - 2.0 * t)
-        };
-
-        let impact = world.adventure.swing_impact_time();
-
-        let windup = impact * 0.55;
-
-        let load = ease(elapsed / windup);
-
-        let strike = ease((elapsed - windup) / (impact - windup));
-
-        let recover = ease((elapsed - impact) / (duration - impact));
-
-        let thrust = -0.10 * load + 0.48 * strike - 0.38 * recover;
-
-        let direction = if world.adventure.backswing() {
-            -1.0
-        } else {
-            1.0
-        };
-
-        let arc = direction * (0.35 * load - 1.05 * strike + 0.70 * recover);
-
-        let grip = eye
-            + forward * (0.38 + thrust)
-            + right * (0.30 + arc * if heavy { 0.08 } else { 0.30 })
-            + up * (-0.28 + load * 0.16 - strike * 0.23 + recover * 0.07);
-
-        // Camera-local basis keeps the wrist and striking face aligned when
-
-        // looking up/down. Rotate the whole tool, not just its position.
-
-        let pitch = -0.65 * load + 1.65 * strike - recover;
-
-        let shaft = (up * pitch.cos() + forward * pitch.sin() + right * arc * 0.55).normalize();
-
-        // One camera-relative frame for the entire rigid tool. Generic beam()
-
-        // changes its reference axis near vertical, visibly rolling the grip.
-
-        let tool_right = (right - shaft * right.dot(shaft)).normalize();
-
-        let tool_back = tool_right.cross(shaft);
-
-        let tool_rotation = Quat::from_mat3(&glam::Mat3::from_cols(tool_right, shaft, tool_back));
-
-        let tip = grip + shaft * 0.34;
-
-        let wrist = grip - forward * 0.12 - up * 0.035;
-
-        mesh.set_surface_kind(54.0);
-        mesh.beam(
-            eye + right * 0.43 - up * 0.48 + forward * 0.12,
-            wrist,
-            0.065,
-            [0.22, 0.27, 0.25],
-            0.0,
-        );
-
-        mesh.beam(wrist, grip + shaft * 0.035, 0.055, [0.57, 0.39, 0.27], 0.0);
-
-        mesh.set_surface_kind(AUTHORED_SURFACE);
-        mesh.cuboid(
-            (grip + tip) * 0.5,
-            Vec3::new(0.055, 0.34, 0.055),
-            tool_rotation,
-            [0.30, 0.19, 0.105],
-            0.0,
-        );
-
-        for i in 0..4 {
-            let c = grip.lerp(tip, i as f32 * 0.12);
-
-            mesh.cuboid(
-                c,
-                Vec3::new(0.064, 0.014, 0.064),
-                tool_rotation,
-                [0.16, 0.11, 0.08],
-                0.0,
-            );
-        }
-
-        let weapon = world.adventure.weapon;
-
-        if weapon == 5 {
-            // A long haft with a heavy, softly glowing head reads as a maul
-            // rather than recolouring the sword silhouette.
-            let haft = [0.30, 0.23, 0.16];
-            let metal = [0.43, 0.50, 0.52];
-            let glow = [0.48, 0.90, 0.82];
-            mesh.cuboid(
-                tip + shaft * 0.42,
-                Vec3::new(0.075, 0.86, 0.075),
-                tool_rotation,
-                haft,
-                0.0,
-            );
-            mesh.material_box(
-                tip + shaft * 0.83,
-                Vec3::new(0.46, 0.22, 0.24),
-                tool_rotation,
-                metal,
-                59.0,
-                0.0,
-            );
-            mesh.cuboid(
-                tip + shaft * 0.83 + right * 0.02,
-                Vec3::new(0.30, 0.075, 0.15),
-                tool_rotation,
-                glow,
-                1.1,
-            );
-            mesh.orb(tip + shaft * 0.94, 0.055, glow, 1.5);
-        } else if weapon > 0 {
-            let blade = match weapon {
-                3 => [0.94, 0.36, 0.10],
-
-                4 => [0.35, 0.79, 0.93],
-
-                2 => [0.66, 0.73, 0.75],
-
-                _ => [0.67, 0.37, 0.18],
-            };
-
-            let length = if weapon == 4 { 0.80 } else { 0.62 };
-
-            let width = if weapon == 3 { 0.15 } else { 0.075 };
-
-            mesh.cuboid(
-                tip + shaft * (length * 0.5),
-                Vec3::new(width, length, 0.035),
-                tool_rotation,
-                blade,
-                if weapon >= 3 { 0.4 } else { 0.0 },
-            );
-
-            mesh.cuboid(
-                tip,
-                Vec3::new(0.28, 0.05, 0.08),
-                tool_rotation,
-                [0.53, 0.35, 0.14],
-                0.0,
-            );
-
-            mesh.cuboid(
-                tip + shaft * (length + 0.045),
-                Vec3::new(width * 0.55, 0.10, 0.03),
-                tool_rotation,
-                blade,
-                if weapon >= 3 { 0.6 } else { 0.0 },
-            );
-
-            if weapon >= 3 {
-                mesh.orb(tip, 0.045, blade, 1.2);
-            }
-        } else {
-            let metal = if world.expedition.tool_tier == 0 {
-                [0.45, 0.47, 0.44]
-            } else {
-                [0.64, 0.39, 0.16]
-            };
-
-            mesh.material_box(tip, Vec3::new(0.15, 0.15, 0.28), tool_rotation, metal, 59.0, 0.0);
-
-            if world.expedition.tool_tier == 2 {
-                mesh.orb(tip, 0.05, [0.38, 0.76, 1.0], 1.3);
-            }
-        }
-    }
+    let eye = Vec3::ZERO;
+    let hand_view=wand::WandView {eye,forward,right,up,time:world.adventure.time,
+        cast:0.0,spell:[0.0;3],boost:player.movement.boost(),motion:player.viewmodel};
 
     // The held wand: styled from the player's atelier choices, idle in the hand
     // and drawn forward when a cast is under way. The tool takes the hand on a swing.
@@ -1201,16 +1114,13 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         let adv = &world.adventure;
         let spell = if adv.casting() { adv.last_cast } else { adv.loadout.slot(adv.loadout.cursor) };
         let held_seed=if adv.wand>0 { adv.loadout.seed } else { player.viewmodel.seed };
-        wand::draw(
-            &mut mesh,
-            crate::world::adventure::wand_items::style(held_seed, crate::wand_style::current()),
-            &wand::WandView {
+        let view = wand::WandView {
                 eye,
                 forward,
                 right,
                 up,
                 time: adv.time,
-                boost: 0.0,
+                boost: player.movement.boost(),
                 motion: player.viewmodel,
                 cast: if adv.casting() {
                     adv.cast_motion().clamp(0.0, 1.0)
@@ -1218,21 +1128,69 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
                     0.0
                 },
                 spell: crate::world::adventure::spell_color(spell),
-            },
-        );
+        };
+        if crate::world::adventure::wands::is_grimoire(adv.loadout.mode) {
+            wand::draw_grimoire(&mut mesh, &view);
+        } else {
+            wand::draw(&mut mesh,
+                crate::world::adventure::wand_items::style(held_seed, crate::wand_style::current()), &view);
+        }
     }
-    // Any other hotbar item rides in the hand; it drops away while a wand is drawn.
-    if (pinned || world.adventure.wand == 0 && player.viewmodel.equip < 0.95) && world.adventure.swing() <= 0.0
-        && let Some(item) = held_item::held(world, player) {
-        held_item::draw(&mut mesh, item, &held_item::View {
+    // Held hotbar items drop away while a wand is drawn; a melee swing takes the hand.
+    let swinging = world.adventure.swing() > 0.0;
+    let stowed = held_item::stowed(world, player);
+    if !stowed && (pinned || swinging || world.adventure.wand == 0 && player.viewmodel.equip <= 0.01) {
+        let mut held_view = held_item::View {
             eye, forward, right, up,
             time: world.adventure.time,
             sway: player.viewmodel.sway.value,
             gait: player.viewmodel.gait,
             speed: player.viewmodel.speed,
-            interact: player.viewmodel.interact,
-            lowered: if pinned { 0.0 } else { player.viewmodel.equip },
-        });
+            clip: player.viewmodel.pose(),
+            lowered: if pinned || swinging { 0.0 } else { player.viewmodel.equip },
+            torch_lit: false,
+        };
+        let held=held_item::held(world,player);
+        let held=if swinging { held_item::swung(world,held) } else { held };
+        let holding_torch = held.and_then(|item| item.placeable_block()).is_some_and(|block| block.is_torch());
+        if holding_torch {
+            let position = held_item::torch_position(world, player, &held_view, false);
+            held_view.torch_lit = crate::held_flame_can_burn(world, player, position);
+        }
+        let placement = match held {
+            Some(item) => held_item::draw(&mut mesh, item, &held_view),
+            None => held_item::bare_placement(&held_view),
+        };
+        let relax = if holding_torch {
+            held_item::TORCH_RELAX
+        } else if held.is_none() {
+            held_item::BARE_RELAX
+        } else {
+            0.0
+        };
+        wayfarer::draw_hand(&mut mesh, &hand_view, Some(placement), relax);
+    }
+    if let Some(stack) = world.inventory.offhand.filter(|_| !stowed) {
+        // Reflect geometry, including winding, to retain front-facing surfaces.
+        let start = mesh.vertices.len();
+        let mut v = held_item::View { eye, forward, right, up, time: world.adventure.time,
+            sway: player.viewmodel.sway.value, gait: player.viewmodel.gait, speed: player.viewmodel.speed,
+            clip: Default::default(), lowered: 0.0, torch_lit: false };
+        let holding_torch = held_item::offhand_torch(world);
+        if holding_torch {
+            let position = held_item::torch_position(world, player, &v, true);
+            v.torch_lit = crate::held_flame_can_burn(world, player, position);
+        }
+        let placement = held_item::draw(&mut mesh, stack.item, &v);
+        let relax = if holding_torch { held_item::TORCH_RELAX } else { 0.0 };
+        wayfarer::draw_hand(&mut mesh, &hand_view, Some(placement), relax);
+        for vertex in &mut mesh.vertices[start..] {
+            let p = Vec3::from_array(vertex.pos);
+            vertex.pos = (p - right * (2.0 * (p-eye/mesh.scale).dot(right))).to_array();
+            let n = Vec3::from_array(vertex.normal);
+            vertex.normal = (n - right * (2.0*n.dot(right))).to_array();
+        }
+        for triangle in mesh.vertices[start..].chunks_exact_mut(3) { triangle.swap(1, 2); }
     }
     tag_camera_relative(&mut mesh.vertices[viewmodel_mark..]);
     for vertex in &mut mesh.vertices[viewmodel_mark..] {
@@ -1255,7 +1213,7 @@ pub fn wand_tip_light(
     }
     let eye = player.eye(world.voxel_scale) * scale;
     let forward = player.forward_dir();
-    let right = forward.cross(Vec3::Y).normalize_or_zero();
+    let right = forward.cross(player.up_dir()).normalize_or_zero();
     let up = right.cross(forward).normalize_or_zero();
     let spell = if adv.casting() { adv.last_cast } else { adv.loadout.slot(adv.loadout.cursor) };
     Some(wand::tip_light(
@@ -1266,7 +1224,7 @@ pub fn wand_tip_light(
             right,
             up,
             time: adv.time,
-            boost: 0.0,
+            boost: player.movement.boost(),
             motion: player.viewmodel,
             cast: if adv.casting() {
                 adv.cast_motion().clamp(0.0, 1.0)
@@ -1333,20 +1291,26 @@ mod dissolve_tests {
         assert!(model.vertices.iter().all(|v| v.surface[1] == 0.42));
     }
 
+    /// The viewmodel projection ignores the view matrix, so the hand must not
+    /// move when only the eye's sub-f32 remainder changes.
     #[test]
-    fn camera_residual_restores_the_precise_eye() {
-        for eye in [
-            glam::DVec3::new(1.0e6 + 0.123_456_789, 80.7, -3.0e5 + 0.7),
-            glam::DVec3::new(-2.5e4 - 0.31, 12.34, 9.0e3 + 0.002),
-            glam::DVec3::ZERO,
-        ] {
-            let residual = camera_residual(eye);
-            let rounded = eye.as_vec3().as_dvec3();
-            assert!((rounded + residual.as_dvec3() - eye).abs().max_element() < 1e-8);
-            // The remainder is below half an f32 step at that magnitude.
-            let step = (eye.abs().max_element() as f32).max(1.0) * f32::EPSILON;
-            assert!(residual.abs().max_element() <= step);
-        }
+    fn hand_is_rigid_to_the_lens_for_sub_f32_eye_steps() {
+        use crate::{fluid::VoxelScalePreset, player::Player, world::{DayNightCycle, World, WorldType}};
+        let world = World::with_seed(WorldType::Hills, VoxelScalePreset::OneMeter, 74);
+        let day = DayNightCycle::new(0.5, 600.0);
+        let hand = |x: f64| {
+            let mut player = Player::new();
+            player.precise_pos = glam::DVec3::new(x, 80.0, 1_000.0);
+            player.pos = player.precise_pos.as_vec3();
+            let vertices = build(&world, &player, &day, 0.0005, &crate::render::ChunkCache::new(IVec3::ZERO));
+            vertices.into_iter().filter(|v| v.surface[2] >= CAMERA_RELATIVE_FLAG).map(|v| v.pos).collect::<Vec<_>>()
+        };
+        let near = hand(329_440.0);
+        let shifted = hand(329_440.013);
+        assert!(!near.is_empty() && near.len() == shifted.len(), "hand vertices: {} vs {}", near.len(), shifted.len());
+        let drift = near.iter().zip(&shifted)
+            .map(|(a, b)| Vec3::from(*a).distance(Vec3::from(*b))).fold(0.0, f32::max);
+        assert!(drift < 1e-5, "hand moved {drift} m against the lens for a 13 mm eye step at x = 329 km");
     }
 
     #[test]
@@ -1367,5 +1331,126 @@ mod dissolve_tests {
         let shader = include_str!("../shaders/world_shader.wgsl");
         let want = format!("const CAMERA_RELATIVE_FLAG: f32 = {:.1};", CAMERA_RELATIVE_FLAG);
         assert!(shader.contains(&want), "world_shader.wgsl must declare `{want}`");
+    }
+}
+
+/// A loose item hovering at `pos`: bobbing, turning, with a beacon for
+/// notable gear. Used for dropped stacks and Undercrown plinth rewards.
+fn draw_loose_item(mesh: &mut Model, world: &World, stack: ItemStack, pos: Vec3, idx: usize, time: f32) {
+    use crate::world::inventory::{ArmorTier, Item};
+    let phase = time * 2.4 + idx as f32 * 1.13 + pos.x * 0.7;
+    let bob = (phase.sin() * 0.055) + 0.06;
+    let rot = Quat::from_rotation_y(time * 1.65 + idx as f32 * 0.8)
+        * Quat::from_rotation_z((phase * 0.7).cos() * 0.14);
+    let (color, emissive, beam_col) = match stack.item {
+        Item::Assembled { .. } | Item::Part { .. } => ([0.66,0.67,0.70],0.0,None),
+        Item::Cast(_) => ([0.68,0.49,0.31],0.0,None),
+        Item::Bucket(_) => ([0.45, 0.60, 0.72], 0.0, None),
+        Item::PowerKit(_) => ([0.48, 0.76, 0.88], 0.2, None),
+        Item::Block(b) => {
+            let c = b.color((pos / world.voxel_scale.meters()).as_ivec3());
+            let em = if matches!(
+                b,
+                crate::material::BlockId::Crystal
+                    | crate::material::BlockId::GlowCap
+                    | crate::material::BlockId::Lava
+            ) {
+                1.2
+            } else {
+                0.0
+            };
+            (c, em, if em > 0.2 { Some(c) } else { None })
+        }
+        Item::Weapon(tier) => (
+            [0.86, 0.74, 0.36],
+            1.4,
+            Some(if tier >= 3 {
+                [0.98, 0.78, 0.32]
+            } else {
+                [0.82, 0.68, 0.38]
+            }),
+        ),
+        Item::Armor(_, tier) => {
+            let col = match tier {
+                ArmorTier::Copper => [0.84, 0.50, 0.28],
+                ArmorTier::Steel => [0.54, 0.68, 0.90],
+                ArmorTier::Lumen => [0.44, 0.92, 0.98],
+                ArmorTier::Kinetic => [0.96, 0.58, 0.22],
+                ArmorTier::Ballast => [0.64, 0.43, 0.24],
+                ArmorTier::Burner => [0.80, 0.40, 0.18],
+                ArmorTier::Induction => [0.28, 0.74, 0.86],
+                ArmorTier::Slime => [0.42, 0.78, 0.28],
+                ArmorTier::Glider => [0.82, 0.72, 0.45],
+                ArmorTier::Survey => [0.26, 0.73, 0.68],
+                ArmorTier::Runesight => [0.67, 0.48, 0.93],
+            };
+            (col, 1.1, Some(col))
+        }
+        Item::Resource(r) => {
+            let col = match r {
+                0 | 1 => [0.88, 0.52, 0.28],
+                2 | 3 => [0.76, 0.80, 0.86],
+                4 => [0.86, 0.68, 0.32],
+                5 => [0.58, 0.72, 0.94],
+                6 | 7 => [0.44, 0.86, 0.98],
+                _ => [0.75, 0.58, 0.28],
+            };
+            (col, 0.65, Some(col))
+        }
+        Item::Food(_) => ([0.84, 0.52, 0.30], 0.35, None),
+        Item::Tool(_) => ([0.68, 0.82, 0.92], 0.9, Some([0.68, 0.82, 0.92])),
+        Item::Wand { look, .. } => {
+            let center = pos + Vec3::Y * bob;
+            if look & crate::world::adventure::wand_items::GRIMOIRE_LOOK != 0 {
+                wand::book(mesh, center, rot * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                    [0.62, 0.41, 0.72], 0.35);
+            } else {
+                crate::world::adventure::wand_items::draw_dropped(mesh, center, rot, look);
+            }
+            return;
+        }
+    };
+
+    let center = pos + Vec3::Y * bob;
+    let copies = if stack.count >= 16 {
+        3
+    } else if stack.count > 1 {
+        2
+    } else {
+        1
+    };
+    for c_i in 0..copies {
+        let offset = if c_i == 0 {
+            Vec3::ZERO
+        } else {
+            let a = c_i as f32 * 2.1 + time * 0.8;
+            Vec3::new(a.cos() * 0.045, c_i as f32 * 0.028, a.sin() * 0.045)
+        };
+        mesh.cuboid(center + offset, Vec3::splat(0.20), rot, color, emissive);
+    }
+    // Subtle ground shadow ring + vertical loot beacon for notable gear/resources
+    if let Some(bc) = beam_col {
+        mesh.glow_voxel(
+            center + Vec3::Y * 0.24,
+            Vec3::new(0.025, 0.38, 0.025),
+            Quat::from_rotation_y(time * 0.9),
+            bc,
+            2.6,
+            0.38,
+        );
+        let mote_t = (time * 1.4 + idx as f32 * 0.6).fract();
+        mesh.glow_voxel(
+            center
+                + Vec3::new(
+                    (phase * 1.5).cos() * 0.08,
+                    mote_t * 0.48,
+                    (phase * 1.5).sin() * 0.08,
+                ),
+            Vec3::splat(0.024 * (1.0 - mote_t * 0.5)),
+            rot,
+            bc,
+            3.2,
+            0.72 * (1.0 - mote_t),
+        );
     }
 }

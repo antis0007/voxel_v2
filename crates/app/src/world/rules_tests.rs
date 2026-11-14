@@ -9,6 +9,7 @@ fn scratch(name: &str) -> std::path::PathBuf {
 
 fn every_rule_flipped() -> Rules {
     Rules {
+        stacks: super::super::inventory::stacks::Balance::Builder,
         mode: GameMode::Survival,
         keep_inventory: true,
         mob_spawning: false,
@@ -16,6 +17,7 @@ fn every_rule_flipped() -> Rules {
         pvp: false,
         spawn_protection_m: 48,
         border_m: 0,
+        systems: Default::default(),
     }
 }
 

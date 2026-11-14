@@ -12,6 +12,7 @@ pub const BOONS: [(&str, &str); 6] = [
 ];
 
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct State {
     pub active: bool,
     pub kills: u32,
@@ -71,6 +72,7 @@ impl State {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action { Begin, Bank, Choose(usize), Calibrate }
 
 pub fn action(world: &mut World, at_bench: bool, action: Action) {

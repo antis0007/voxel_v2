@@ -11,8 +11,9 @@
 use crate::render::RenderDistanceSettings;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A smoothed frame time above this (about 50 fps) counts as slow.
-const SLOW_MS: f32 = 20.0;
+/// A smoothed frame time above this (about 30 fps) counts as slow. At 60 fps the
+/// full-detail planet view tripped every step within a minute of play.
+const SLOW_MS: f32 = 33.3;
 /// How long frames must stay slow before a step is taken.
 const SLOW_FOR_S: f32 = 5.0;
 /// Pause after a step, so its effect is what the next decision sees.
@@ -26,11 +27,11 @@ const SMOOTHING_S: f32 = 1.5;
 /// and lowering GPU settings would not speed it up.
 const CPU_BOUND_MS: f32 = SLOW_MS * 0.75;
 /// Far horizon range after the horizon step, metres.
-const SHORT_HORIZON_M: u32 = 12_288;
+const SHORT_HORIZON_M: u32 = 2_048;
 /// Longest a spawned world waits behind the loader for its first distant
 /// horizon. The full range takes about 5 s on the development desktop and longer
 /// on a 4-core laptop; past this, play starts and the horizon appears when published.
-const HORIZON_WAIT_S: f32 = 6.0;
+const HORIZON_WAIT_S: f32 = 2.0;
 static HORIZON_WAIT_SINCE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 static AUTO: AtomicBool = AtomicBool::new(true);
@@ -67,25 +68,13 @@ pub enum Step {
 }
 
 impl Step {
-    /// Cheapest in looks first. Render resolution comes first because it scales
-    /// terrain, shadows and clouds together and loses no feature: on a 4090 at 1080p,
-    /// 70% took the GPU from 17-25 ms to 13 ms, 50% to 10 ms. Clouds off is the
-    /// biggest single lever but removes a feature, so it waits until a shorter view
-    /// and a lower resolution have not been enough. Bounce lighting costs a fraction
-    /// of a millisecond and a coarser cloud resolution saves almost nothing; both
-    /// are tried late or not at all. Shadows and the far horizon come last: both
-    /// change the look of the whole scene, and the horizon is mostly CPU build time.
-    const ORDER: [Step; 10] = [
-        Step::Resolution(85),
-        Step::Resolution(70),
-        Step::ShorterView,
-        Step::Resolution(60),
-        Step::NoClouds,
-        Step::NoBounceLight,
-        Step::ShortestView,
-        Step::Resolution(50),
-        Step::NoShadows,
+    /// Keep native pixels and the lighting. Only distance and clouds are cut:
+    /// a world without shadows or bounce light reads as broken, not as faster.
+    const ORDER: [Step; 4] = [
         Step::ShorterHorizon,
+        Step::ShorterView,
+        Step::ShortestView,
+        Step::NoClouds,
     ];
 
     /// What to tell the player, in plain words.
@@ -95,12 +84,12 @@ impl Step {
             Step::Resolution(70) => "Frame rate was low: drawing at 70% resolution.",
             Step::Resolution(60) => "Frame rate was low: drawing at 60% resolution.",
             Step::Resolution(_) => "Frame rate was low: drawing at 50% resolution.",
-            Step::NoClouds => "Frame rate was low: clouds are now off. Turn them back on in Settings.",
+            Step::NoClouds => "Frame rate was low: clouds are off until restart.",
             Step::ShorterView => "Frame rate was low: view distance was shortened.",
             Step::NoBounceLight => "Frame rate was low: bounce lighting is now off.",
             Step::ShortestView => "Frame rate was low: view distance is now at its minimum.",
             Step::NoShadows => "Frame rate was low: shadows are off until restart.",
-            Step::ShorterHorizon => "Frame rate was low: far horizon shortened to 12 km.",
+            Step::ShorterHorizon => "Frame rate was low: far horizon shortened to 2 km.",
         }
     }
 
@@ -117,12 +106,13 @@ impl Step {
                 r::set_indirect_lighting_enabled(false);
                 true
             }
-            Step::ShorterView => shorten(view, 12),
+            Step::ShorterView => shorten(view, 6),
+            // A saved cut outlived the slow scene: every later launch had no clouds.
             Step::NoClouds if r::clouds_enabled() => {
-                r::set_clouds_enabled(false);
+                r::cut_clouds_for_session();
                 true
             }
-            Step::ShortestView => shorten(view, 8),
+            Step::ShortestView => shorten(view, 4),
             Step::NoShadows if r::shadow::enabled() => {
                 r::shadow::set_enabled(false);
                 true
@@ -448,7 +438,14 @@ mod tests {
         crate::render::set_clouds_enabled(true);
         assert!(Step::NoClouds.apply(&mut view));
         assert!(!crate::render::clouds_enabled());
+        assert!(crate::render::clouds_chosen(), "the cut is not the saved setting");
         assert!(!Step::NoClouds.apply(&mut view), "already off: nothing to do");
+        crate::render::set_clouds_enabled(false);
+        crate::render::set_clouds_enabled(true);
+        assert!(crate::render::clouds_enabled(), "the player turning clouds on lifts the cut");
+        crate::render::set_clouds_enabled(false);
+        assert!(!crate::render::clouds_chosen(), "a later choice to turn them off is saved");
+        crate::render::set_clouds_enabled(true);
         assert_eq!(view.view_distance_chunks, 28, "the view is untouched by this step");
     }
 

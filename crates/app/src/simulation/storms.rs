@@ -8,11 +8,11 @@ use super::{Budget, STEP_SECONDS, sandbox::ThermalCell};
 use crate::audio::{Cue, Event};
 use crate::player::Player;
 use crate::world::{
-    BlockId as B, ChunkData, DayNightCycle, LightingState, World,
-    chunk_coord_from_world_block as chunk_of, effects,
+    BlockId as B, ChunkData, DayNightCycle, LightingState, World, adventure::death::Cause,
+    chunk_coord_from_world_block as chunk_of, effects, synoptic,
 };
 use engine_core::hash::hash_u32;
-use glam::{IVec3, Vec2, Vec3};
+use glam::{IVec3, Vec2, Vec3, Vec3Swizzles};
 
 /// Columns rolled per fixed step, about 480 a second.
 const COLUMNS_PER_STEP: u32 = 4;
@@ -20,7 +20,7 @@ const RADIUS_M: f32 = 48.0;
 /// Columns are scanned down from this far above the player; a roof higher up is not seen.
 const SCAN_UP_M: f32 = 24.0;
 const SCAN_DOWN_M: f32 = 32.0;
-const SNOW_BELOW_C: f32 = 0.0;
+pub(crate) const SNOW_BELOW_C: f32 = 0.0;
 const MELT_ABOVE_C: f32 = 0.0;
 const FREEZE_BELOW_C: f32 = -4.0;
 const THAW_ABOVE_C: f32 = 0.0;
@@ -64,6 +64,18 @@ pub fn precipitation(cumulonimbus: f32) -> f32 {
     ((cumulonimbus - 0.10) / 0.65).clamp(0.0, 1.0)
 }
 
+/// Cumulonimbus share over world point `xz_m`: the day's share, raised in storm
+/// cores. On a planet world the storms are the shell's catalogue (`synoptic::regional_at`).
+pub fn local_cumulonimbus(day: &DayNightCycle, planet: synoptic::Planet, xz_m: Vec2) -> f32 {
+    synoptic::controls_at(day.cloud_controls(), planet, xz_m.as_dvec2(), synoptic::days(day), day.weather_seed()).cumulonimbus
+}
+
+/// Thunder share near a tornado: its parent supercell strikes often, so the
+/// share rises toward full as the core nears.
+fn tornado_thunder(cumulonimbus: f32, tornado: f32) -> f32 {
+    if tornado <= 0.0 { cumulonimbus } else { cumulonimbus.max(THUNDER_CUMULONIMBUS + (1.0 - THUNDER_CUMULONIMBUS) * tornado) }
+}
+
 fn roll(seed: u32, clock: u64, salt: u32) -> u32 {
     hash_u32(seed ^ hash_u32(clock as u32 ^ hash_u32((clock >> 32) as u32 ^ salt)))
 }
@@ -80,12 +92,15 @@ pub(crate) fn tick(world: &mut World, player: &Player, day: &mut DayNightCycle, 
         return;
     }
     day.storm.last_clock = Some(clock);
-    let cumulonimbus = day.cloud_controls().cumulonimbus;
     let centre = player.pos.floor().as_ivec3();
     let scale = world.voxel_scale.meters();
+    let planet = Some(world.sample_config());
+    let xz_m = player.pos.xz() * scale;
+    let cumulonimbus = local_cumulonimbus(day, planet, xz_m);
     cover(world, centre, precipitation(cumulonimbus), clock, budget);
-    if let Some(column) = strike_column(world.seed, clock, centre, scale, cumulonimbus) {
-        strike(world, day, column);
+    let tornado = synoptic::tornado_at(planet, xz_m.as_dvec2(), synoptic::days(day), day.weather_seed());
+    if let Some(column) = strike_column(world.seed, clock, centre, scale, tornado_thunder(cumulonimbus, tornado)) {
+        strike(world, player.pos, day, column);
     }
 }
 
@@ -97,24 +112,28 @@ pub(crate) fn cover(world: &mut World, centre: IVec3, rain: f32, clock: u64, bud
     // Storms run before the cellular pass in the same step budget; their own
     // slice keeps a cold scan from starving water and sand.
     let budget = budget.child(SLICE).min(budget);
-    // Untouched columns hold generated terrain, read one generator call per
-    // voxel. Only cold air can change them; when warm, only snow and ice that
-    // weather placed can melt, and placing them made their chunk resident.
-    let pristine = world.sandbox.cell(centre).temperature < SNOW_BELOW_C;
     let mut changed = Vec::new();
-    // At most one chunk is made resident per step; it costs a generation.
-    let mut admitted = false;
     for i in 0..COLUMNS_PER_STEP {
         if !budget.has_time() || world.adventure.dirty_voxels.len() + changed.len() >= DIRTY_LIMIT {
             break;
         }
         let h = roll(world.seed, clock, i);
+        let chance = hash_u32(h ^ 0x5EED) % 1000;
+        if chance >= MELT_PER_MILLE.max(FREEZE_PER_MILLE).max(THAW_PER_MILLE)
+            && (chance as f32) >= SETTLE_PER_MILLE * rain
+        {
+            continue;
+        }
         let column = centre + IVec3::new((h % span) as i32 - r, 0, ((h >> 16) % span) as i32 - r);
-        let Some(top) = scan(world, column, scale, pristine, budget) else { continue };
-        let Some((at, expected, next)) = change(world, top, rain, hash_u32(h ^ 0x5EED) % 1000) else {
+        // Ambient weather follows resident terrain. Leave cold columns and
+        // their neighbours to normal streaming instead of synchronously
+        // generating terrain or reading region files from a fixed step.
+        let Some(top) = scan(world, column, scale, false, budget) else { continue };
+        let Some(block) = resident_block(world, top) else { continue };
+        let Some((at, expected, next)) = cover_change(world, top, block, rain, chance) else {
             continue;
         };
-        if !resident(world, at, &mut admitted) {
+        if !budget.has_time() || !world.chunks.contains_key(&chunk_of(at)) {
             continue;
         }
         if let Ok(commit) = effects::replace(world, at, expected, next) {
@@ -122,6 +141,12 @@ pub(crate) fn cover(world: &mut World, centre: IVec3, rain: f32, clock: u64, bud
         }
     }
     world.adventure.dirty_voxels.extend(changed);
+}
+
+fn resident_block(world: &World, p: IVec3) -> Option<B> {
+    world.chunks.get(&chunk_of(p)).map(|chunk| {
+        chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
+    })
 }
 
 fn resident(world: &mut World, p: IVec3, admitted: &mut bool) -> bool {
@@ -140,8 +165,8 @@ fn resident(world: &mut World, p: IVec3, admitted: &mut bool) -> bool {
 /// generator call when `pristine`). `None` for an edited chunk paged out.
 fn known(world: &World, p: IVec3, pristine: bool) -> Option<B> {
     let c = chunk_of(p);
-    if world.chunks.contains_key(&c) {
-        return Some(world.get(p));
+    if let Some(block) = resident_block(world, p) {
+        return Some(block);
     }
     if world.regions.view.records.contains_key(&c) {
         return None;
@@ -190,34 +215,37 @@ fn still(world: &World, p: IVec3) -> bool {
     world.water_volume(p) == 8
         && [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z, IVec3::NEG_Y]
             .iter()
-            .all(|&d| known(world, p + d, true).is_some_and(|b| b != B::Air))
+            .all(|&d| resident_block(world, p + d).is_some_and(|b| b != B::Air))
 }
 
 /// The edit weather makes at `top`, the highest cell of an open column, for a
 /// roll in 0..1000: the cell, the block expected there and its replacement.
+#[cfg(test)]
 pub(crate) fn change(world: &World, top: IVec3, rain: f32, roll: u32) -> Option<(IVec3, B, B)> {
+    cover_change(world, top, world.get(top), rain, roll)
+}
+
+fn cover_change(world: &World, top: IVec3, block: B, rain: f32, roll: u32) -> Option<(IVec3, B, B)> {
     let above = top + IVec3::Y;
-    let air_c = world.sandbox.cell(above).temperature;
-    let ground_c = world.sandbox.cell_for(top, world.get(top)).temperature;
-    match world.get(top) {
-        B::SnowGrass if ground_c.max(air_c) > MELT_ABOVE_C => {
-            (roll < MELT_PER_MILLE).then_some((top, B::SnowGrass, B::Grass))
-        }
+    let air_temperature = || world.sandbox.cell(above).temperature;
+    // Snowy grass is generated cover; thawing it would edit every warm column in reach.
+    match block {
         B::SnowLayer => {
-            let warm = world.sandbox.cell(top).temperature.max(air_c) > MELT_ABOVE_C
-                || torch_light(world, top) >= TORCH_MELT;
-            (warm && roll < MELT_PER_MILLE).then_some((top, B::SnowLayer, B::Air))
+            let melts = roll < MELT_PER_MILLE && (torch_light(world, top) >= TORCH_MELT
+                || world.sandbox.cell(top).temperature > MELT_ABOVE_C
+                || air_temperature() > MELT_ABOVE_C);
+            melts.then_some((top, B::SnowLayer, B::Air))
         }
-        B::Water => (air_c < FREEZE_BELOW_C && roll < FREEZE_PER_MILLE && still(world, top))
+        B::Water => (roll < FREEZE_PER_MILLE && air_temperature() < FREEZE_BELOW_C && still(world, top))
             .then_some((top, B::Water, B::Ice)),
         // Only a skin over water thaws: generated ice sheets and ice masonry stay.
-        B::Ice if air_c > THAW_ABOVE_C && world.get(top - IVec3::Y) == B::Water => {
-            (roll < THAW_PER_MILLE).then_some((top, B::Ice, B::Water))
-        }
-        b if holds_snow(b) => (air_c < SNOW_BELOW_C
-            && ground_c <= SNOW_BELOW_C
-            && torch_light(world, above) < TORCH_MELT
-            && (roll as f32) < SETTLE_PER_MILLE * rain)
+        B::Ice => (roll < THAW_PER_MILLE && air_temperature() > THAW_ABOVE_C
+            && resident_block(world, top - IVec3::Y) == Some(B::Water))
+            .then_some((top, B::Ice, B::Water)),
+        b if (roll as f32) < SETTLE_PER_MILLE * rain && holds_snow(b) =>
+            (torch_light(world, above) < TORCH_MELT
+            && air_temperature() < SNOW_BELOW_C
+            && world.sandbox.cell_for(top, b).temperature <= SNOW_BELOW_C)
             .then_some((above, B::Air, B::SnowLayer)),
         _ => None,
     }
@@ -239,8 +267,8 @@ pub(crate) fn strike_column(seed: u32, clock: u64, centre: IVec3, scale: f32, cu
     Some(centre + IVec3::new(d.x.round() as i32, 0, d.y.round() as i32))
 }
 
-/// Flash, thunder and fire on a flammable top.
-fn strike(world: &mut World, day: &mut DayNightCycle, column: IVec3) {
+/// Flash, thunder, fire on a flammable top and harm to a player standing there.
+fn strike(world: &mut World, feet: Vec3, day: &mut DayNightCycle, column: IVec3) {
     let scale = world.voxel_scale.meters();
     let Some(top) = surface(world, column, scale) else { return };
     day.storm.flash_s = FLASH_SECONDS;
@@ -249,6 +277,9 @@ fn strike(world: &mut World, day: &mut DayNightCycle, column: IVec3) {
         world.adventure.sounds.push(Event { cue: Cue::ForgeSlam, pos: Some(at_m), gain: 1.0, pitch: 0.45 });
     }
     ignite(world, top);
+    if hits(feet * scale, at_m) {
+        world.adventure.environment_damage(STRIKE_DAMAGE, Cause::Contact(B::Fire));
+    }
 }
 
 /// Lights a flammable `top` from the open cell above it, as fire spells do.

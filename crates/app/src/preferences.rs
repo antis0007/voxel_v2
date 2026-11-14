@@ -14,9 +14,10 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-const MAGIC: &[u8; 8] = b"VXPRF009";
+const MAGIC: &[u8; 8] = b"VXPRF010";
 const FONT_OFFSET: usize = 26 + crate::egui_ui::magic_style::WORDS;
-const WORDS: usize = FONT_OFFSET + crate::egui_ui::typography::WORDS;
+const THEME_OFFSET: usize = FONT_OFFSET + crate::egui_ui::typography::WORDS;
+const WORDS: usize = THEME_OFFSET + 1;
 const CLOUDS_OFF_BIT: u32 = 8;
 /// Bit 9 of the same word: automatic quality switched off (so old files keep it on).
 const AUTO_QUALITY_OFF_BIT: u32 = 9;
@@ -36,7 +37,10 @@ const AMBIENCE_SHIFT: u32 = 9;
 /// files wrote there decodes as the full range. Older builds ignore these bits.
 const HORIZON_SHIFT: u32 = 16;
 const HORIZON_UNIT_M: u32 = 256;
-const MUSIC_DEFAULT: f32 = 0.5;
+const MUSIC_DEFAULT: f32 = 0.0;
+/// Music played at this level by default before it shipped muted, so a file
+/// holding exactly this value is treated as unchosen and migrates to muted.
+const OLD_MUSIC_DEFAULT: f32 = 0.5;
 const AMBIENCE_DEFAULT: f32 = 0.6;
 fn volume_bits(volume: f32, shift: u32) -> u32 {
     ((volume.clamp(0.0, 1.0) * 100.0).round() as u32 + 1) << shift
@@ -129,6 +133,7 @@ pub struct Preferences {
     /// Menu and HUD zoom on top of the native DPI correction.
     pub ui_scale: f32,
     pub hotbar_scale: f32,
+    pub offhand_right: bool,
     /// Walk bob and held-item sway, 0 to 100 percent.
     pub camera_motion: u32,
     /// Sprint and dash FOV kick and zoom easing, 0 to 100 percent.
@@ -140,6 +145,7 @@ pub struct Preferences {
     pub horizon_m: u32,
     pub magic: crate::egui_ui::magic_style::Settings,
     pub typography: crate::egui_ui::typography::Settings,
+    pub panel_theme: u32,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -158,7 +164,7 @@ impl Default for Preferences {
             lod: d.lod_start_chunks,
             levels: d.lod_levels,
             scale: 0,
-            world: 1,
+            world: 4,
             cpu,
             gpu,
             mesh: render::mesh_budget_mib(),
@@ -169,21 +175,23 @@ impl Default for Preferences {
             height: 720,
             fullscreen: false,
             effects_volume: 0.65,
-            cloud_scale: 3,
+            cloud_scale: 4,
             clouds: true,
-            indirect_lighting: true,
+            indirect_lighting: false,
             auto_quality: true,
             render_scale: 100,
             ui_scale: UI_SCALE_DEFAULT,
             hotbar_scale: 1.0,
+            offhand_right: false,
             camera_motion: 100,
             fov_effects: 100,
             subtitles: false,
             music_volume: MUSIC_DEFAULT,
             ambience_volume: AMBIENCE_DEFAULT,
-            horizon_m: render::MAX_HORIZON_RANGE_M,
+            horizon_m: 4096,
             magic: Default::default(),
             typography: Default::default(),
+            panel_theme: crate::egui_ui::themes::DEFAULT,
         }
     }
 }
@@ -192,6 +200,10 @@ impl Preferences {
         match self.world {
             0 => WorldType::Superflat,
             2 => WorldType::Ridged,
+        3 => WorldType::Nether,
+        4 => WorldType::Planet,
+        5 => WorldType::Manyfold,
+        6 => WorldType::Hall,
             _ => WorldType::Hills,
         }
     }
@@ -212,19 +224,22 @@ impl Preferences {
         crate::audio::set_volume(self.effects_volume);
         crate::audio::set_music_volume(self.music_volume);
         crate::audio::set_ambience_volume(self.ambience_volume);
-        render::set_cloud_render_scale(self.cloud_scale);
+        render::set_cloud_render_scale(if self.cloud_scale == 3 && matches!((self.view,self.lod,self.levels), (28,10,4) | (12,6,3)) { 4 } else { self.cloud_scale });
         render::set_clouds_enabled(self.clouds);
         render::set_indirect_lighting_enabled(self.indirect_lighting);
         crate::quality::set_auto_enabled(self.auto_quality);
-        render::set_scene_scale_percent(self.render_scale);
-        render::set_horizon_range_m(self.horizon_m);
+        // Restore native pixels after older automatic-quality resolution reductions.
+        render::set_scene_scale_percent(if self.auto_quality && !render::integrated_gpu() && !crate::low_spec::active() { 100 } else { self.render_scale });
+        render::set_horizon_range_m(if self.horizon_m == render::MAX_HORIZON_RANGE_M { 4096 } else { self.horizon_m });
         crate::comfort::set_camera_motion_percent(self.camera_motion);
         crate::comfort::set_fov_effects_percent(self.fov_effects);
         crate::egui_ui::subtitles::set_enabled(self.subtitles);
-        // The old stock setting kept full blocks for three chunks and then
-        // threw the rest away at 256 m. Promote that exact preset once.
-        let (view, lod, levels) = if self.view == 16 && self.lod == 3 && self.levels == 3 {
-            (28, 10, 4)
+        // Move former stock profiles to the shorter default; custom distances stay intact.
+        let (view, lod, levels) = if (self.view, self.lod, self.levels) == (16, 3, 3)
+            || (self.view, self.lod, self.levels) == (28, 10, 4)
+            || (self.view, self.lod, self.levels) == (12, 6, 3)
+            || (self.view, self.lod, self.levels) == (8, 4, 3) {
+            (8, 5, 2)
         } else {
             (self.view, self.lod, self.levels)
         };
@@ -246,8 +261,10 @@ impl Preferences {
         ui.show_hud = self.hud;
         ui.ui_scale = self.ui_scale;
         ui.hotbar_scale = self.hotbar_scale;
+        ui.offhand_right = self.offhand_right;
         crate::egui_ui::magic_style::set(&ui.ctx, self.magic);
         crate::egui_ui::typography::set(&ui.ctx, self.typography);
+        crate::egui_ui::themes::set(&ui.ctx, self.panel_theme);
     }
     pub fn capture(
         ui: &EguiUi,
@@ -274,11 +291,7 @@ impl Preferences {
             view: d.view_distance_chunks,
             lod: d.lod_start_chunks,
             levels: d.lod_levels,
-            world: match kind {
-                WorldType::Superflat => 0,
-                WorldType::Hills => 1,
-                WorldType::Ridged => 2,
-            },
+            world: kind.code().into(),
             scale: match scale {
                 VoxelScalePreset::OneMeter => 0,
                 VoxelScalePreset::HalfMeter => 1,
@@ -295,12 +308,13 @@ impl Preferences {
             fullscreen,
             effects_volume: crate::audio::volume(),
             cloud_scale: render::cloud_render_scale(),
-            clouds: render::clouds_enabled(),
+            clouds: render::clouds_chosen(),
             indirect_lighting: render::indirect_lighting_enabled(),
             auto_quality: crate::quality::auto_enabled(),
             render_scale: render::scene_scale_percent(),
             ui_scale: ui.ui_scale.clamp(UI_SCALE_MIN, UI_SCALE_MAX),
             hotbar_scale: ui.hotbar_scale.clamp(0.7, 1.6),
+            offhand_right: ui.offhand_right,
             camera_motion: crate::comfort::camera_motion_percent(),
             fov_effects: crate::comfort::fov_effects_percent(),
             subtitles: crate::egui_ui::subtitles::enabled(),
@@ -309,6 +323,7 @@ impl Preferences {
             horizon_m: crate::quality::saved_horizon_m(render::horizon_range_m()),
             magic: crate::egui_ui::magic_style::get(&ui.ctx),
             typography: crate::egui_ui::typography::get(&ui.ctx),
+            panel_theme: crate::egui_ui::themes::get(&ui.ctx),
         }
     }
     fn words(self) -> [u32; WORDS] {
@@ -352,12 +367,15 @@ impl Preferences {
         let mut words = [0; WORDS];
         words[..26].copy_from_slice(&base);
         words[26..FONT_OFFSET].copy_from_slice(&self.magic.words());
-        words[FONT_OFFSET..].copy_from_slice(&self.typography.words());
+        words[FONT_OFFSET..THEME_OFFSET].copy_from_slice(&self.typography.words());
+        words[THEME_OFFSET] = crate::egui_ui::themes::bounded(self.panel_theme) | (u32::from(self.offhand_right) << 8);
         words
     }
     fn decode(bytes: &[u8]) -> Result<Self> {
         ensure!(
             (bytes.len() == 8 + WORDS * 4 + 8 && bytes.get(..8) == Some(MAGIC.as_slice()))
+                || (bytes.len() == 8 + THEME_OFFSET * 4 + 8
+                    && bytes.get(..8) == Some(b"VXPRF009".as_slice()))
                 || (bytes.len() == 8 + FONT_OFFSET * 4 + 8
                     && bytes.get(..8) == Some(b"VXPRF008".as_slice()))
                 || (bytes.len() == 8 + 26 * 4 + 8
@@ -406,12 +424,13 @@ impl Preferences {
             lod: (w[8] as i32).clamp(2, view - 1),
             levels: w[9].clamp(1, 4) as u8,
             scale: w[10].min(2),
-            world: w[11].min(2),
+            world: w[11].min(4),
             cpu: w[12].clamp(32, 2048) as usize,
             // Migrate the former default, otherwise old preferences would
             // silently pin upgraded installations to the broken 512 MiB cap.
             gpu: if w[13] == 0
                 || (bytes.get(..8) != Some(MAGIC.as_slice())
+                    && bytes.get(..8) != Some(b"VXPRF009".as_slice())
                     && bytes.get(..8) != Some(b"VXPRF008".as_slice())
                     && bytes.get(..8) != Some(b"VXPRF007".as_slice())
                     && bytes.get(..8) != Some(b"VXPRF006".as_slice())
@@ -440,7 +459,10 @@ impl Preferences {
                 .map_or(100, |p| p.clamp(render::MIN_SCENE_SCALE_PERCENT, 100)),
             indirect_lighting: w.get(23).is_none_or(|v| *v & 1 != 0),
             subtitles: w.get(23).is_some_and(|v| *v >> SUBTITLES_BIT & 1 != 0),
-            music_volume: volume_from(w.get(23), MUSIC_SHIFT, MUSIC_DEFAULT),
+            music_volume: match volume_from(w.get(23), MUSIC_SHIFT, MUSIC_DEFAULT) {
+                v if v == OLD_MUSIC_DEFAULT => MUSIC_DEFAULT,
+                v => v,
+            },
             ambience_volume: volume_from(w.get(23), AMBIENCE_SHIFT, AMBIENCE_DEFAULT),
             horizon_m: horizon_from(w.get(23)),
             camera_motion: 100 - w.get(22).map_or(0, |n| n >> CAMERA_MOTION_CUT_SHIFT & 0x7f).min(100),
@@ -451,6 +473,7 @@ impl Preferences {
                 // Preserve a deliberate 100% selection in the font-capable
                 // format; retain the former default migration for older files.
                 .filter(|n| n.is_finite() && (bytes.get(..8) == Some(MAGIC.as_slice())
+                    || bytes.get(..8) == Some(b"VXPRF009".as_slice())
                     || (*n - 1.0).abs() > 1.0e-6))
                 .unwrap_or(UI_SCALE_DEFAULT)
                 .clamp(UI_SCALE_MIN, UI_SCALE_MAX),
@@ -461,7 +484,9 @@ impl Preferences {
                 .unwrap_or(1.0)
                 .clamp(0.7, 1.6),
             magic: crate::egui_ui::magic_style::Settings::decode(w.get(26..FONT_OFFSET).unwrap_or(&[])),
-            typography: crate::egui_ui::typography::Settings::decode(w.get(FONT_OFFSET..).unwrap_or(&[])),
+            typography: crate::egui_ui::typography::Settings::decode(w.get(FONT_OFFSET..THEME_OFFSET).unwrap_or(&[])),
+            panel_theme: crate::egui_ui::themes::bounded(w.get(THEME_OFFSET).copied().unwrap_or(crate::egui_ui::themes::DEFAULT) & 0xff),
+            offhand_right: w.get(THEME_OFFSET).is_some_and(|n| n & (1 << 8) != 0),
         })
     }
     fn bytes(self) -> Vec<u8> {
@@ -641,6 +666,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn interaction_regression_offhand_side_round_trips_without_changing_theme() {
+        for right in [false, true] {
+            let p = Preferences { offhand_right: right, ..Default::default() };
+            let decoded = Preferences::decode(&p.bytes()).unwrap();
+            assert_eq!(decoded.offhand_right, right);
+            assert_eq!(decoded.panel_theme, p.panel_theme);
+        }
+    }
+
+    #[test]
     fn ui_scale_round_trips() {
         let mut preferences = Preferences::default();
         preferences.ui_scale = 1.35;
@@ -777,6 +812,8 @@ mod tests {
         assert!(decoded.subtitles && !decoded.indirect_lighting);
         let full = Preferences { music_volume: 1.0, ..Preferences::default() };
         assert_eq!(Preferences::decode(&full.bytes()).expect("decode").music_volume, 1.0);
+        let old_default = Preferences { music_volume: OLD_MUSIC_DEFAULT, ..Preferences::default() };
+        assert_eq!(Preferences::decode(&old_default.bytes()).expect("decode").music_volume, 0.0);
         // Files from before the sliders wrote only bits 0 and 1 of word 23.
         let mut bytes = Preferences::default().bytes();
         let word = 8 + 23 * 4;

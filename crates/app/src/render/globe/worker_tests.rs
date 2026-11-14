@@ -14,6 +14,7 @@ fn test_cache(name: &str) -> TileCache {
 
 fn test_cfg() -> WorldSampleConfig {
     WorldSampleConfig {
+        planet: None,
         generator_version: 53,
         seed: 74,
         world_type: engine_voxel::WorldType::Hills,

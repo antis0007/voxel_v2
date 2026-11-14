@@ -77,8 +77,11 @@ pub fn tick(
     let metres = world.voxel_scale.meters();
     for centre in fired {
         world.block_data.fuses.remove(&key(centre));
+        if world.get(centre) != BlockId::Tnt { continue; }
         let centre_m = (centre.as_vec3() + Vec3::splat(0.5)) * metres;
+        crate::world::factory::industry::rupture(world,centre_m,RADIUS_M);
         world.adventure.blast_damage(centre_m, RADIUS_M, eye_m);
+        world.sandbox.apply_radial_impulse(centre_m, RADIUS_M * 1.6, 9.0, metres);
         let room = MAX_QUEUED.saturating_sub(world.block_data.blasts.len());
         let cells = blast_cells(centre, metres);
         world.block_data.blasts.extend(cells.into_iter().take(room).map(|c| (c, centre)));
@@ -95,6 +98,7 @@ pub fn tick(
 }
 
 fn clear(world: &mut World, cell: IVec3, centre: IVec3, blocks: &mut HashSet<IVec3>, chunks: &mut HashSet<IVec3>) {
+    if !crate::world::orbital::habitat::ordinary_spell_allowed(world, cell) { return; }
     let block = world.get(cell);
     if block == BlockId::Air || block.is_liquid() {
         return;
@@ -104,8 +108,44 @@ fn clear(world: &mut World, cell: IVec3, centre: IVec3, blocks: &mut HashSet<IVe
         arm(&mut world.block_data, cell, 30 + (cell_hash(cell, 7) % 60) as u16);
         return;
     }
+    // Keep a sparse share of ordinary rubble as actual moving world voxels.
+    // Reserve slots for player assemblies; saturated blasts use normal clearing.
+    // No loot is minted for ejected cells: their material still exists.
+    if matches!(block, BlockId::Stone | BlockId::Dirt | BlockId::Sand | BlockId::Gravel | BlockId::Planks)
+        && cell_hash(cell, 19).is_multiple_of(16)
+        && world.sandbox.bodies.len() < crate::simulation::sandbox::MAX_BODIES - 16
+        && effects::admit(world, cell).is_ok()
+    {
+        let scale = world.voxel_scale.meters();
+        let delta = (cell - centre).as_vec3() * scale;
+        let falloff = (1.0 - delta.length() / RADIUS_M).clamp(0.15, 1.0);
+        let density = (block.material().physics.density / 1000.0).max(0.25);
+        let velocity = (delta.normalize_or_zero() + Vec3::Y * 0.8).normalize_or_zero()
+            * ((4.0 + 10.0 * falloff) / density.sqrt() / scale);
+        if world.sandbox.add_debris(cell, &[(cell, block)], velocity) {
+            let hash = cell_hash(cell, 23);
+            let spin = Vec3::new(
+                (hash & 255) as f32 - 127.5,
+                ((hash >> 8) & 255) as f32 - 127.5,
+                ((hash >> 16) & 255) as f32 - 127.5,
+            ).normalize_or_zero();
+            if let Some(body) = world.sandbox.bodies.last_mut() { body.angular = spin * 5.0; }
+            world.activity.wake(cell);
+            return;
+        }
+    }
     let Ok(commit) = effects::replace(world, cell, block, BlockId::Air) else { return };
     commit.publish(world, blocks, chunks);
+    if block == BlockId::Log {
+        let first_body = world.sandbox.bodies.len();
+        if crate::world::expedition::fell_tree(world, cell, (cell - centre).as_vec3()) {
+            let scale = world.voxel_scale.meters();
+            for body in &mut world.sandbox.bodies[first_body..] {
+                let away = (body.origin - centre).as_vec3().normalize_or_zero();
+                body.velocity += (away + Vec3::Y * 0.4).normalize_or_zero() * (5.0 / scale);
+            }
+        }
+    }
     if block != BlockId::Tnt
         && cell_hash(cell, 3).is_multiple_of(DROP_EVERY)
         && world.inventory.dropped.len() < 1024

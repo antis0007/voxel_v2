@@ -74,16 +74,10 @@ fn header(path: &Path) -> Result<Header> {
     let mut prefix = vec![0u8; 168];
     file.read_exact(&mut prefix)?;
     let version = save_version(&prefix)?;
-    if version >= 12 {
-        prefix.resize(180, 0);
-        file.read_exact(&mut prefix[168..])?;
-    }
     let word = |offset| u32::from_le_bytes(prefix[offset..offset + 4].try_into().unwrap());
-    let kind = match word(16) {
-        0 => WorldType::Superflat,
-        1 => WorldType::Hills,
-        2 => WorldType::Ridged,
-        _ => anyhow::bail!("Invalid landscape"),
+    let kind = match u8::try_from(word(16)).ok().and_then(WorldType::from_code) {
+        Some(kind) => kind,
+        None => anyhow::bail!("Invalid landscape"),
     };
     let scale = match word(20) {
         0 => VoxelScalePreset::OneMeter,
@@ -104,13 +98,15 @@ fn header(path: &Path) -> Result<Header> {
             word(164),
         )
     } else {
-        let count = word(if version >= 12 { 176 } else { 164 }) as usize;
+        file.seek(SeekFrom::Start(super::identity_offset(&prefix, version)? as u64))?;
+        let mut n = [0; 4];
+        file.read_exact(&mut n)?;
+        let count = u32::from_le_bytes(n) as usize;
         ensure!((1..=96).contains(&count), "Invalid world identity length");
         let mut name = vec![0; count];
         file.read_exact(&mut name)?;
         let id = String::from_utf8(name)?;
         ensure!(valid_id(&id), "Invalid world identity");
-        let mut n = [0; 4];
         file.read_exact(&mut n)?;
         (id, u32::from_le_bytes(n))
     };
@@ -142,6 +138,12 @@ fn default_name(h: &Header) -> String {
         match h.kind {
             WorldType::Hills => "Default",
             WorldType::Ridged => "Highlands",
+        WorldType::Nether => "Nether",
+            WorldType::Planet => "Planet",
+        WorldType::Manyfold => "Manyfold",
+            WorldType::Hall => "Hall",
+            WorldType::Realm(kind) => kind.short(),
+            WorldType::Realm(engine_voxel::RealmKind::Gilded) => "Gilded Cave",
             WorldType::Superflat => "Flat",
         },
         h.seed
@@ -226,6 +228,31 @@ fn edit_metadata(id: &str, name: Option<String>, favorite: Option<bool>) -> Resu
         super::super::regions::checkpoint_id(),
     )?;
     Ok(())
+}
+/// Runs on the library worker. Only the player's own save folder is cleared;
+/// worlds found in other library roots (repository review folders, legacy
+/// install paths) are left alone. Returns the number of world folders removed.
+fn delete_all() -> Result<usize> {
+    let root = super::paths::save_directory();
+    let mut removed = 0;
+    if let Ok(dirs) = fs::read_dir(root.join("regions")) {
+        for dir in dirs {
+            let dir = dir?;
+            let id = dir.file_name().to_string_lossy().to_string();
+            if dir.file_type()?.is_dir() && valid_id(&id) {
+                fs::remove_dir_all(dir.path())?;
+                removed += 1;
+            }
+        }
+    }
+    for name in ["quicksave.vxw", "autosave.vxw", "quicksave.prev.vxw", "autosave.prev.vxw"] {
+        let path = root.join(name);
+        if path.is_file() {
+            fs::remove_file(path)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 fn scan() -> Result<Vec<WorldEntry>> {
     let mut grouped: HashMap<String, Vec<Header>> = HashMap::new();
@@ -318,6 +345,20 @@ fn scan() -> Result<Vec<WorldEntry>> {
     entries.sort_by(|a, b| b.saved.cmp(&a.saved).then_with(|| a.id.cmp(&b.id)));
     Ok(entries)
 }
+/// Loads a saved world by its id or library name, on the calling thread; `None` if none matches.
+pub fn load_named(name: &str) -> Result<Option<SavedSession>> {
+    let entries = scan()?;
+    let entry = entries
+        .iter()
+        .find(|e| e.id == name)
+        .or_else(|| entries.iter().filter(|e| e.name == name).max_by_key(|e| e.saved));
+    entry.map(|e| load_selected(&e.id)).transpose()
+}
+
+/// Names a world in the library, on the calling thread.
+pub fn name_world(id: &str, name: &str) -> Result<()> {
+    edit_metadata(id, Some(name.to_owned()), None)
+}
 fn load_selected(id: &str) -> Result<SavedSession> {
     ensure!(valid_id(id), "Invalid world identity");
     if !id.starts_with("legacy-") {
@@ -379,6 +420,7 @@ enum Command {
         name: Option<String>,
         favorite: Option<bool>,
     },
+    DeleteAll,
 }
 fn guarded<T>(job: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|_| {
@@ -391,6 +433,7 @@ pub enum LibraryEvent {
     Entries(Result<Vec<WorldEntry>>),
     Loaded(Result<SavedSession>),
     Edited(Result<()>),
+    Deleted(Result<usize>),
 }
 pub struct WorldLibrary {
     tx: mpsc::SyncSender<Command>,
@@ -420,6 +463,7 @@ impl WorldLibrary {
                             Command::Edit { id, name, favorite } => {
                                 LibraryEvent::Edited(guarded(|| edit_metadata(&id, name, favorite)))
                             }
+                            Command::DeleteAll => LibraryEvent::Deleted(guarded(delete_all)),
                         };
                         if done.send(result).is_err() {
                             break;
@@ -498,6 +542,12 @@ impl WorldLibrary {
             favorite: Some(favorite),
         });
     }
+    /// Permanently removes every world in the player's save folder.
+    pub fn delete_all(&mut self) {
+        if !self.queue.iter().any(|q| matches!(q, Command::DeleteAll)) {
+            self.enqueue(Command::DeleteAll);
+        }
+    }
     pub fn poll(&mut self) -> Option<Result<SavedSession>> {
         let mut loaded = None;
         if self.active {
@@ -528,6 +578,14 @@ impl WorldLibrary {
                                 self.status = Some(format!("Cannot save world details: {e:#}"))
                             }
                         },
+                        LibraryEvent::Deleted(result) => {
+                            self.refresh();
+                            self.status = Some(match result {
+                                Ok(0) => "No saved worlds to delete".into(),
+                                Ok(n) => format!("Deleted {n} saved world{}", if n == 1 { "" } else { "s" }),
+                                Err(e) => format!("Cannot delete worlds: {e:#}"),
+                            });
+                        }
                         LibraryEvent::Loaded(result) => loaded = Some(result),
                     }
                 }

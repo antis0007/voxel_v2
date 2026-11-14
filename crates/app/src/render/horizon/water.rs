@@ -6,6 +6,7 @@ use crate::{
 };
 use glam::Vec3;
 use std::collections::HashMap;
+mod regional;
 
 fn linear(c:f32)->f32 { if c<=0.04045 {c/12.92} else {((c+0.055)/1.055).powf(2.4)} }
 fn srgb(c:f32)->f32 { if c<=0.0031308 {c*12.92} else {1.055*c.powf(1.0/2.4)-0.055} }
@@ -51,11 +52,15 @@ fn vertex(
 pub(super) const COAST_BIAS_VOXELS: f32 = 1.0;
 
 pub(super) fn append(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig) {
+    if cfg.is_hell() {
+        return;
+    }
     let scale = cfg.voxel_meters();
     let sea = cfg.water_level() as f32 + 1.0;
     let surface = sea - crate::mesh::WATER_SURFACE_INSET;
     let waterline = surface - COAST_BIAS_VOXELS;
     let count = mesh.indices.len();
+    let bed_vertices = mesh.vertices.len();
     let mut cache = HashMap::new();
     for offset in (0..count).step_by(3) {
         let ids = [
@@ -107,6 +112,9 @@ pub(super) fn append(mesh: &mut ChunkMesh, cfg: &WorldSampleConfig) {
                 .extend_from_slice(&[polygon[0], polygon[i], polygon[i + 1]]);
         }
     }
+    // Rivers/lakes use their generated elevation, independently of the ocean.
+    // Process only the original bed, never the water triangles just appended.
+    regional::append(mesh, cfg, count, bed_vertices);
     println!(
         "[horizon] water shared_vertices={} source_triangles={}",
         cache.len(),

@@ -36,6 +36,11 @@ impl Default for Crossings {
 }
 
 impl Crossings {
+    /// Changes on a committed crossing even when entry and exit are close.
+    pub(crate) fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
     pub fn record(
         &mut self,
         root: Arc<PathBuf>,

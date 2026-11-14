@@ -19,17 +19,23 @@ impl ChunkConnectivity {
     pub const SEALED: Self = Self(0);
 
     /// Links built from components, each given as the set of faces it touches.
+    #[cfg(test)]
     pub fn from_components(components: impl IntoIterator<Item = u8>) -> Self {
-        let mut bits = 0u64;
+        let mut links = Self::SEALED;
         for touched in components {
-            let touched = u64::from(touched & 0x3f);
-            for face in 0..6 {
-                if touched & (1 << face) != 0 {
-                    bits |= touched << (face * 6);
-                }
-            }
+            links.link_component(touched);
         }
-        Self(bits)
+        links
+    }
+
+    fn link_component(&mut self, touched: u8) {
+        let touched = u64::from(touched & 0x3f);
+        let mut remaining = touched;
+        while remaining != 0 {
+            let face = remaining.trailing_zeros();
+            self.0 |= touched << (face * 6);
+            remaining &= remaining - 1;
+        }
     }
 
     pub fn connects(self, a: usize, b: usize) -> bool {
@@ -38,9 +44,17 @@ impl ChunkConnectivity {
 
     /// Faces reachable from any face in `entered` (bit per face).
     pub fn exits_from(self, entered: u8) -> u8 {
-        (0..6)
-            .filter(|face| entered & (1 << face) != 0)
-            .fold(0, |out, face| out | ((self.0 >> (face * 6)) & 0x3f) as u8)
+        if self.0 & FACE_BITS == FACE_BITS && entered & 0x3f != 0 {
+            return 0x3f;
+        }
+        let mut remaining = entered & 0x3f;
+        let mut exits = 0;
+        while remaining != 0 {
+            let face = remaining.trailing_zeros();
+            exits |= ((self.0 >> (face * 6)) & 0x3f) as u8;
+            remaining &= remaining - 1;
+        }
+        exits
     }
 
     /// Geometry from `spills_out` blocks can reach a neighbour chunk.
@@ -73,8 +87,8 @@ impl ChunkConnectivity {
                 for (x, &b) in chunk.blocks[start..start + N].iter().enumerate() {
                     if occludes(b) {
                         bits |= 1 << x;
-                    } else {
-                        spills |= spills_out(b);
+                    } else if !spills {
+                        spills = spills_out(b);
                     }
                 }
                 solid[y * N + z] = bits;
@@ -86,7 +100,7 @@ impl ChunkConnectivity {
         } else if solid_cells == N * N * N {
             Self::SEALED
         } else {
-            flood(&solid, cancelled)?
+            flood(&mut solid, cancelled)?
         };
         Some(links.with_spill(spills))
     }
@@ -105,10 +119,9 @@ fn spills_out(b: BlockId) -> bool {
     b.is_torch() || b.is_model() || (matches!(render.kind, RenderKind::Cutout) && !render.occludes_light)
 }
 
-fn flood(solid: &[u32], cancelled: &AtomicBool) -> Option<ChunkConnectivity> {
-    let mut seen = solid.to_vec();
+fn flood(seen: &mut [u32], cancelled: &AtomicBool) -> Option<ChunkConnectivity> {
     let mut stack: Vec<u16> = Vec::with_capacity(N * N);
-    let mut components = Vec::new();
+    let mut links = ChunkConnectivity::SEALED;
     for row in 0..N * N {
         while seen[row] != u32::MAX {
             if cancelled.load(Ordering::Relaxed) {
@@ -124,6 +137,11 @@ fn flood(solid: &[u32], cancelled: &AtomicBool) -> Option<ChunkConnectivity> {
                 let (y, z) = (row / N, row % N);
                 let edge = |v: usize, low: u8| if v == 0 { low } else if v == N - 1 { low << 1 } else { 0 };
                 touched |= edge(x, 1) | edge(y, 4) | edge(z, 16);
+                // This component already connects every face. Unvisited cells
+                // cannot add any links, and spills were collected in the scan.
+                if touched == 0x3f {
+                    return Some(ChunkConnectivity::ALL_OPEN);
+                }
                 let mut visit = |row: usize, x: usize| {
                     if seen[row] & (1 << x) == 0 {
                         seen[row] |= 1 << x;
@@ -137,10 +155,10 @@ fn flood(solid: &[u32], cancelled: &AtomicBool) -> Option<ChunkConnectivity> {
                 if y > 0 { visit(row - N, x); }
                 if y + 1 < N { visit(row + N, x); }
             }
-            components.push(touched);
+            links.link_component(touched);
         }
     }
-    Some(ChunkConnectivity::from_components(components))
+    Some(links)
 }
 
 #[cfg(test)]

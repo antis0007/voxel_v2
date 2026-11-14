@@ -1,12 +1,13 @@
 //! Mapped terrain, waypoints, the corner minimap and the full-screen world map.
 //!
-//! Streaming reports chunks through `note_chunk` and `absorb`; the UI calls
-//! `pump` each playing frame. State is global because the chunk streamer and the
-//! UI have no shared owner below `main.rs`.
+//! Streaming supplies explored surface tiles in ordinary worlds. Folded interiors
+//! retain local observation charts for their changing gravity and topology.
 pub mod columns;
+mod knowledge;
+mod perception;
 mod minimap;
 mod panel;
-mod sidecar;
+pub(super) mod sidecar;
 pub mod tiles;
 pub mod waypoints;
 
@@ -14,12 +15,9 @@ use crate::creative::CreativeState;
 use crate::mesh::GeneratedChunk;
 use engine_core::Budget;
 use glam::{IVec2, IVec3, Vec3};
-use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Chunk coordinates waiting for a column scan; older entries drop past this.
-const MAX_PENDING: usize = 16_384;
 /// Tile sidecar write interval in seconds of UI time while tiles change.
 const TILE_SAVE_SECONDS: f64 = 45.0;
 /// Map texture bytes queued per frame: two new regions or 128 changed tiles.
@@ -27,13 +25,22 @@ const UPLOAD_BYTES_PER_FRAME: usize = 512 * 1024;
 type SavedTiles = Vec<(IVec2, Vec<egui::Color32>)>;
 
 struct MapState {
+    pending: std::collections::VecDeque<IVec3>,
+    knowledge: knowledge::Knowledge,
+    perception_cursor: usize,
+    unknown_arrival: bool,
+    objective: Option<waypoints::Waypoint>,
+    delivery: Option<waypoints::Waypoint>,
+    workshop_marker: Option<waypoints::Waypoint>,
+    freight: Option<crate::world::farming::planet_freight::Report>,
+    delivery_stock: (bool, u32),
+    delivery_notice_until: f64,
+    config: Option<engine_worldgen::WorldSampleConfig>,
     world: Option<Arc<PathBuf>>,
     voxel_m: f32,
     tiles: tiles::TileStore,
     waypoints: waypoints::Waypoints,
     waypoints_unsaved: bool,
-    pending: VecDeque<IVec3>,
-    pending_set: HashSet<IVec3>,
     player: Option<(Vec3, f32)>,
     prefs: sidecar::Prefs,
     tiles_saved_at: f64,
@@ -52,13 +59,22 @@ fn state() -> MutexGuard<'static, Option<MapState>> {
 fn with<R>(f: impl FnOnce(&mut MapState) -> R) -> R {
     let mut guard = state();
     let s = guard.get_or_insert_with(|| MapState {
+        pending: Default::default(),
+        knowledge: Default::default(),
+        perception_cursor: 0,
+        unknown_arrival: false,
+        objective: None,
+        delivery: None,
+        workshop_marker: None,
+        freight: None,
+        delivery_stock: (false, 0),
+        delivery_notice_until: 0.0,
+        config: None,
         world: None,
         voxel_m: 1.0,
         tiles: Default::default(),
         waypoints: Default::default(),
         waypoints_unsaved: false,
-        pending: VecDeque::new(),
-        pending_set: HashSet::new(),
         player: None,
         prefs: sidecar::read(&prefs_path(), sidecar::decode_prefs).unwrap_or_default(),
         tiles_saved_at: 0.0,
@@ -74,6 +90,17 @@ fn prefs_path() -> PathBuf {
 }
 
 impl MapState {
+    fn pin(&mut self, mut waypoint: waypoints::Waypoint) {
+        waypoint.name = waypoints::clip_name(&waypoint.name);
+        if self.waypoints.list.iter().any(|w| w.pos == waypoint.pos && w.name == waypoint.name) {
+            return;
+        }
+        if let Some(i) = self.waypoints.add(waypoint.pos) {
+            self.waypoints.list[i] = waypoint;
+            self.waypoints_unsaved = true;
+        }
+    }
+
     fn player_cell(&self) -> Option<IVec3> {
         self.player.map(|(p, _)| p.floor().as_ivec3())
     }
@@ -144,6 +171,10 @@ impl MapState {
     /// Saves the previous world's tiles and reads the new world's tiles on a
     /// worker; live chunks mapped meanwhile keep their columns.
     fn open_world(&mut self, root: &Arc<PathBuf>, voxel_m: f32) {
+        self.workshop_marker = None;
+        self.unknown_arrival = self.world.is_some();
+        self.knowledge.open(root, false);
+        self.perception_cursor = 0;
         // The previous world's saved tiles must be restored before they are written back.
         self.finish_load(true);
         if self.waypoints_unsaved {
@@ -167,6 +198,10 @@ impl MapState {
             .inspect_err(|e| eprintln!("[map] Cannot start the tile load: {e}"))
             .ok();
         self.world = Some(root.clone());
+        self.delivery = None;
+        self.freight = None;
+        self.delivery_stock = (false, 0);
+        self.delivery_notice_until = 0.0;
         self.voxel_m = voxel_m;
         self.tiles = Default::default();
         self.waypoints = sidecar::read(&root.join(sidecar::WAYPOINT_FILE), sidecar::decode_waypoints)
@@ -187,13 +222,9 @@ impl MapState {
 /// Streaming hook: a chunk source is about to be meshed.
 pub(crate) fn note_chunk(coord: IVec3) {
     with(|s| {
-        if s.pending_set.insert(coord) {
+        if !s.pending.contains(&coord) {
+            if s.pending.len()>=4096 {s.pending.pop_front();}
             s.pending.push_back(coord);
-        }
-        while s.pending.len() > MAX_PENDING {
-            if let Some(old) = s.pending.pop_front() {
-                s.pending_set.remove(&old);
-            }
         }
     });
 }
@@ -210,12 +241,13 @@ pub(crate) fn absorb<'a>(
             s.open_world(world, voxel_m);
         }
         s.finish_load(false);
-        while budget.has_time() {
-            let Some(coord) = s.pending.pop_front() else { break };
-            s.pending_set.remove(&coord);
-            if let Some(chunk) = source(coord) {
-                s.tiles.apply(IVec2::new(coord.x, coord.z), coord.y, &columns::scan(chunk));
-            }
+        let count=s.pending.len().min(8);
+        for _ in 0..count {
+            if !budget.has_time() {break;}
+            let Some(coord)=s.pending.pop_front() else {break;};
+            if let Some(chunk)=source(coord) {
+                s.tiles.apply(IVec2::new(coord.x,coord.z),coord.y,&columns::scan(chunk));
+            } else {s.pending.push_back(coord);}
         }
         if let Some(cell) = s.player_cell() {
             let tile = IVec2::new(
@@ -231,6 +263,7 @@ pub(crate) fn absorb<'a>(
 pub fn flush() {
     let mut guard = state();
     let Some(s) = guard.as_mut() else { return };
+    s.knowledge.flush();
     s.finish_load(true);
     s.join_writer();
     if s.tiles.unsaved {
@@ -242,13 +275,24 @@ pub fn flush() {
 }
 
 /// Opens or closes the full-screen world map; opening closes other panels.
-pub fn toggle_panel(creative: &mut CreativeState) {
+pub fn toggle_panel(creative: &mut CreativeState, config: Option<engine_worldgen::WorldSampleConfig>) {
     let open = !creative.show_world_map;
     creative.close_panels();
     creative.show_world_map = open;
     if open {
-        with(|s| s.view.follow = true);
+        with(|s| {
+            s.view.follow = true;
+            s.config = config;
+            s.workshop_marker = None;
+        });
     }
+}
+
+/// Saved waypoints for the other map views: voxel position, label, colour.
+pub(crate) fn waypoint_marks() -> Vec<(IVec3, String, egui::Color32)> {
+    with(|s| s.waypoints.list.iter()
+        .map(|w| (w.pos, w.name.clone(), waypoints::PALETTE[usize::from(w.colour) % waypoints::PALETTE.len()]))
+        .collect())
 }
 
 /// Shows or hides the corner minimap and stores the choice.
@@ -276,6 +320,32 @@ pub fn add_waypoint_at_player() -> Option<usize> {
     })
 }
 
+pub(super) fn outpost_name(cell: IVec3) -> Option<String> {
+    with(|s| s.waypoints.list.iter().find(|w| w.pos == cell && w.kind == waypoints::Kind::Marker)
+        .map(|w| w.name.clone()))
+}
+
+pub(super) fn pin_outpost(cell: IVec3, name: String) {
+    with(|s| s.pin(waypoints::Waypoint { name, pos: cell, colour: 0, kind: waypoints::Kind::Marker }));
+}
+
+pub(super) fn pin_lead(root: &Arc<PathBuf>, cfg: engine_worldgen::WorldSampleConfig, pos: Vec3, name: &str) {
+    with(|s| {
+        if s.world.as_ref() != Some(root) {
+            s.open_world(root, cfg.voxel_meters());
+        }
+        s.pin(waypoints::Waypoint {
+            name: name.into(),
+            pos: (pos / cfg.voxel_meters()).floor().as_ivec3(),
+            colour: 0,
+            kind: waypoints::Kind::Marker,
+        });
+        if s.waypoints_unsaved {
+            s.save_waypoints();
+        }
+    });
+}
+
 /// Replaces the death marker; for the survival death handler.
 pub fn set_death_waypoint(pos: Vec3) {
     with(|s| {
@@ -286,8 +356,45 @@ pub fn set_death_waypoint(pos: Vec3) {
 }
 
 /// Per-frame UI work: texture uploads, deferred saves and the minimap.
-pub(super) fn pump(ctx: &egui::Context, pos: Vec3, yaw: f32, draw_minimap: bool, top: f32) {
+pub(super) fn pump(ctx: &egui::Context, pos: Vec3, yaw: f32, draw_minimap: bool, top: f32,
+    objective: Option<&crate::world::adventure::QuestMarker>,
+    receiver: &crate::world::orbital::receiver::View, voxel_m: f32) {
     with(|s| {
+        s.knowledge.maintenance();
+        s.voxel_m = voxel_m;
+        let now = ctx.input(|i| i.time);
+        let stock = (receiver.cargo_ready, receiver.delivered_iron);
+        let ready = receiver.position.is_some() && (stock.0 || stock.1 > 0);
+        if ready && ((!s.delivery_stock.0 && stock.0) || stock.1 > s.delivery_stock.1) {
+            s.delivery_notice_until = now + 6.0;
+        }
+        s.delivery_stock = stock;
+        s.delivery = receiver.position.filter(|_| ready).map(|pos| waypoints::Waypoint {
+            name: "Receiver · Cargo Ready".into(), pos: (pos / voxel_m).floor().as_ivec3(),
+            colour: 0, kind: waypoints::Kind::Marker,
+        });
+        if ready && now < s.delivery_notice_until && draw_minimap {
+            let slot = super::hud_layout::place(ctx, "receiver_notice");
+            let shown = egui::Area::new(egui::Id::new("receiver_delivery_notice"))
+                .anchor(slot.align, slot.offset)
+                .interactable(false).show(ctx, |ui| {
+                    super::presentation::hud_frame(ctx).show(ui, |ui| {
+                        ui.label("Receiver · Cargo Ready");
+                    });
+                });
+            super::hud_layout::claim(ctx, "receiver_notice", shown.response.rect);
+        }
+        if let Some(q) = objective {
+            let pos = (q.pos / voxel_m).floor().as_ivec3();
+            if let Some(current) = s.objective.as_mut() {
+                current.pos = pos;
+                if current.name != q.label { current.name.clear(); current.name.push_str(q.label); }
+            } else {
+                s.objective = Some(waypoints::Waypoint {
+                    name: q.label.into(), pos, colour: 0, kind: waypoints::Kind::Marker,
+                });
+            }
+        } else { s.objective = None; }
         s.player = Some((pos, yaw));
         s.finish_load(false);
         // Tiles feed only the minimap and the world map; hidden, they wait.
@@ -299,7 +406,6 @@ pub(super) fn pump(ctx: &egui::Context, pos: Vec3, yaw: f32, draw_minimap: bool,
         if s.waypoints_unsaved && !typing {
             s.save_waypoints();
         }
-        let now = ctx.input(|i| i.time);
         if s.tiles.unsaved && now - s.tiles_saved_at > TILE_SAVE_SECONDS {
             s.tiles_saved_at = now;
             s.save_tiles(true);
@@ -310,14 +416,76 @@ pub(super) fn pump(ctx: &egui::Context, pos: Vec3, yaw: f32, draw_minimap: bool,
     });
 }
 
-/// Draws the world map while `open`; closing goes through `CreativeState`.
-pub(super) fn panel(ctx: &egui::Context, open: &mut bool) {
+/// Record a text page explicitly inspected in the current world.
+pub(super) fn inspect_record(world: &crate::world::World, cell: IVec3, text: &[String]) {
     with(|s| {
-        if *open {
-            s.upload_tiles(ctx);
-        }
-        panel::draw(ctx, s, open);
+        if s.world.as_ref() == Some(&world.regions.view.root) { s.knowledge.inspect_record(cell, text); }
     });
+}
+
+/// Called with the actual render light set. No actor knowledge is replicated.
+pub(crate) fn perceive(world: &crate::world::World, player: &crate::player::Player,
+    cache: &crate::render::ChunkCache, lights: &[crate::render::TorchLight],
+    held: Option<crate::render::TorchLight>, daylight: bool, fov: f32, aspect: f32) {
+    with(|s| {
+        if s.world.as_ref() != Some(&world.regions.view.root) {
+            s.open_world(&world.regions.view.root, world.voxel_scale.meters());
+        }
+        if s.knowledge.creative != world.rules.mode.creative_tools() {
+            s.knowledge.open(&world.regions.view.root, world.rules.mode.creative_tools());
+            s.view = Default::default();
+        }
+        // Ordinary worlds use the explored surface map. Folded interiors keep
+        // the local chart because their gravity cannot project onto world X/Z.
+        s.knowledge.legacy=world.world_type!=crate::world::WorldType::Manyfold;
+        s.freight = crate::world::farming::planet_freight::report(world, player.pos * s.voxel_m);
+        if s.unknown_arrival {
+            s.knowledge.unknown_arrival();
+            s.unknown_arrival = false;
+        }
+        perception::capture(&mut s.knowledge, perception::View { world, player, cache, lights, held, daylight, fov, aspect }, &mut s.perception_cursor);
+    });
+}
+
+/// Open a surveyed destination as a normal saved waypoint.
+pub fn show_destination(creative: &mut CreativeState, cfg: engine_worldgen::WorldSampleConfig,
+    pos_m: Vec3, name: &str) {
+    creative.close_panels();
+    creative.show_world_map = true;
+    with(|s| {
+        let pos = (pos_m / cfg.voxel_meters()).floor().as_ivec3();
+        s.config = Some(cfg);
+        s.pin(waypoints::Waypoint { pos, name: waypoints::clip_name(name), colour: 4, kind: waypoints::Kind::Marker });
+        if s.knowledge.legacy { s.view.focus(pos); }
+        else { s.view.focus_chart(s.knowledge.project(pos.as_vec3() * s.voxel_m, false)); }
+    });
+}
+
+pub(crate) fn show_workshop(
+    creative: &mut CreativeState,
+    cfg: engine_worldgen::WorldSampleConfig,
+    target: Option<(IVec3, &'static str)>,
+) {
+    creative.close_panels();
+    creative.show_world_map = true;
+    with(|s| {
+        s.config = Some(cfg);
+        s.workshop_marker = target.map(|(pos, name)| {
+            if s.knowledge.legacy { s.view.focus(pos); }
+            else { s.view.focus_chart(s.knowledge.project(pos.as_vec3() * cfg.voxel_meters(), false)); }
+            waypoints::Waypoint { pos, name: name.into(), colour: 4, kind: waypoints::Kind::Marker }
+        });
+        if target.is_none() { s.view.follow = true; }
+    });
+}
+
+/// Draws the world map while `open`; closing goes through `CreativeState`.
+pub(super) fn panel(ctx: &egui::Context, open: &mut bool, workshop: bool) -> Option<u32> {
+    if !*open { return None; }
+    with(|s| {
+        s.upload_tiles(ctx);
+        panel::draw(ctx, s, open, workshop)
+    })
 }
 
 #[cfg(test)]
@@ -327,7 +495,7 @@ mod tests {
     use crate::world::BlockId;
 
     #[test]
-    fn map_absorb_maps_noted_chunks_and_resets_on_world_change() {
+    fn map_absorb_maps_resident_columns_and_preserves_saved_tiles() {
         let p = PADDED_CHUNK_SIZE as usize;
         let mut blocks = vec![BlockId::Air; p * p * p];
         blocks[..p * p * 4].fill(BlockId::Stone);
@@ -341,7 +509,6 @@ mod tests {
         with(|s| {
             assert!(s.tiles.is_mapped(IVec2::new(-3, 5)));
             assert_eq!(s.tiles.len(), 1);
-            assert!(s.pending.is_empty() && s.pending_set.is_empty());
         });
         absorb(&second, 0.5, |_| None, Budget::UNBOUNDED);
         with(|s| {
@@ -353,6 +520,10 @@ mod tests {
         std::fs::create_dir_all(third.as_path()).unwrap();
         note_chunk(IVec3::new(-3, 0, 5));
         absorb(&third, 1.0, |c| (c == chunk.chunk).then_some(&chunk), Budget::UNBOUNDED);
+        with(|s| {
+            s.tiles.insert_saved(IVec2::new(-3, 5), vec![egui::Color32::GRAY; columns::COLUMNS]);
+            s.tiles.unsaved = true;
+        });
         flush();
         let saved = sidecar::read(&third.join(sidecar::TILE_FILE), sidecar::decode_tiles);
         std::fs::remove_dir_all(third.as_path()).unwrap();

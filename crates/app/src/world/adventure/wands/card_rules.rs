@@ -31,12 +31,18 @@ pub const ICE_WALL_WIDTH: f32 = 3.0;
 pub const ICE_WALL_HEIGHT: f32 = 2.5;
 pub const BOUNCE_ORB_RICOCHETS: u8 = 4;
 pub const DIG_BOLT_BUDGET: u8 = 12;
+pub const CONDUCTIVE_CELLS: usize = 12;
+pub const CONDUCTIVE_ENERGY: u32 = 64;
+pub const CONDUCTIVE_REACH: f32 = 2.6;
+pub const CONDUCTIVE_DAMAGE: f32 = 18.0;
+pub const CONDUCTIVE_DAMAGE_PER_RANK: f32 = 2.5;
 pub const MEND_BASE: f32 = 30.0;
 pub const MEND_PER_RANK: f32 = 5.0;
 
 pub fn mend_health(rank: u32) -> f32 { MEND_BASE + rank as f32 * MEND_PER_RANK }
 pub fn ward_duration(discoveries: u32) -> f32 {
-    if discoveries & (1 << 9) != 0 { 9.0 } else { 6.0 }
+    (if discoveries & (1 << 9) != 0 { 9.0 } else { 6.0 })
+        + if discoveries & (1 << 13) != 0 { 2.0 } else { 0.0 }
 }
 pub fn ward_hits(discoveries: u32) -> u32 {
     if discoveries & (1 << 10) != 0 { 4 } else { 3 }

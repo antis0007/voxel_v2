@@ -4,10 +4,10 @@
 //! on bedrock, shallow water and grains the cellular flow already settled.
 //! Each scoop removes the bed cell, so a deposit depletes without new state.
 use super::fishing::roll;
-use super::{World, give, water_along, weighted};
-use crate::world::BlockId;
+use super::{World, water_along, weighted};
+use crate::world::{BlockId, block_data, effects, factory};
 use crate::world::environment::key;
-use crate::world::inventory::Item;
+use crate::world::inventory::{Item, ItemStack, resources};
 use glam::{IVec3, Vec3};
 
 pub const PAN: Item = Item::Tool(18);
@@ -49,6 +49,40 @@ pub struct Bed {
     pub water_cells: i32,
 }
 
+pub(crate) fn ordinary_sediment(block: BlockId) -> bool {
+    matches!(block, BlockId::Gravel | BlockId::Sand)
+}
+
+fn is_sediment(block: BlockId) -> bool {
+    ordinary_sediment(block) || block == BlockId::Paydirt
+}
+
+pub(crate) fn wet_bed(world: &World, cell: IVec3, block: BlockId) -> Option<Bed> {
+    if !is_sediment(block) {
+        return None;
+    }
+    let limit = (SCOOP_DEPTH_METRES / world.voxel_scale.meters()).ceil() as i32;
+    let water_cells = (1..=limit)
+        .take_while(|&dy| world.get(cell + IVec3::Y * dy) == BlockId::Water)
+        .count() as i32;
+    (water_cells > 0).then_some(Bed { cell, block, water_cells })
+}
+
+pub(crate) fn feed(world: &World, bed: Bed) -> Option<(u32, factory::placer::Feed)> {
+    let volume = factory::placer::cell_volume(factory::step(world));
+    if bed.block == BlockId::Paydirt {
+        let grade = factory::placer::PAYDIRT_GRADE;
+        return Some((grade, factory::placer::Feed::from_grade(grade, volume)));
+    }
+    if world.block_data.placed_sediment.contains(&block_data::key(bed.cell))
+        || engine_worldgen::sample_block(&world.sample_config(), bed.cell) != bed.block
+    {
+        return None;
+    }
+    let grade = grade(source_grade(world, bed.cell), site(world, bed), world.voxel_scale.meters());
+    Some((grade, factory::placer::Feed::from_grade(grade, volume)))
+}
+
 /// Regional source grade in per mille; squared so most reaches pay little.
 pub fn district_grade(seed: u32, cell: IVec3) -> u32 {
     let g = roll(seed, IVec3::new(cell.x >> DISTRICT_SHIFT, 0, cell.z >> DISTRICT_SHIFT), 0, 0x601d) % 1000;
@@ -67,7 +101,23 @@ pub fn bed_below(world: &World, water: IVec3) -> Option<Bed> {
         cell -= IVec3::Y;
     }
     let block = world.get(cell);
-    matches!(block, BlockId::Gravel | BlockId::Sand).then_some(Bed { cell, block, water_cells })
+    is_sediment(block).then_some(Bed { cell, block, water_cells })
+}
+
+/// Source grade in per mille. In placer worlds the material carries its grade,
+/// so moving gravel or returning washed tailings cannot create gold.
+pub fn source_grade(world: &World, cell: IVec3) -> u32 {
+    let cfg = world.sample_config();
+    if material_grade(&cfg) {
+        return 0;
+    }
+    let metres = (cell.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters();
+    engine_worldgen::placer::grade(&cfg, metres.x, metres.z)
+        .map_or_else(|| district_grade(world.seed, cell), |g| (g * 1000.0) as u32)
+}
+
+fn material_grade(cfg: &engine_voxel::WorldSampleConfig) -> bool {
+    engine_worldgen::planetary::active(cfg) && cfg.generator_version >= engine_voxel::PLACER_PLANET_GENERATOR
 }
 
 /// Local conditions at a scooped bed that decide where dense grains stop.
@@ -86,7 +136,7 @@ pub struct Site {
 }
 
 fn loose(b: BlockId) -> bool {
-    matches!(b, BlockId::Gravel | BlockId::Sand | BlockId::Dirt)
+    matches!(b, BlockId::Gravel | BlockId::Sand | BlockId::Paydirt | BlockId::Dirt)
 }
 
 pub fn site(world: &World, bed: Bed) -> Site {
@@ -114,6 +164,7 @@ pub fn site(world: &World, bed: Bed) -> Site {
 pub fn grade(source: u32, site: Site, metres: f32) -> u32 {
     let bed = match site.bed.block {
         BlockId::Gravel => 2000,
+        BlockId::Paydirt => 3000,
         _ => 1000,
     };
     // Gold sinks through loose bed until bedrock stops it.
@@ -147,22 +198,38 @@ pub(super) fn use_pan(world: &mut World, eye_m: Vec3, forward: Vec3) {
         world.expedition.say("No Wet Gravel in Reach");
         return;
     };
-    let water = bed.cell + IVec3::Y;
-    let g = grade(district_grade(world.seed, bed.cell), site(world, bed), world.voxel_scale.meters());
-    let row = haul(world.seed, bed, g, world.farming.clock);
-    if let Some(s) = world.environment.sediment.get_mut(&key(water)) {
-        s.bed = 0;
+    let Some((g, feed)) = feed(world, bed) else {
+        world.expedition.say("No Native Sediment");
+        return;
+    };
+    let row = haul(world.seed, bed, g, world.farming.clock)
+        .map(|row| ItemStack::new(row.item, row.count * bonus(row, g)));
+    let gold = feed.pan_recovery();
+    let mut inventory = world.inventory.clone();
+    if resources::collect(&mut inventory, factory::GOLD_CONCENTRATE, gold) != gold
+        || row.is_some_and(|stack| inventory.try_insert(stack).1 > 0)
+    {
+        world.expedition.say("Inventory Full");
+        return;
     }
-    world.set(bed.cell, BlockId::Water);
+    // Existing water flows into the excavated cell through the fluid solver.
+    if effects::replace(world, bed.cell, bed.block, BlockId::Air).is_err() {
+        world.expedition.say("Bed Unavailable");
+        return;
+    }
+    // The terrain commit owns any newly spilled or recovered world stacks.
+    inventory.dropped = std::mem::take(&mut world.inventory.dropped);
+    inventory.overflow = std::mem::take(&mut world.inventory.overflow);
+    world.inventory = inventory;
+    world.sync_from_inventory();
     let colour = format!("Colour {g} ‰{}", trend(world.travel.last_colour, g));
     world.travel.last_colour = Some(g);
-    match row {
-        Some(r) => {
-            let count = r.count * bonus(r, g);
-            give(world, eye_m, r.item, count);
-            world.expedition.say(format!("{} × {count} · {colour}", r.item.name()));
-        }
-        None => world.expedition.say(format!("Pan Empty · {colour}")),
+    if gold > 0 {
+        world.expedition.say(format!("Gold Concentrate {:.2} · {colour}", gold as f32 / 64.0));
+    } else if let Some(stack) = row {
+        world.expedition.say(format!("{} × {} · {colour}", stack.item.name(), stack.count));
+    } else {
+        world.expedition.say(format!("Pan Empty · {colour}"));
     }
 }
 
@@ -219,10 +286,11 @@ mod tests {
         let g = |s: Site| grade(60, s, 0.5);
         let sand_deep = g(at(BlockId::Sand, 6, BlockId::Dirt));
         let gravel = g(at(BlockId::Gravel, 6, BlockId::Dirt));
+        let paydirt = g(at(BlockId::Paydirt, 6, BlockId::Dirt));
         let on_rock = g(at(BlockId::Gravel, 6, BlockId::Stone));
         let shallow = g(at(BlockId::Gravel, 1, BlockId::Stone));
-        assert!(sand_deep < gravel && gravel < on_rock && on_rock < shallow,
-            "{sand_deep} {gravel} {on_rock} {shallow}");
+        assert!(sand_deep < gravel && gravel < paydirt && gravel < on_rock && on_rock < shallow,
+            "{sand_deep} {gravel} {paydirt} {on_rock} {shallow}");
         let base = at(BlockId::Gravel, 1, BlockId::Stone);
         assert!(g(Site { settled_mg: 5, ..base }) > shallow);
         let pocket = g(Site { shelter: 2, ..base });
@@ -243,7 +311,7 @@ mod tests {
 
     #[test]
     fn grade_saturates_without_ties() {
-        let rich = Site { settled_mg: 1, shelter: 4, rock: 4, ..at(BlockId::Gravel, 1, BlockId::Stone) };
+        let rich = Site { settled_mg: 1, shelter: 4, rock: 4, ..at(BlockId::Paydirt, 1, BlockId::Stone) };
         let (a, b) = (grade(400, rich, 0.5), grade(800, rich, 0.5));
         assert!(a < b && b < 1000, "{a} {b}");
         assert_eq!(grade(0, rich, 0.5), 0);

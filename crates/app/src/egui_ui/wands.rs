@@ -3,40 +3,30 @@ use super::{
     icons::{self, Icon},
     presentation as style,
 };
-use crate::world::{
-    adventure::{self, View, wands},
-    factory::Action,
-};
-use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, vec2};
+use crate::world::adventure::{self, View, wands};
+use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Stroke, vec2};
 
-const BOLTS: &[u32] = &[0, 2, 3, 5, 6, 9, 10, 11, 12, 13, 14, 15, 28, 29, 71, 72, 73, 74, 76, 80, 81, 82, 83, 84,
-    85, 86, 87,
-];
-const EFFECTS: &[u32] = &[1, 4, 7, 24, 25, 30, 31, 32, 34, 35, 39, 75];
-const SUMMONS: &[u32] = &[36];
-const SHOT_MODIFIERS: &[u32] = &[
-    16, 17, 18, 19, 20, 21, 22, 23, 26, 27, 37, 38, 45, 51, 52, 53, 54, 55, 64, 65, 66, 67, 68,
-    69, 77, 78, 88, 89, 90, 94,
-];
-const PROGRAM_MODIFIERS: &[u32] = &[40, 41, 42, 43, 44, 46, 47, 48, 49, 50, 70, 79, 91, 92, 93];
-const ELEMENTS: &[u32] = &[56, 57, 58, 59, 60, 61, 62, 63];
+pub(super) mod board;
+mod rune_desk;
+mod rune_glyphs;
 
-/// The workbench column and every hover card use this width. A card that grows
-/// to fit the spell under the pointer resizes the panel around it.
-const BOARD_W: f32 = 468.0;
-const HOVER_W: f32 = 252.0;
-const LIBRARY_COLUMNS: usize = 7;
+/// Every hover card uses this width. A card that grows to fit the spell under
+/// the pointer resizes the panel around it.
+const HOVER_W: f32 = 304.0;
 
 /// Fixed library tabs. Keeping one category visible at a time makes the board
 /// short enough to stay put while a spell is dragged from it.
-const PALETTE_TABS: [(&str, &[u32], bool); 6] = [
-    ("Bolts", BOLTS, false),
-    ("Effects", EFFECTS, false),
-    ("Summons", SUMMONS, false),
-    ("Shot mods", SHOT_MODIFIERS, true),
-    ("Elements", ELEMENTS, true),
-    ("Program", PROGRAM_MODIFIERS, true),
-];
+const PALETTE_COUNT: usize = adventure::spell_defs::Palette::TABS.len();
+static PALETTE_TABS: std::sync::LazyLock<[(&str, Vec<u32>); PALETTE_COUNT]> =
+    std::sync::LazyLock::new(|| {
+        adventure::spell_defs::Palette::TABS.map(|(palette, title)| {
+            let spells = adventure::spell_defs::SPELLS.iter()
+                .filter(|spell| spell.palette == palette)
+                .map(|spell| spell.id)
+                .collect();
+            (title, spells)
+        })
+    });
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum WandDrag {
@@ -47,7 +37,7 @@ pub(super) enum WandDrag {
 /// One painted row of fixed height. Text is clipped instead of wrapping, so a
 /// longer value cannot make the card taller.
 fn stat_row(ui: &mut egui::Ui, label: &str, value: String, value_color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(HOVER_W, 16.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(HOVER_W, 21.0), egui::Sense::hover());
     let painter = ui.painter().with_clip_rect(rect);
     painter.text(
         rect.left_center(),
@@ -154,9 +144,21 @@ fn shot_tags(mods: &wands::ShotMods) -> Vec<&'static str> {
     tags
 }
 
+fn preview_cast(view: &View) -> wands::CastBlockEval {
+    let mut loadout = view.loadout;
+    for slot in 0..wands::capacity(view.wand) {
+        if !view.can_wield(loadout.slot(slot)) {
+            loadout.set_slot(slot, wands::EMPTY);
+        }
+    }
+    wands::evaluate_cast_block(
+        view.wand, view.rare_spells, view.discoveries, view.rank, &loadout, loadout.cursor,
+    )
+}
+
 fn cast_program(eval: &wands::CastBlockEval) -> String {
     if eval.actions.is_empty() {
-        return "Empty wand — this cast does nothing.".to_string();
+        return "Next Cast · Empty".to_string();
     }
     let mut chain = Vec::new();
     for act in &eval.actions {
@@ -184,7 +186,7 @@ fn cast_program(eval: &wands::CastBlockEval) -> String {
         chain.push(step);
     }
     format!(
-        "Next cast ({} mana): {}",
+        "Next Cast · {} Mana · {}",
         adventure::spell_defs::card::amount(eval.mana_cost),
         chain.join(" + ")
     )
@@ -267,14 +269,7 @@ pub(super) fn paint_cast_block_brackets(
 /// change size as the pointer moves across the wand.
 pub(super) fn show_wand_hover_card(ui: &mut egui::Ui, view: &View) {
     let stats = crate::world::adventure::wand_items::stats_for(view.wand, &view.loadout, view.rank);
-    let eval = wands::evaluate_cast_block(
-        view.wand,
-        view.rare_spells,
-        view.discoveries,
-        view.rank,
-        &view.loadout,
-        view.loadout.cursor,
-    );
+    let eval = preview_cast(view);
 
     ui.set_width(HOVER_W);
     ui.set_max_width(HOVER_W);
@@ -305,6 +300,7 @@ pub(super) fn show_wand_hover_card(ui: &mut egui::Ui, view: &View) {
             stats.capacity, stats.cast_delay)).size(11.0).color(style::PAPER));
         super::description_copy::show(ui, engine_content::descriptions::get("wand"),
             &format!("{} mana", adventure::spell_defs::card::amount(eval.mana_cost)), false);
+        ui.label(RichText::new("[Shift] Details").size(11.0).color(style::MUTED));
         return;
     }
     super::description_copy::show(ui, engine_content::descriptions::get("wand"),
@@ -498,28 +494,19 @@ pub(super) fn show_spell_hover_card(ui: &mut egui::Ui, spell: u32, view: &View) 
 
     ui.set_width(HOVER_W);
     ui.set_max_width(HOVER_W);
-    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-
-    let (header, _) = ui.allocate_exact_size(vec2(HOVER_W, 36.0), egui::Sense::hover());
-    let icon = Rect::from_min_size(header.left_top() + vec2(0.0, 4.0), vec2(28.0, 28.0));
-    icons::frame(ui.painter(), icon, true);
-    icons::paint(ui.painter(), icon.shrink(2.0), Icon::Spell(spell));
-    let text_clip = Rect::from_min_max(icon.right_top() + vec2(6.0, 0.0), header.right_bottom());
-    let text = ui.painter().with_clip_rect(text_clip);
-    text.text(
-        text_clip.left_top() + vec2(0.0, 4.0),
-        Align2::LEFT_TOP,
-        adventure::spell_name(spell),
-        FontId::proportional(13.5),
-        style::PAPER,
-    );
-    text.text(
-        text_clip.left_bottom() + vec2(0.0, -2.0),
-        Align2::LEFT_BOTTOM,
-        adventure::spell_kind_tag(spell),
-        FontId::monospace(10.0),
-        if is_mod { style::AMBER } else { style::MANA },
-    );
+    ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+    ui.horizontal_top(|ui| {
+        let (icon, _) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::hover());
+        icons::frame(ui.painter(), icon, true);
+        icons::paint(ui.painter(), icon.shrink(3.0), Icon::Spell(spell));
+        ui.vertical(|ui| {
+            ui.set_width(HOVER_W - 44.0);
+            ui.label(RichText::new(adventure::spell_name(spell)).size(16.0).color(style::PAPER));
+            ui.label(RichText::new(adventure::spell_kind_tag(spell)).size(12.0)
+                .color(if is_mod { style::AMBER } else { style::MANA }));
+        });
+    });
+    ui.add_space(4.0);
 
     if let Some(entry) = adventure::spell_defs::card::description(spell) {
         compact_spell_body(ui, spell, view, entry, available);
@@ -536,21 +523,43 @@ fn compact_spell_body(
     available: bool,
 ) {
     let card = adventure::spell_defs::card::read(spell, view.discoveries, view.rank);
-    ui.spacing_mut().item_spacing.y = 3.0;
+    ui.spacing_mut().item_spacing.y = 6.0;
     if !card.stats.is_empty() {
-        ui.label(RichText::new(&card.stats).size(11.0).color(style::PAPER));
+        ui.label(RichText::new(&card.stats).size(13.0).color(style::PAPER));
     }
     let expanded = ui.input(|input| input.modifiers.shift)
         || review_card_config().is_some_and(|(id, expanded)| id == spell && expanded);
-    super::description_copy::show(ui, Some(entry), &card.cost, expanded);
+    let cost = adventure::concentration::requirements(spell).map_or_else(|| card.cost.clone(), |(upkeep, _)| {
+        let amount = adventure::spell_defs::card::amount;
+        let upkeep = adventure::concentration::binding_upkeep(upkeep, view.loadout.mode);
+        format!("{} mana + {} mana/s", amount(adventure::inscriptions::cost(spell, view.discoveries)), amount(upkeep))
+    });
+    super::description_copy::show(ui, Some(entry), &cost, expanded);
     if spell == wands::EMPTY { return; }
+    if spell == adventure::fieldcraft::RECALL {
+        let cast = crate::keybinds::hint(crate::keybinds::Action::Cast);
+        let sneak = crate::keybinds::hint(crate::keybinds::Action::Sneak);
+        ui.weak(format!("Starting spell · Single card · [{sneak}] + [{cast}] Draw link"));
+    }
+    if adventure::concentration::requirements(spell).is_some() {
+        let note = if wands::is_grimoire(view.loadout.mode) { "Hold Cast · Single card" } else { "Grimoire required" };
+        ui.label(RichText::new(note).size(12.0).color(style::MANA));
+    }
     if !available {
-        let message = if adventure::spell_available(spell, view.wand, view.rare_spells) {
-            "Undiscovered"
-        } else {
-            "Requires wand upgrade or reliquary"
-        };
-        ui.label(RichText::new(message).size(10.0).color(style::AMBER));
+        if !view.spell_log.grants(spell) {
+            let source = crate::world::progression::study::Lesson::for_spell(spell)
+                .map_or_else(|| "Site clears · first guardian defeats".to_owned(),
+                    |lesson| format!("Bookcase · {}", lesson.title()));
+            ui.label(RichText::new(source).size(10.0).color(style::AMBER));
+        }
+        if !adventure::spell_available(spell, view.wand, view.rare_spells) {
+            let message = match spell {
+                6 => "Source: Archive reliquary".to_owned(),
+                7 => "Source: Crystal cathedral reliquary".to_owned(),
+                _ => format!("Wand tier: {}", adventure::discovery::spell_tier(spell)),
+            };
+            ui.label(RichText::new(message).size(10.0).color(style::AMBER));
+        }
     }
     if expanded {
         ui.separator();
@@ -569,696 +578,15 @@ fn compact_spell_body(
         if spread != 0.0 {
             stat_row(ui, "Spread", signed_deg(spread), style::PAPER);
         }
-    }
-}
-
-/// Interactive Noita-style Wand Deck strip with:
-/// - Drag-and-drop slot swapping (`SwapWandSlots`)
-/// - Dragging spells from the palette directly onto any slot
-/// - Right-click slot to clear (`SetWandSlot(slot, EMPTY)`)
-/// - Visual Cast-Block brackets and Trigger-Payload tethers
-pub(super) fn draw_wand_deck_strip(
-    ui: &mut egui::Ui,
-    view: &View,
-    action: &mut UiAction,
-    selected: &mut usize,
-    drag_state: &mut Option<WandDrag>,
-    hovered_deck_slot: &mut Option<usize>,
-    compact: bool,
-) {
-    let cap = wands::capacity(view.wand);
-    let eval = wands::evaluate_cast_block(
-        view.wand,
-        view.rare_spells,
-        view.discoveries,
-        view.rank,
-        &view.loadout,
-        view.loadout.cursor,
-    );
-
-    let mut slot_rects = Vec::with_capacity(cap);
-    // A single row. `horizontal_wrapped` grew the inventory and the workbench
-    // whenever the pointer, a drag, or a longer cast line changed the width.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(super::grimoire::GAP, 0.0);
-        for i in 0..cap {
-            let spell = view.loadout.slot(i);
-            let label = if spell != wands::EMPTY {
-                adventure::spell_name(spell)
-            } else {
-                "Empty slot"
-            };
-            let (rect, response) = ui.allocate_exact_size(
-                {
-                    let px = super::grimoire::SLOT * if compact { 1.0 } else { 2.0 };
-                    vec2(px, px)
-                },
-                egui::Sense::click_and_drag(),
-            );
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-            });
-            slot_rects.push(rect);
-
-            let is_hovered = response.hovered() || response.contains_pointer();
-            if is_hovered {
-                *hovered_deck_slot = Some(i);
-            }
-            deck_drag_hint(ui, rect, drag_state.is_some(), is_hovered);
-
-            let rect = super::grimoire::react(&response, rect, i == *selected);
-
-            let p = ui.painter();
-            icons::frame(
-                p,
-                rect,
-                i == *selected,
-            );
-            if is_hovered || response.has_focus() { super::grimoire::focus(p, rect); }
-            if spell != wands::EMPTY {
-                icons::paint(p, rect.shrink(4.0), Icon::Spell(spell));
-                if wands::is_modifier(spell) {
-                    p.rect_stroke(
-                        rect.shrink(1.5),
-                        0,
-                        Stroke::new(1.0, style::AMBER),
-                        egui::epaint::StrokeKind::Inside,
-                    );
-                }
-            } else {
-                p.rect_filled(rect.shrink(3.0), 0, Color32::from_black_alpha(180));
-            }
-            let (_, opacity) = super::wand_xmb::slot_metrics((i as i32 - *selected as i32).abs());
-            if opacity < 0.99 && i != *selected {
-                p.rect_filled(
-                    rect,
-                    0,
-                    Color32::from_black_alpha(((1.0 - opacity) * 170.0) as u8),
-                );
-            }
-
-            // Slot index badge
-            p.text(
-                rect.left_top() + vec2(3.0, 2.0),
-                Align2::LEFT_TOP,
-                format!("{}", i + 1),
-                FontId::proportional(10.0),
-                if i == view.loadout.cursor {
-                    style::AMBER
-                } else {
-                    style::MUTED
-                },
-            );
-
-            if response.clicked() {
-                *selected = i;
-            }
-            if response.secondary_clicked() && spell != wands::EMPTY {
-                *action = UiAction::Factory(Action::SetWandSlot(i as u32, wands::EMPTY));
-            }
-            if response.drag_started() && spell != wands::EMPTY {
-                *drag_state = Some(WandDrag::DeckSlot(i, spell));
-                *selected = i;
-            }
-            response.on_hover_ui(|ui| {
-                if spell != wands::EMPTY {
-                    show_spell_hover_card(ui, spell, view);
-                } else {
-                    show_empty_slot_card(ui);
-                }
-            });
-        }
-    });
-
-    paint_cast_block_brackets(ui.painter(), &slot_rects, &eval);
-    if !compact {
-        ui.add_space(4.0);
-        let program = cast_program(&eval);
-        let color = if eval.actions.is_empty() {
-            style::MUTED
-        } else if eval.mana_cost > view.mana {
-            style::DANGER
-        } else {
-            style::MANA
-        };
-        let width = ui.available_width().min(BOARD_W);
-        let (rect, _) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::hover());
-        let galley = ui
-            .painter()
-            .layout(program, FontId::monospace(11.0), color, rect.width());
-        ui.painter()
-            .with_clip_rect(rect)
-            .galley(rect.left_top(), galley, color);
-    }
-}
-
-/// Same outer size as a spell card, so an empty slot does not collapse the popup.
-fn show_empty_slot_card(ui: &mut egui::Ui) {
-    ui.set_width(HOVER_W);
-    ui.set_max_width(HOVER_W);
-    ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-    let (header, _) = ui.allocate_exact_size(vec2(HOVER_W, 36.0), egui::Sense::hover());
-    ui.painter().text(
-        header.left_center(),
-        Align2::LEFT_CENTER,
-        "Empty slot",
-        FontId::proportional(13.5),
-        style::PAPER,
-    );
-    clipped_line(
-        ui,
-        "Drag a spell here, or click one in the library.",
-        FontId::proportional(11.0),
-        style::MUTED,
-        16.0,
-    );
-    clipped_line(ui, " ", FontId::proportional(11.0), style::MUTED, 16.0);
-    let (rule, _) = ui.allocate_exact_size(vec2(HOVER_W, 8.0), egui::Sense::hover());
-    ui.painter().hline(
-        rule.x_range(),
-        rule.center().y,
-        Stroke::new(1.0, style::EDGE),
-    );
-    for label in [
-        "Mana Drain",
-        "Base Damage",
-        "Cast Delay",
-        "Recharge Time",
-        "Spread",
-    ] {
-        stat_row(ui, label, "—".to_string(), style::MUTED);
-    }
-    clipped_line(
-        ui,
-        "Right-click a filled slot to clear it",
-        FontId::proportional(10.0),
-        style::MUTED,
-        16.0,
-    );
-}
-
-/// A fixed-geometry spell library. The old board stacked every category and
-/// reflowed its wrapped rows as the pointer changed; this keeps one category in
-/// a reserved-height grid, with tabs and a search field that never resize.
-fn paint_spell_library(
-    ui: &mut egui::Ui,
-    view: &View,
-    action: &mut UiAction,
-    selected: &mut usize,
-    drag_state: &mut Option<WandDrag>,
-    tab: &mut usize,
-    query: &mut String,
-) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
-        for (index, (title, spells, _)) in PALETTE_TABS.iter().enumerate() {
-            let label = format!("{title} {}", spells.len());
-            if ui
-                .selectable_label(*tab == index, RichText::new(label).size(11.0))
-                .clicked()
-            {
-                *tab = index;
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(
-                egui::TextEdit::singleline(query)
-                    .hint_text("Search…")
-                    .desired_width(120.0),
-            );
-        });
-    });
-
-    let (title, active, modifier_stroke) = PALETTE_TABS[*tab];
-    let query = query.trim().to_lowercase();
-    let mut spells: Vec<u32> = if query.is_empty() {
-        active.to_vec()
     } else {
-        PALETTE_TABS
-            .iter()
-            .flat_map(|(_, list, _)| list.iter().copied())
-            .filter(|spell| {
-                adventure::spell_name(*spell)
-                    .to_lowercase()
-                    .contains(&query)
-            })
-            .collect()
-    };
-    spells.sort_unstable();
-    spells.dedup();
-
-    egui::Frame::new()
-        .fill(Color32::from_rgba_premultiplied(18, 18, 24, 210))
-        .stroke(Stroke::new(1.0, style::EDGE))
-        .inner_margin(egui::Margin::same(7))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(title.to_uppercase())
-                        .font(FontId::monospace(10.0))
-                        .color(if modifier_stroke {
-                            style::AMBER
-                        } else {
-                            style::MANA
-                        }),
-                );
-                ui.label(
-                    RichText::new(format!(
-                        "{}/{} found",
-                        found_count(&spells, &view.spell_log),
-                        spells.len()
-                    ))
-                        .font(FontId::proportional(10.0))
-                        .color(style::MUTED),
-                );
-                if modifier_stroke {
-                    ui.label(
-                        RichText::new("place before a spell")
-                            .font(FontId::proportional(10.0))
-                            .color(style::AMBER),
-                    );
-                }
-            });
-            spell_library_grid(
-                ui,
-                view,
-                action,
-                selected,
-                drag_state,
-                *tab,
-                &spells,
-                modifier_stroke,
-            );
-        });
+        ui.add_space(2.0);
+        ui.label(RichText::new("[Shift] Details").size(11.0).color(style::MUTED));
+    }
 }
 
+/// The wand page; see `board` for the layout.
 pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
-    ui.scope(|ui| {
-    ui.set_width(BOARD_W);
-    ui.set_max_width(BOARD_W);
-    let stats = crate::world::adventure::wand_items::stats_for(view.wand, &view.loadout, view.rank);
-
-    ui.horizontal(|ui| {
-        let title_resp = ui.add(
-            egui::Label::new(
-                RichText::new(if view.wand == 0 { "Wand" } else { stats.name })
-                    .size(18.0)
-                    .color(style::AMBER),
-            )
-            .sense(egui::Sense::hover()),
-        );
-        if view.wand > 0 {
-            title_resp.on_hover_ui(|ui| show_wand_hover_card(ui, view));
-            let badge_resp = ui.add(
-                egui::Label::new(
-                    RichText::new(format!(
-                        " [Hover Stats · Dly {:.2}s · Rch {:.2}s · {:.0}/{:.0} MP] ",
-                        stats.cast_delay, stats.recharge_time, view.mana, stats.mana_max
-                    ))
-                    .font(FontId::monospace(11.0))
-                    .color(style::MANA),
-                )
-                .sense(egui::Sense::hover()),
-            );
-            badge_resp.on_hover_ui(|ui| show_wand_hover_card(ui, view));
-        }
-    });
-
-    if view.wand == 0 {
-        ui.label("Craft a wand to equip spells.");
-        return;
-    }
-
-    let cap = wands::capacity(view.wand);
-    let sel_id = ui.make_persistent_id("wand_edit_slot");
-    let drag_id = ui.make_persistent_id("wand_drag_state");
-    let mut selected = ui
-        .ctx()
-        .data_mut(|d| d.get_temp::<usize>(sel_id))
-        .unwrap_or(0)
-        .min(cap - 1);
-    let mut drag_state = ui
-        .ctx()
-        .data_mut(|d| d.get_temp::<Option<WandDrag>>(drag_id))
-        .flatten();
-    let tab_id = ui.make_persistent_id("wand_library_tab");
-    let query_id = ui.make_persistent_id("wand_library_query");
-    let mut library_tab = ui
-        .ctx()
-        .data_mut(|d| d.get_temp::<usize>(tab_id).unwrap_or(0))
-        .min(PALETTE_TABS.len() - 1);
-    let mut library_query = ui
-        .ctx()
-        .data_mut(|d| d.get_temp::<String>(query_id).unwrap_or_default());
-    let mut hovered_deck_slot: Option<usize> = None;
-
-    egui::Frame::new()
-        .fill(Color32::from_rgba_premultiplied(20, 19, 24, 225))
-        .stroke(Stroke::new(1.0, style::EDGE))
-        .inner_margin(egui::Margin::symmetric(8, 6))
-        .show(ui, |ui| {
-            // Wand Deck Strip (supports drag-swap, right-click clear, and cast-block brackets)
-            draw_wand_deck_strip(
-                ui,
-                view,
-                action,
-                &mut selected,
-                &mut drag_state,
-                &mut hovered_deck_slot,
-                false,
-            );
-            let slot_spell = view.loadout.slot(selected);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(format!("Slot {}", selected + 1))
-                        .font(FontId::monospace(10.0))
-                        .color(style::AMBER),
-                );
-                ui.label(
-                    RichText::new(if slot_spell == wands::EMPTY {
-                        "empty — choose a spell below".to_owned()
-                    } else {
-                        adventure::spell_name(slot_spell).to_owned()
-                    })
-                    .font(FontId::monospace(10.0))
-                    .color(style::MUTED),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("Clear slot")
-                        .on_hover_text("Clear selected slot (or right-click any slot)")
-                        .clicked()
-                    {
-                        *action = UiAction::Factory(Action::SetWandSlot(
-                            selected as u32,
-                            wands::EMPTY,
-                        ));
-                    }
-                });
-            });
-        });
-
-    ui.small(
-        "Modifiers affect the next spell. Amber marks the next cast.",
-    );
-
-    paint_spell_library(
-        ui,
-        view,
-        action,
-        &mut selected,
-        &mut drag_state,
-        &mut library_tab,
-        &mut library_query,
-    );
-
-    // Resolve drag release or draw floating spell card on cursor
-    if let Some(drag) = drag_state {
-        let drag_spell = match drag {
-            WandDrag::DeckSlot(_, s) | WandDrag::PaletteSpell(s) => s,
-        };
-        if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
-            let p = ui.ctx().layer_painter(egui::LayerId::new(
-                egui::Order::Tooltip,
-                egui::Id::new("wand_drag_ghost"),
-            ));
-            let r = Rect::from_center_size(pos + vec2(8.0, 8.0), vec2(32.0, 32.0));
-            icons::frame(&p, r, true);
-            icons::paint(&p, r.shrink(3.0), Icon::Spell(drag_spell));
-        }
-        if ui
-            .ctx()
-            .input(|i| i.pointer.button_released(egui::PointerButton::Primary))
-        {
-            match (drag, hovered_deck_slot) {
-                (WandDrag::DeckSlot(from, _), Some(to)) if from != to => {
-                    *action = UiAction::Factory(Action::SwapWandSlots(from as u32, to as u32));
-                    selected = to;
-                }
-                (WandDrag::DeckSlot(from, _), None) => {
-                    *action = UiAction::Factory(Action::SetWandSlot(from as u32, wands::EMPTY));
-                }
-                (WandDrag::PaletteSpell(s), Some(to)) => {
-                    *action = UiAction::Factory(Action::SetWandSlot(to as u32, s));
-                    selected = to;
-                }
-                _ => {}
-            }
-            drag_state = None;
-        }
-    }
-
-    ui.ctx().data_mut(|d| {
-        d.insert_temp(sel_id, selected);
-        d.insert_temp(drag_id, drag_state);
-        d.insert_temp(tab_id, library_tab);
-        d.insert_temp(query_id, library_query);
-    });
-
-    // Chassis Selector
-    ui.horizontal_wrapped(|ui| {
-        for (mode, label) in ["Direct", "Twin", "Impact", "Shuffle"]
-            .into_iter()
-            .enumerate()
-        {
-            let resp = ui.selectable_label(view.loadout.mode == mode as u32, label);
-            if resp.clicked() {
-                *action = UiAction::Factory(Action::SetWandMode(mode as u32));
-            }
-            resp.on_hover_ui(|ui| show_wand_hover_card(ui, view));
-        }
-    });
-    let blurb = match view.loadout.mode {
-        1 => "Casts two spells with spread.",
-        2 => "Releases the next projectile on impact.",
-        3 => "Shuffles on reload. Faster casting and recharge.",
-        _ => "Casts spells from left to right.",
-    };
-    let width = ui.available_width().min(BOARD_W);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::hover());
-    let galley = ui
-        .painter()
-        .layout(blurb.to_owned(), FontId::proportional(10.0), style::MUTED, rect.width());
-    ui.painter()
-        .with_clip_rect(rect)
-        .galley(rect.left_top(), galley, style::MUTED);
-    });
-}
-
-/// Compact Noita-style Wand Tinkering tray embedded directly at the top of the Survival Inventory (`E`)
-/// so players can drag-swap wand slots, right-click clear, or open full Spell Tinkering without hunting tabs.
-pub(super) fn draw_inline_wand_bar(
-    ui: &mut egui::Ui,
-    view: &View,
-    action: &mut UiAction,
-    open_wand_tab: &mut bool,
-) {
-    if view.wand == 0 {
-        return;
-    }
-    let stats = crate::world::adventure::wand_items::stats_for(view.wand, &view.loadout, view.rank);
-    let sel_id = ui.make_persistent_id("inline_wand_slot");
-    let drag_id = ui.make_persistent_id("inline_wand_drag");
-    let cap = wands::capacity(view.wand);
-    let mut selected = ui
-        .ctx()
-        .data_mut(|d| d.get_temp::<usize>(sel_id))
-        .unwrap_or(view.loadout.cursor)
-        .min(cap - 1);
-    let mut drag_state = ui
-        .ctx()
-        .data_mut(|d| d.get_temp::<Option<WandDrag>>(drag_id))
-        .flatten();
-    let mut hovered_slot: Option<usize> = None;
-
-    egui::Frame::new()
-        .fill(Color32::from_rgb(24, 21, 26))
-        .stroke(Stroke::new(1.0, style::EDGE))
-        .inner_margin(egui::Margin::symmetric(8, 4))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let lbl = ui.add(
-                    egui::Label::new(
-                        RichText::new(format!("{} (T{})", stats.name, view.wand))
-                            .font(FontId::monospace(11.0))
-                            .color(style::AMBER),
-                    )
-                    .sense(egui::Sense::hover()),
-                );
-                lbl.on_hover_ui(|ui| show_wand_hover_card(ui, view));
-
-                draw_wand_deck_strip(
-                    ui,
-                    view,
-                    action,
-                    &mut selected,
-                    &mut drag_state,
-                    &mut hovered_slot,
-                    true,
-                );
-
-                if ui
-                    .small_button("Spells ▸")
-                    .on_hover_text("Open full Spell & Modifier Board")
-                    .clicked()
-                {
-                    *open_wand_tab = true;
-                }
-            });
-        });
-
-    if let Some(WandDrag::DeckSlot(from, s)) = drag_state {
-        if let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos()) {
-            let p = ui.ctx().layer_painter(egui::LayerId::new(
-                egui::Order::Tooltip,
-                egui::Id::new("inline_wand_drag_ghost"),
-            ));
-            let r = Rect::from_center_size(pos + vec2(8.0, 8.0), vec2(28.0, 28.0));
-            icons::frame(&p, r, true);
-            icons::paint(&p, r.shrink(3.0), Icon::Spell(s));
-        }
-        if ui
-            .ctx()
-            .input(|i| i.pointer.button_released(egui::PointerButton::Primary))
-        {
-            if let Some(to) = hovered_slot {
-                if from != to {
-                    *action = UiAction::Factory(Action::SwapWandSlots(from as u32, to as u32));
-                }
-            } else {
-                *action = UiAction::Factory(Action::SetWandSlot(from as u32, wands::EMPTY));
-            }
-            drag_state = None;
-        }
-    }
-
-    ui.ctx().data_mut(|d| {
-        d.insert_temp(sel_id, selected);
-        d.insert_temp(drag_id, drag_state);
-    });
-}
-
-/// Fixed-size spell cards in a reserved-height scroll area. Cards never change
-/// size on hover or drag; only their outline and dim overlay change.
-fn spell_library_grid(
-    ui: &mut egui::Ui,
-    view: &View,
-    action: &mut UiAction,
-    selected: &mut usize,
-    drag_state: &mut Option<WandDrag>,
-    tab: usize,
-    spells: &[u32],
-    modifier_stroke: bool,
-) {
-    let cap = wands::capacity(view.wand);
-    let body_height = 150.0;
-    ui.set_min_height(body_height);
-    egui::ScrollArea::vertical()
-        .id_salt(("spell_library", tab))
-        .max_height(body_height)
-        .min_scrolled_height(body_height)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let columns = LIBRARY_COLUMNS;
-            egui::Grid::new(("spell_grid", tab))
-                .spacing([3.0, 4.0])
-                .show(ui, |ui| {
-                    for (index, spell) in spells.iter().copied().enumerate() {
-                        let available = view.can_wield(spell);
-                        let (r, response) =
-                            ui.allocate_exact_size(vec2(54.0, 58.0), Sense::click_and_drag());
-                        response.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::WidgetType::Button,
-                                available,
-                                adventure::spell_name(spell),
-                            )
-                        });
-                        let p = ui.painter();
-                        let r = super::grimoire::react(&response, r, false);
-                        icons::frame(p, r, false);
-                        let icon = Rect::from_center_size(
-                            egui::pos2(r.center().x, r.top() + 24.0),
-                            vec2(34.0, 34.0),
-                        );
-                        icons::paint(p, icon, Icon::Spell(spell));
-                        if modifier_stroke {
-                            p.rect_stroke(
-                                r.shrink(1.5),
-                                0,
-                                Stroke::new(1.0, style::AMBER),
-                                egui::epaint::StrokeKind::Inside,
-                            );
-                            p.line_segment(
-                                [
-                                    r.left_top() + vec2(2.0, 5.0),
-                                    r.left_bottom() + vec2(2.0, -5.0),
-                                ],
-                                Stroke::new(2.0, style::AMBER),
-                            );
-                        }
-                        let name = adventure::spell_name(spell);
-                        let short: String = if name.chars().count() > 12 {
-                            name.chars().take(11).chain("…".chars()).collect()
-                        } else {
-                            name.to_owned()
-                        };
-                        p.text(
-                            egui::pos2(r.center().x, r.bottom() - 3.0),
-                            Align2::CENTER_BOTTOM,
-                            short,
-                            FontId::proportional(10.0),
-                            if available {
-                                style::PAPER
-                            } else {
-                                style::MUTED
-                            },
-                        );
-                        if !available {
-                            p.rect_filled(r, 0, Color32::from_rgba_unmultiplied(12, 10, 14, 155));
-                        }
-                        if response.hovered() || response.has_focus() { super::grimoire::focus(p, r); }
-                        if response.drag_started() && available {
-                            *drag_state = Some(WandDrag::PaletteSpell(spell));
-                        }
-                        let hovered =
-                            response.on_hover_ui(|ui| show_spell_hover_card(ui, spell, view));
-                        if (hovered.clicked() || hovered.secondary_clicked()) && available {
-                            let first_empty =
-                                (0..cap).find(|&idx| view.loadout.slot(idx) == wands::EMPTY);
-                            let target_slot = if hovered.secondary_clicked()
-                                || ui.ctx().input(|i| {
-                                    i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command
-                                }) {
-                                first_empty.unwrap_or(*selected)
-                            } else {
-                                *selected
-                            };
-                            *action =
-                                UiAction::Factory(Action::SetWandSlot(target_slot as u32, spell));
-                            *selected = (target_slot + 1) % cap;
-                        }
-                        if (index + 1) % columns == 0 {
-                            ui.end_row();
-                        }
-                    }
-                });
-        });
-}
-
-/// Highlight the whole deck while a drag is active so the stable drop targets
-/// are obvious before the pointer reaches one of them.
-fn deck_drag_hint(ui: &egui::Ui, rect: Rect, dragging: bool, hovered: bool) {
-    if !dragging {
-        return;
-    }
-    let color = if hovered { style::AMBER } else { style::JADE };
-    ui.painter().rect_stroke(
-        rect,
-        0,
-        Stroke::new(if hovered { 2.0 } else { 1.0 }, color),
-        egui::epaint::StrokeKind::Inside,
-    );
+    board::draw(ui, view, action);
 }
 
 /// How many of these spells the player has found. Spells held back by rare
@@ -1277,7 +605,7 @@ mod palette_tests {
     fn every_defined_spell_is_reachable_from_the_palette() {
         let listed: std::collections::HashSet<u32> = PALETTE_TABS
             .iter()
-            .flat_map(|(_, list, _)| list.iter().copied())
+            .flat_map(|(_, list)| list.iter().copied())
             .collect();
         for id in 0..=adventure::MAX_SPELL_ID {
             if id == 8 || adventure::spell_name(id) == "Unknown spell" {
@@ -1294,10 +622,11 @@ mod palette_tests {
     fn found_count_reflects_the_log() {
         use crate::world::adventure::discovery::SpellLog;
         let start = SpellLog::starter();
-        assert_eq!(found_count(BOLTS, &SpellLog::all()), BOLTS.len());
+        let list = &PALETTE_TABS[0].1;
+        assert_eq!(found_count(list, &SpellLog::all()), list.len());
         // Starter: Spark and Frost lance are bolts; Spore bloom is not found,
         // while rift well (6) is never blocked by the log.
-        let bolts = found_count(BOLTS, &start);
+        let bolts = found_count(list, &start);
         assert_eq!(bolts, 3, "spark, frost lance and rift well");
         assert_eq!(found_count(&[3, 5, 29], &start), 0);
     }

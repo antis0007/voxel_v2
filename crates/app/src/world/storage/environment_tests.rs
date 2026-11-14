@@ -1,7 +1,8 @@
 use super::*;
 
 fn fixture(world: &World, version: u8, directory: &Path) -> PathBuf {
-    let mut bytes = session_header(world, &Player::new(), &DayNightCycle::default()).unwrap();
+    let mut bytes = session_identity(world, &Player::new(), &DayNightCycle::default(), version).unwrap();
+    if version < 49 { bytes.truncate(bytes.len() - 8); }
     bytes[..8].copy_from_slice(format!("VXWSAV{version:02}").as_bytes());
     let name = b"environment-test";
     push(&mut bytes, name.len() as u32);

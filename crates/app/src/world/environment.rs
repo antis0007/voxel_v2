@@ -16,6 +16,7 @@ pub use activation::FluidImpact;
 pub(crate) mod cultivation;
 mod exchange;
 mod fluid;
+pub(crate) use fluid::surface_step;
 mod fractions;
 mod geometry;
 mod persistence;
@@ -23,6 +24,7 @@ pub use fractions::Fractions;
 pub(crate) mod light;
 pub(crate) mod sky;
 pub use geometry::faces;
+pub(crate) use geometry::append_face_positions;
 pub(crate) mod inspect;
 
 pub type Key = (i32, i32, i32);
@@ -38,6 +40,7 @@ pub const MAX_PATCHES: usize = 65_536;
 /// Refinement before an edit may pass the soft limit so the edit still lands.
 pub const PATCH_CEILING: usize = MAX_PATCHES + 8_192;
 pub const MAX_EVENTS: usize = 65_536;
+const EDIT_EVENT_RESERVE:usize=1024;
 pub const MAX_SEDIMENT: usize = 32_768;
 pub const MAX_FRACTIONS: usize = 32_768;
 pub const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
@@ -98,6 +101,8 @@ pub struct State {
     /// Transient event context. External changes enter the next target tick;
     /// an executing process schedules its dependencies after its own step.
     pub(crate) event_tick: Option<u64>,
+    /// Transient foreground admission; never serialized.
+    pub(crate) player_edit:bool,
     pub ledger: Ledger,
     pub serviced: u64,
     pub blocked: u64,
@@ -105,6 +110,8 @@ pub struct State {
     pub erosion_rate: u32,
     pub evaporation_um_s: u32,
     pub cells_per_metre: i32,
+    /// Reused dependency positions for the current event service.
+    pub(crate) source_positions: Vec<IVec3>,
     /// Last patch the redundancy sweep examined. Transient: a reload restarts
     /// the sweep, which only drops records that regenerate identically.
     pub(crate) prune_cursor: Option<Key>,
@@ -126,6 +133,7 @@ impl Default for State {
             target_tick: 0,
             fixed_steps: 0,
             event_tick: None,
+            player_edit:false,
             ledger: Ledger::default(),
             serviced: 0,
             blocked: 0,
@@ -133,6 +141,7 @@ impl Default for State {
             erosion_rate: definition.map_or(0, |d| d.erosion_rate),
             evaporation_um_s: definition.map_or(0, |d| d.evaporation_um_s),
             cells_per_metre: 1,
+            source_positions: Vec::new(),
             prune_cursor: None,
         }
     }
@@ -183,7 +192,14 @@ impl State {
         let metric = p.as_vec3() * cfg.voxel_meters();
         let conditions = engine_worldgen::ecology::conditions(&cfg, metric, if exposed { 0 } else { 1_000 });
         let water = if natural {
-            law.capacity(cfg.voxel_scale) * u64::from(conditions.moisture_per_mille) / 1_000
+            // Climate moisture is capillary water, not a pressurised aquifer.
+            // Seeding it as a fraction of porosity made ordinary excavated
+            // grass/dirt release free water even far above the water table.
+            if p.y <= engine_worldgen::water_table(&cfg, p.x, p.z) {
+                law.capacity(cfg.voxel_scale)
+            } else {
+                law.retained_water(cfg.voxel_scale) * u64::from(conditions.moisture_per_mille.min(1_000)) / 1_000
+            }
         } else {
             0
         };
@@ -208,6 +224,43 @@ impl State {
             soil: Soil { water, nutrient, biomass, plant_nutrient: biomass / 40, ..Default::default() },
         })
     }
+    /// Repair only pristine fine-cell records matching the old climate seed.
+    /// Irrigated/evolved soil and groundwater keep their conserved stocks.
+    pub(crate) fn repair_initial_moisture(&mut self, cfg: super::WorldSampleConfig, p: IVec3, patch: &mut Patch) {
+        if patch.revision != 0 || patch.extent != 1 { return; }
+        let Some(law) = engine_content::environment::definition().and_then(|d| d.soil(patch.material)) else { return };
+        if patch.soil.water <= law.retained_water(cfg.voxel_scale)
+            || p.y <= engine_worldgen::water_table(&cfg, p.x, p.z) { return; }
+        for exposed in [false, true] {
+            let Some(mut fresh) = self.fresh_patch(cfg, p, patch.material, exposed, true) else { continue };
+            let conditions = engine_worldgen::ecology::conditions(&cfg, p.as_vec3() * cfg.voxel_meters(), if exposed { 0 } else { 1_000 });
+            let corrected = fresh.soil.water;
+            fresh.soil.water = law.capacity(cfg.voxel_scale) * u64::from(conditions.moisture_per_mille) / 1_000;
+            if patch.species == fresh.species && patch.soil == fresh.soil && patch.soil.water > corrected {
+                let excess = patch.soil.water - corrected;
+                patch.soil.water = corrected;
+                patch.revision += 1;
+                self.ledger.initial_soil_water = self.ledger.initial_soil_water.saturating_sub(excess);
+                self.patches.insert(key(p), patch.clone());
+                return;
+            }
+        }
+    }
+    pub(crate) fn event_limit(&self)->usize {
+        if self.player_edit {MAX_EVENTS}else{MAX_EVENTS-EDIT_EVENT_RESERVE}
+    }
+    /// Under queue pressure distant processes may sleep; their physical
+    /// patch stocks remain stored. Contact/weather wakes them again. Never
+    /// let a full background frontier make foreground edits permanently fail.
+    pub(crate) fn make_player_room(&mut self,p:IVec3) {
+        let needed=self.scheduled.len().saturating_sub(MAX_EVENTS-EDIT_EVENT_RESERVE);
+        if needed==0{return;}
+        let keep=self.cells_per_metre.max(1)*32;
+        let sleepers:Vec<_>=self.due.iter().rev().take(4096)
+            .filter(|(_,k)|(position(*k)-p).abs().max_element()>keep)
+            .take(needed).copied().collect();
+        for (due,k) in sleepers {self.due.remove(&(due,k));self.scheduled.remove(&k);}
+    }
     pub fn can_wake(&self, positions: &[IVec3]) -> bool {
         let mut owners = [(0, 0, 0); 128];
         let mut count = 0;
@@ -222,7 +275,7 @@ impl State {
             owners[count] = owner;
             count += 1;
         }
-        self.scheduled.len() + count <= MAX_EVENTS
+        self.scheduled.len() + count <= self.event_limit()
     }
     pub fn wake(&mut self, p: IVec3) -> bool {
         self.wake_after(p, 1)
@@ -246,7 +299,7 @@ impl State {
                 return true;
             }
             self.due.remove(&(old, p));
-        } else if self.scheduled.len() >= MAX_EVENTS {
+        } else if self.scheduled.len() >= self.event_limit() {
             return false;
         }
         self.scheduled.insert(p, due);

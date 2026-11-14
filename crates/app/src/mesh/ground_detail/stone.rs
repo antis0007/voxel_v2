@@ -31,17 +31,24 @@ pub(super) fn append(mesh: &mut ChunkMesh, d: &Detail, scale: f32, size: f32) {
     };
     for i in 0..5 {
         let next = (i + 1) % 5;
-        let normal = (upper[i] - lower[i]).cross(lower[next] - lower[i]).normalize();
+        let normal = (upper[i] - lower[i])
+            .cross(lower[next] - lower[i])
+            .normalize();
         let gain = 0.96 + ((d.hash.rotate_left(i as u32 * 3) >> 24) & 255) as f32 / 255.0 * 0.08;
         for p in [lower[i], upper[i], upper[next], lower[next]] {
             vertex(p, normal, gain);
         }
     }
     let normal = Vec3::new(-tilt.x, 1.0, -tilt.z).normalize();
-    for p in upper { vertex(p, normal, 1.0); }
+    for p in upper {
+        vertex(p, normal, 1.0);
+    }
     for i in 0..5 {
         let b = base + i * 4;
-        mesh.indices.extend([b, b+1, b+2, b, b+2, b+3]);
+        mesh.indices.extend([b, b + 1, b + 2, b, b + 2, b + 3]);
     }
-    for i in 1..4 { mesh.indices.extend([base+20, base+21+i, base+20+i]); }
+    for i in 1..4 {
+        mesh.indices
+            .extend([base + 20, base + 21 + i, base + 20 + i]);
+    }
 }

@@ -8,7 +8,7 @@ const CAST_METRES: f32 = 16.0;
 const LINE_METRES: f32 = 24.0;
 pub const BITE_WINDOW: u64 = 3 * SECOND / 2;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Cast {
     pub cell: IVec3,
     pub slot: usize,

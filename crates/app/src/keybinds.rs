@@ -42,12 +42,12 @@ macro_rules! actions {
 actions!(
     Forward, Back, Left, Right, Jump, Sneak, Sprint, Dash, Break, Place, Pick, Cast,
     Inspect, Zoom,
-    Interact, NextSpell, Lamp, ToolHand, ToolBrush, ToolBuilders, ToolDestructor,
+    Interact, SwapHands, NextSpell, Lamp, ToolHand, ToolBrush, ToolBuilders, ToolDestructor,
     ToolArea, ToolExplosive, RangeDown, RangeUp, Inventory, CreativePanel, WandAtelier,
     QuickSelect, Map, Waypoint, Minimap, ToggleHud, Screenshot, Debug, Fullscreen, Hotbar1, Hotbar2, Hotbar3,
     Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9, HotbarPrev, HotbarNext, Undo, Redo,
     BlueprintCorner, BlueprintCopy, BlueprintCut, BlueprintPaste, BlueprintRotate, BlueprintMirror,
-    Blueprints,
+    Blueprints, Records, GoalTrack, SystemMap, NavTarget,
 );
 
 /// Actions `Input` tracks per frame; only these accept mouse buttons.
@@ -178,6 +178,20 @@ impl Bindings {
                 bindings.assign(action, slot, key.as_deref().and_then(Binding::parse));
             }
         }
+        // Repair the shipped G collision: Area Tool displaced Interact's
+        // keyboard slot, leaving the HUD with only a controller prompt.
+        // Match the broken defaults exactly and preserve other custom layouts.
+        use winit::keyboard::KeyCode;
+        let g = Binding::Key(KeyCode::KeyG);
+        let j = Binding::Key(KeyCode::KeyJ);
+        if bindings.slots(Action::Interact) == [None, Some(Binding::Pad(PadButton::West))]
+            && bindings.slots(Action::ToolArea) == [Some(g), None]
+            && bindings.slots(Action::SwapHands) == [Some(Binding::Key(KeyCode::KeyF)), None]
+            && bindings.lookup(j).is_none()
+        {
+            bindings.assign(Action::ToolArea, 0, Some(j));
+            bindings.assign(Action::Interact, 0, Some(g));
+        }
         Ok(bindings)
     }
 
@@ -221,6 +235,8 @@ pub fn note_input(binding: Binding) {
 
 /// Current label for a key named by its default label, so fixed hint strings follow rebinding.
 pub fn rebound_label(default_label: &str) -> String {
+    // Older content names interaction by its former default key.
+    if default_label == "F" { return hint(Action::Interact); }
     let defaults = Bindings::defaults();
     Action::ALL
         .iter()

@@ -237,6 +237,26 @@ fn mood_cosmos_aurora(dir: vec3<f32>, t: f32) -> vec3<f32> {
 // infinitely far): nebula, a galactic band, two galaxies, four layers of stars,
 // constellations, shooting stars and aurora curtains. The near layer of stars
 // with real parallax is `mood_motes`, which lives in world metres.
+// Broad overlapping celestial veils suggest folded depth without displacing
+// silhouettes or changing the actual camera used by traversable portals.
+fn mood_fold_veils(dir: vec3<f32>, t: f32) -> vec3<f32> {
+    let axes = array<vec3<f32>, 3>(
+        normalize(vec3<f32>(0.35, 0.62, 0.70)),
+        normalize(vec3<f32>(-0.72, 0.25, 0.64)),
+        normalize(vec3<f32>(0.58, -0.70, 0.41)));
+    var color = vec3<f32>(0.0);
+    for (var i = 0; i < 3; i++) {
+        let phase = dot(dir, axes[(i + 1) % 3]) * 5.0 + f32(i) * 2.1;
+        let fold = dot(dir, axes[i]) + sin(phase + t * 0.025) * 0.11;
+        let body = exp(-fold * fold * 85.0);
+        let hem = exp(-pow((fold + 0.035) * 60.0, 2.0));
+        let breath = 0.78 + 0.22 * sin(phase * 0.7 - t * 0.04);
+        let tint = mix(vec3<f32>(0.05, 0.36, 0.60), vec3<f32>(0.30, 0.08, 0.55), f32(i) * 0.5);
+        color += tint * (body * 0.025 + hem * 0.018) * breath;
+    }
+    return color;
+}
+
 fn mood_cosmos_backdrop(dir: vec3<f32>, t: f32) -> vec3<f32> {
     let axis = normalize(vec3<f32>(0.35, 0.62, 0.70));
     let band = exp(-pow(dot(dir, axis) * 3.0, 2.0));
@@ -251,6 +271,7 @@ fn mood_cosmos_backdrop(dir: vec3<f32>, t: f32) -> vec3<f32> {
     c += mood_constellations(dir, t);
     c += mood_shooting_stars(dir, t);
     c += mood_cosmos_aurora(dir, t);
+    c += mood_fold_veils(dir, t);
     // A whisper of fixed per-direction dither so dark gradients never band.
     let n = mood_hash31(floor(dir * 4096.0)) - 0.5;
     return max(c * (1.0 + n * 0.03) + vec3<f32>(n * 0.0006), vec3<f32>(0.0));
@@ -260,30 +281,48 @@ fn mood_cosmos_backdrop(dir: vec3<f32>, t: f32) -> vec3<f32> {
 // They live in world metres, so they slide past you as you walk (true
 // parallax) and have one density at every voxel scale.
 fn mood_motes(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32) -> vec3<f32> {
-    let mpu = cam.world_params.x;
-    let o = origin * mpu;
-    let reach = max_d * mpu;
+    let cell_size = 2.8;
+    let reach = min(max_d * cam.world_params.x, 17.0);
+    let o = origin * cam.world_params.x + vec3<f32>(0.0, t * 0.04, 0.0);
+    let direction = normalize(dir);
+    var cell = floor(o / cell_size);
+    let step_dir = select(vec3<f32>(-1.0), vec3<f32>(1.0), direction >= vec3<f32>(0.0));
+    let inverse = 1.0 / max(abs(direction), vec3<f32>(0.00001));
+    var next = abs((cell + max(step_dir, vec3<f32>(0.0))) * cell_size - o) * inverse;
+    let stride = cell_size * inverse;
     var acc = vec3<f32>(0.0);
-    for (var i = 0; i < 6; i++) {
-        let d = 1.6 + f32(i) * 2.7;
-        if d > reach { break; }
-        let g = (o + dir * d) / 1.9 + vec3<f32>(0.0, t * 0.04, 0.0);
-        let cell = floor(g);
+    // Traverse the actual cells intersected by the eye ray. Project each mote
+    // onto that ray analytically instead of sampling it at six fixed depths.
+    for (var i = 0; i < 20; i++) {
         let h = mood_hash31(cell);
         if h > 0.94 {
-            let c = cell + vec3<f32>(
+            let jitter = vec3<f32>(
                 mood_hash31(cell + vec3<f32>(1.0, 2.0, 3.0)),
                 mood_hash31(cell + vec3<f32>(4.0, 5.0, 6.0)),
-                mood_hash31(cell + vec3<f32>(7.0, 8.0, 9.0))) * 0.6 + vec3<f32>(0.2);
-            let dd = length(g - c);
-            let glow = exp(-dd * dd * 110.0);
+                mood_hash31(cell + vec3<f32>(7.0, 8.0, 9.0)));
+            let center = (cell + jitter * 0.6 + vec3<f32>(0.2)) * cell_size;
+            let relative = center - o;
+            let along = dot(relative, direction);
+            let perpendicular = relative - direction * along;
+            let radius = 0.008 + max(along, 0.0) * 0.0007;
+            let radial = dot(perpendicular, perpendicular) / (radius * radius);
+            let envelope = smoothstep(0.3, 1.3, along) * (1.0 - smoothstep(max(reach - 2.0, 0.0), max(reach, 0.001), along));
+            let glow = exp(-radial) + exp(-radial * 0.08) * 0.025;
             let tint = mood_star_colour(mood_hash31(cell + vec3<f32>(3.3)));
-            acc += tint * glow * (0.5 + 0.5 * sin(t * 1.3 + h * 40.0)) * 0.9;
+            acc += tint * glow * envelope * (0.7 + 0.3 * sin(t * 0.6 + h * 40.0)) * 0.9;
+        }
+        let distance = min(next.x, min(next.y, next.z));
+        if distance >= reach { break; }
+        if next.x <= next.y && next.x <= next.z {
+            cell.x += step_dir.x; next.x += stride.x;
+        } else if next.y <= next.z {
+            cell.y += step_dir.y; next.y += stride.y;
+        } else {
+            cell.z += step_dir.z; next.z += stride.z;
         }
     }
     return acc;
 }
-
 // Fog that is the cosmos. The same optical-depth idea as the air it replaces,
 // but the in-scattered light is the starfield instead of the sky. Depth is in
 // metres so the room reads the same at every voxel scale.
@@ -357,11 +396,13 @@ fn mood_rainbow(dir: vec3<f32>, sun_dir: vec3<f32>) -> vec3<f32> {
     if x < 0.0 || x > 1.0 { return vec3<f32>(0.0); }
     // Red on the outside, violet inside. Real droplets have a finite size and
     // the sun a finite disk, so the bands overlap and wash toward white.
-    let hue = 1.0 - x;
-    let pure = clamp(vec3<f32>(
-        1.0 - abs(hue * 4.0 - 3.0),
-        1.0 - abs(hue * 4.0 - 2.0),
-        1.0 - abs(hue * 4.0 - 1.0)), vec3<f32>(0.0), vec3<f32>(1.0));
+    // Overlapping spectral lobes, violet inside and red outside. The previous
+    // triangular hue mapping traversed the spectrum backwards and went black
+    // at the inner edge. Keep the same angular width and subdued intensity.
+    let bands = (vec3<f32>(x) - vec3<f32>(0.82, 0.50, 0.20)) / vec3<f32>(0.23, 0.23, 0.24);
+    var pure = exp(-bands * bands * 2.0);
+    let violet = (x - 0.12) / 0.16;
+    pure.r += 0.22 * exp(-violet * violet);
     let spectrum = mix(vec3<f32>(dot(pure, vec3<f32>(0.3333))), pure, 0.62);
     let fade = smoothstep(0.0, 0.25, x) * (1.0 - smoothstep(0.75, 1.0, x));
     let horizon = smoothstep(-0.015, 0.09, dir.y);
@@ -388,13 +429,32 @@ const MOTE_TEAL: vec3<f32> = vec3<f32>(0.130, 0.472, 0.430);
 // drawn as exactly one native screen pixel (or a one-pixel plus sign for a
 // glint) whatever its distance. No halo, no soft edge, no size that changes
 // with range: it reads as one more pixel of the same art as the world.
+// Ground wind in m/s (`world::wind_at`, surface_weather.zw): the same vector
+// the shadow pass sways with.
+fn local_surface_wind() -> vec2<f32> {
+    return light.surface_weather.zw;
+}
+
+// The ground wind with its speed capped at `cap` m/s, for effects that only scale to a gale.
+fn capped_surface_wind(cap: f32) -> vec2<f32> {
+    let w = local_surface_wind();
+    return w * min(1.0, cap / max(length(w), 1e-4));
+}
+
 fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<f32>, pixel: f32) -> vec3<f32> {
-    let total = a.x + a.y + a.z + a.w;
+    let b = light.biome_ambience;
+    let m = light.mana_ambience;
+    let first = a.x + a.y + a.z + a.w;
+    let second = first + b.x + b.y + b.z + b.w;
+    let total = second + m.x + m.y + m.z;
     if total < 0.002 { return vec3<f32>(0.0); }
     // Sparse on purpose: a mote should be found, not sprinkled across every view.
-    let presence = (a.x * 0.10 + a.y * 0.12 + a.z * 0.14 + a.w * 0.10) * 0.5;
+    // All eleven families share the original twenty-cell walk and a fixed
+    // occupancy ceiling. Richness does not add fullscreen ray marches.
+    let presence = min(total * 0.055, 0.14);
     let far = min(max_d, 22.0);
     let pixel_angle = max(pixel, 1e-4);
+    let wind = capped_surface_wind(16.0) * 0.018;
 
     // One mote per lattice cell, fixed in world space. The ray walks the cells
     // it crosses (Amanatides-Woo) and takes its closest approach to each mote.
@@ -423,13 +483,21 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
                 mood_hash31(cell + vec3<f32>(4.4, 5.2, 6.1)),
                 mood_hash31(cell + vec3<f32>(7.9, 8.3, 9.5)));
             let ph = mood_hash31(cell + vec3<f32>(3.3, 1.1, 7.7)) * 60.0;
-            let pick = fract(h * 37.7) * total;
-            // 0 firefly, 1 pollen, 2 diamond dust, 3 ember.
-            var kind = 3;
+            let pick = mood_hash31(cell + vec3<f32>(19.2, 7.8, 31.3)) * total;
+            // Firefly, pollen, frost, ember, petal, spore, spray, dust,
+            // healthy mana, blight filament, toxic filament.
+            var kind = 10;
+            if pick < second + m.x + m.y { kind = 9; }
+            if pick < second + m.x { kind = 8; }
+            if pick < second { kind = 7; }
+            if pick < first + b.x + b.y + b.z { kind = 6; }
+            if pick < first + b.x + b.y { kind = 5; }
+            if pick < first + b.x { kind = 4; }
+            if pick < first { kind = 3; }
             if pick < a.x + a.y + a.z { kind = 2; }
             if pick < a.x + a.y { kind = 1; }
             if pick < a.x { kind = 0; }
-            let rising = kind == 1 || kind == 3;
+            let rising = kind == 1 || kind == 3 || kind == 5 || kind >= 8;
 
             // Rest position in the middle half of the cell plus a bounded drift,
             // so the mote never leaves its own cell and cannot pop at a border.
@@ -442,11 +510,19 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
             // the bottom. `vis` is zero at both ends of the climb, so the loop
             // never shows.
             var vis = 1.0;
+            if kind == 4 || kind == 6 || kind == 7 || (kind == 2 && cam.planet[0].w > 1.5) {
+                let u = fract(t * select(0.045, 0.19, kind == 6) + ph * 0.137);
+                offset.y = 0.0;
+                drift.y = (0.5 - u) * 0.9;
+                vis = sin(3.14159265 * u);
+                drift += vec3<f32>(wind.x, 0.0, wind.y) * (u - 0.5);
+            }
             if rising {
                 let u = fract(t * select(0.05, 0.11, kind == 3) + ph * 0.137);
                 offset.y = 0.0;
                 drift.y = (u - 0.5) * 0.9;
                 vis = sin(3.14159265 * u);
+                drift += vec3<f32>(wind.x, 0.0, wind.y) * (u - 0.5);
             }
             let center = (cell + vec3<f32>(0.5) + offset + drift) * cell_size;
             let rel = center - origin;
@@ -466,29 +542,57 @@ fn mood_ambience(origin: vec3<f32>, dir: vec3<f32>, max_d: f32, t: f32, a: vec4<
                     let breath = 0.5 + 0.5 * sin(t * (0.8 + fract(ph) * 0.9) + ph);
                     let step_level = floor(breath * breath * breath * 3.0 + 0.5) / 3.0;
                     col = select(MOTE_HIGHLIGHT, MOTE_TEAL, tone > 0.78) * step_level * 3.4;
-                    glint = step_level >= 0.99;
+                    glint = step_level >= 0.99 && m.x > 0.002;
                 } else if kind == 1 {
                     let level = select(0.55, 1.0, sin(t * 1.3 + ph) > 0.0);
                     col = MOTE_PAPER * level * 1.5 * select(0.0, 1.0, vis > 0.4);
                 } else if kind == 2 {
+                    if cam.planet[0].w > 1.5 {
+                        col = vec3<f32>(0.13, 0.10, 0.09);
+                    } else {
                     let flash = pow(max(sin(t * 1.7 + ph), 0.0), 10.0);
                     let level = floor(flash * 3.0 + 0.5) / 3.0;
                     col = select(MOTE_PAPER, MOTE_TEAL, tone > 0.5) * level * 3.6;
                     glint = level >= 0.99;
-                } else {
+                    }
+                } else if kind == 3 {
                     // Embers cool through three palette steps as they rise.
                     let step_colour = select(select(MOTE_EMBER, MOTE_GOLD, vis > 0.45), MOTE_HIGHLIGHT, vis > 0.8);
                     col = step_colour * 2.8;
+                } else if kind == 4 {
+                    // Falling petal flakes use a warm, muted two-frame palette.
+                    col = select(MOTE_PAPER, vec3<f32>(0.68, 0.32, 0.39), tone > 0.48) * 1.2;
+                } else if kind == 5 {
+                    let pulse = floor((0.5 + 0.5 * sin(t * 0.65 + ph)) * 3.0) / 3.0;
+                    col = mix(MOTE_TEAL, MOTE_GOLD, step(0.60, tone)) * (0.45 + pulse * 0.85);
+                } else if kind == 6 {
+                    // Spray reads as foam: two frames between the sea-grey and
+                    // the palette paper, so it shows against both sky and water.
+                    col = select(vec3<f32>(0.46, 0.62, 0.69), MOTE_PAPER, tone > 0.45) * 1.25;
+                } else if kind == 7 {
+                    col = select(MOTE_PAPER * 0.38, vec3<f32>(0.13, 0.10, 0.09), a.w > 0.1);
+                } else if kind == 8 {
+                    let pulse = pow(max(sin(t * 0.9 + ph), 0.0), 6.0);
+                    let level = floor(pulse * 3.0 + 0.5) / 3.0;
+                    col = select(MOTE_TEAL, MOTE_HIGHLIGHT, tone > 0.60) * level * 2.2;
+                    glint = level > 0.99;
+                } else {
+                    // Hostile pressure has a different colour, motion and
+                    // silhouette from safe gold/teal glints. Never a fog wall.
+                    col = select(vec3<f32>(0.12, 0.07, 0.17), vec3<f32>(0.38, 0.12, 0.43), kind == 10);
+                    col *= 0.6 + floor((0.5 + 0.5 * sin(t * 2.4 + ph)) * 3.0) / 3.0;
                 }
                 // The pixel itself, plus a one-pixel plus sign when it glints.
                 var shape = select(0.0, 1.0, ox <= 0.5 && oy <= 0.5);
+                if kind == 4 { shape = select(0.0, 1.0, ox <= 1.0 && oy <= select(0.5, 1.0, sin(t + ph) > 0.65)); }
+                if kind >= 9 { shape = select(0.0, 1.0, ox <= 0.5 && oy <= 1.5); }
                 if glint {
                     let arm_x = ox <= 1.5 && oy <= 0.5;
                     let arm_y = oy <= 1.5 && ox <= 0.5;
                     shape = select(shape, 0.7, (arm_x || arm_y) && shape < 0.5);
                 }
                 let fade = smoothstep(0.15, 1.2, s) * (1.0 - smoothstep(far * 0.7, far, s));
-                acc += col * shape * fade;
+                acc += col * shape * fade * smoothstep(0.05, 0.40, vis);
             }
         }
         // Step into the next cell along the ray; stop once past the draw range.
@@ -571,4 +675,79 @@ fn crystal_sheen(world_m: vec3<f32>, t: f32) -> f32 {
     let s = dot(world_m, vec3<f32>(0.62, 0.30, 0.72)) - t * 0.55;
     let d = (fract(s / 5.0) - 0.5) * 5.0;
     return exp(-d * d / 0.5);
+}
+
+// ---- Planet weather seen from orbit (cover and sky planet branches) ----
+// Inputs are unit body-frame directions, so the pattern stays on the planet
+// while the eye's tangent frame turns. Cloud cells snap to a cube grid to
+// match the voxel world; lighting across them stays continuous.
+
+// Body-frame direction from a vector in the eye's tangent frame.
+fn planet_wx_body(v: vec3<f32>) -> vec3<f32> {
+    return normalize(cam.planet[2].xyz * v.x + cam.planet[3].xyz * v.y + cam.planet[4].xyz * v.z);
+}
+
+// Snaps `b` to the centre of its cell on a cube grid of `cells` per face half.
+fn planet_wx_snap(b: vec3<f32>, cells: f32) -> vec3<f32> {
+    let q = b / max(max(abs(b.x), abs(b.y)), abs(b.z));
+    return normalize(clamp((floor(q * cells) + 0.5) / cells, vec3<f32>(-1.0), vec3<f32>(1.0)));
+}
+
+// Cloud deck coverage 0..1: drifting fbm with storm belts either side of the equator.
+fn planet_wx_cloud(b: vec3<f32>, t: f32) -> f32 {
+    let s = planet_wx_snap(b, 192.0);
+    let drift = vec3<f32>(t * 0.0021, 0.0, -t * 0.0013);
+    // Large systems first: a warped low octave sets where weather is, detail
+    // only roughens edges. High octaves alone gave camouflage speckle.
+    let warp = vec3<f32>(mood_noise3(s * 1.7 + drift), mood_noise3(s * 1.7 + vec3<f32>(5.3, 1.1, 7.7)), 0.0) - vec3<f32>(0.5, 0.5, 0.0);
+    let n = mood_fbm(s * 2.3 + warp * 0.9 + drift) * 0.8 + mood_noise3(s * 7.0 - drift * 1.7) * 0.2;
+    let belts = 0.05 * exp(-pow((abs(s.y) - 0.32) / 0.10, 2.0)) - 0.06 * exp(-pow(s.y / 0.10, 2.0));
+    return smoothstep(0.56, 0.76, n + belts);
+}
+
+// Thick storm cores inside the deck, 0..1.
+fn planet_wx_storm(b: vec3<f32>, t: f32) -> f32 {
+    let s = planet_wx_snap(b, 192.0);
+    let core = mood_noise3(s * 9.0 + vec3<f32>(t * 0.003, 3.1, 0.0));
+    return smoothstep(0.66, 0.84, core) * planet_wx_cloud(b, t);
+}
+
+// Rare lightning flickers in storm cores. Each coarse cell rolls once per 4 s
+// slot; the flash is a short double pulse inside the slot.
+fn planet_wx_lightning(b: vec3<f32>, t: f32, storm: f32) -> f32 {
+    if storm < 0.3 { return 0.0; }
+    let grid = planet_wx_snap(b, 192.0) * 64.0;
+    let cell = floor(grid);
+    // Round glow inside the cell; a full cell flashed as a hard square.
+    let glow = smoothstep(0.5, 0.1, length(fract(grid) - vec3<f32>(0.5)));
+    if glow <= 0.0 { return 0.0; }
+    let slot = floor(t / 4.0);
+    let roll = mood_hash31(cell + vec3<f32>(slot * 7.13, slot * 1.71, 0.0));
+    let phase = fract(t / 4.0) * 4.0;
+    let flicker = step(roll, 0.03 * storm) * (exp(-phase * 6.0) + 0.5 * exp(-abs(phase - 0.18) * 30.0));
+    return flicker * storm * glow;
+}
+
+// Rare red discharge above the largest storms: a slower roll on a coarser grid.
+fn planet_wx_sprite(b: vec3<f32>, t: f32, storm: f32) -> f32 {
+    if storm < 0.4 { return 0.0; }
+    let cell = floor(planet_wx_snap(b, 48.0) * 48.0);
+    let slot = floor(t / 9.0);
+    let roll = mood_hash31(cell * 1.37 + vec3<f32>(0.0, slot * 3.91, slot * 0.57));
+    let phase = fract(t / 9.0) * 9.0;
+    return step(roll, 0.006 * storm) * smoothstep(0.0, 0.03, phase) * exp(-phase * 8.0);
+}
+
+// Auroral oval around both poles at height fraction `h01` (0 base, 1 top).
+// Returns a colour; green at the base, violet toward the top.
+fn planet_wx_aurora(b: vec3<f32>, t: f32, h01: f32) -> vec3<f32> {
+    let lon = atan2(b.z, b.x);
+    let wobble = 0.035 * sin(lon * 3.0 + t * 0.05) + 0.02 * sin(lon * 7.0 - t * 0.11);
+    let ring = exp(-pow((abs(b.y) - 0.90 - wobble) / 0.022, 2.0));
+    // Curtain folds: pixel-stepped longitude keeps the rays chunky like the voxel art.
+    let lon_q = floor(lon * 160.0) / 160.0;
+    let rays = 0.45 + 0.55 * mood_noise3(vec3<f32>(lon_q * 40.0, t * 0.35, b.y * 8.0));
+    let fade = smoothstep(0.0, 0.12, h01) * (1.0 - smoothstep(0.35, 1.0, h01));
+    let tint = mix(vec3<f32>(0.18, 1.0, 0.45), vec3<f32>(0.55, 0.25, 0.95), smoothstep(0.25, 0.85, h01));
+    return tint * ring * rays * fade;
 }

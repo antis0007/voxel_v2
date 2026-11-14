@@ -73,6 +73,15 @@ impl AtmosphereConfig {
 }
 
 impl AtmospherePreset {
+    /// Dense volcanic aerosol absorbs blue/green preferentially. This is a
+    /// transport preset, not a red filter over the ordinary planet's sky.
+    pub fn hell() -> Self {
+        Self { name: "hell".into(), planet_radius_m: RUNTIME_PLANET_RADIUS_M,
+            atmosphere_height_m: 40000.0, rayleigh_scattering: (2.2e-6, 3.0e-6, 4.0e-6),
+            rayleigh_scale_height_m: 6000.0, mie_scattering: (12.0e-6, 9.0e-6, 6.0e-6),
+            mie_absorption: (2.0e-6, 11.0e-6, 25.0e-6), mie_scale_height_m: 1800.0, mie_g: 0.82,
+            ozone_absorption: (0.0, 0.0, 0.0), ozone_center_m: 25000.0, ozone_width_m: 15000.0 }
+    }
     pub fn earthlike() -> Self {
         Self {
             name: "earthlike".into(),

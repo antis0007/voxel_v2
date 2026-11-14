@@ -21,10 +21,12 @@ pub struct TileData {
     /// Metres above sea level; the sea floor is kept under water.
     pub height_m: Vec<i16>,
     pub material: Vec<u8>,
-    /// 1 where the column surface is below the water level.
+    /// 0 dry, 1 ocean, 2..128 inland (encoded depth plus one).
     pub water: Vec<u8>,
-    /// Heat and wetness scaled to 0..255.
-    pub climate: Vec<[u8; 2]>,
+    /// Heat/suspension, wetness, canopy coverage and local sky visibility.
+    pub climate: Vec<[u8; 4]>,
+    /// Octahedrally encoded body-space normals, derived once from this height tile.
+    pub normals: Vec<[u8; 2]>,
 }
 
 impl TileData {
@@ -35,7 +37,8 @@ impl TileData {
             height_m: vec![0; SAMPLE_COUNT],
             material: vec![0; SAMPLE_COUNT],
             water: vec![0; SAMPLE_COUNT],
-            climate: vec![[0; 2]; SAMPLE_COUNT],
+            climate: vec![[0, 0, 0, 255]; SAMPLE_COUNT],
+            normals: vec![[128, 128]; SAMPLE_COUNT],
         }
     }
 }
@@ -64,6 +67,10 @@ pub fn material_index(surface: BlockId) -> u8 {
         BlockId::Leaves | BlockId::PineLeaves => 8,
         BlockId::Log => 9,
         BlockId::Ice => 10,
+        BlockId::Hellstone => 11,
+        BlockId::Basalt => 12,
+        BlockId::Ash => 13,
+        BlockId::Lava => 14,
         BlockId::Limestone => 15,
         BlockId::GroveMoss => 16,
         _ => UNMAPPED,
@@ -87,6 +94,16 @@ fn unit_byte(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+pub(crate) fn surface_at(cfg: &WorldSampleConfig, x: i32, z: i32, cell_m: f64) -> (i32, BlockId) {
+    if cell_m > EXACT_MAX_CELL_M && !cfg.is_hell() {
+        let (top, surface) = engine_worldgen::landscape::preview_surface_lod(cfg, x, z, cell_m as f32);
+        ((top - 1.0).round() as i32, surface)
+    } else {
+        let column = engine_worldgen::sample_column(cfg, x, z);
+        (column.height, column.surface)
+    }
+}
+
 /// Bakes samples from the cursor on; returns true once the tile is complete.
 pub fn bake_tile(
     cfg: &WorldSampleConfig,
@@ -98,29 +115,58 @@ pub fn bake_tile(
     let total = TILE_SAMPLES * TILE_SAMPLES;
     let water_level = cfg.water_level();
     let vm = cfg.voxel_meters();
+    let cell_m = id.cell_m();
+    let spherical = engine_worldgen::planetary::active(cfg);
+    // The spherical generator already filters relief by footprint. Requesting
+    // a metre under a 23-64 m orbital texel wasted local erosion work and aliased
+    // small rock/soil features into whole distant pixels.
+    let footprint = if spherical || cell_m > EXACT_MAX_CELL_M { (cell_m as f32).max(vm) } else { vm };
+    let hell = cfg.is_hell();
+    let tidal = engine_worldgen::planetary::tidal_coasts(cfg);
+    // The modern Superflat generator returns the same ground column at every
+    // coordinate. Climate still varies and is sampled at every texel.
+    let flat_surface = (cfg.world_type == engine_voxel::WorldType::Superflat
+        && cfg.generator_version >= 2).then(|| surface_at(cfg, 0, 0, cell_m));
     while cursor.next_sample < total {
         let k = cursor.next_sample;
         let (x, z) = sample_coord(cfg, id, k % TILE_SAMPLES, k / TILE_SAMPLES);
-        let (column_height, surface) = if id.cell_m() > EXACT_MAX_CELL_M {
-            let (top, surface) = engine_worldgen::landscape::preview_surface_lod(cfg, x, z, id.cell_m() as f32);
-            ((top - 1.0).round() as i32, surface)
+        let (column_height, surface, inland_head, suspended, canopy, sampled_climate) = if spherical {
+            let (column, head, ground) = engine_worldgen::planetary::orbital_surface(cfg, x, z, footprint);
+            // Coverage follows the actual admission field, including ecological
+            // clearings, river banks, substrate and exposed mountain exclusions.
+            let canopy = if head.is_none() && column.height >= water_level {
+                1.0 - (-2.8 * column.vegetation_density).exp()
+            } else { 0.0 };
+            (column.height, column.surface, head, ground.suspended, canopy, Some((ground.temperature, ground.moisture)))
         } else {
-            let column = engine_worldgen::sample_column(cfg, x, z);
-            (column.height, column.surface)
+            let (height, surface) = flat_surface.unwrap_or_else(|| surface_at(cfg, x, z, cell_m));
+            (height, surface, None, 0.0, 0.0, None)
         };
         let height = cfg.world_y(column_height);
-        let (heat, wet, _) =
-            engine_worldgen::landscape::visual_ecology(cfg, x as f32 * vm, z as f32 * vm, height);
+        let (heat, wet) = if hell { (1.0, 0.0) } else if let Some(climate) = sampled_climate { climate } else {
+            let (heat, wet) = engine_worldgen::landscape::lowland_climate(cfg, x as f32 * vm, z as f32 * vm);
+            (engine_worldgen::landscape::lapse_heat(cfg, heat, height), wet)
+        };
         let idx = k as usize;
         data.height_m[idx] = height_i16(height);
-        data.material[idx] = material_index(surface);
-        data.water[idx] = u8::from(column_height < water_level);
-        data.climate[idx] = [unit_byte(heat), unit_byte(wet)];
+        let frozen = column_height < water_level
+            && cfg.world_type == engine_voxel::WorldType::Planet
+            && engine_worldgen::planet::sea_ice_at(cfg, x, z);
+        data.material[idx] = if frozen { material_index(BlockId::Ice) } else { material_index(surface) };
+        // Sea ice rests on the marine datum, not on the bathymetric bed.
+        if frozen { data.height_m[idx] = height_i16(cfg.world_y(water_level)); }
+        data.water[idx] = if frozen || hell { 0 }
+            else if let Some(head) = inland_head.filter(|h| *h > cfg.world_y(water_level)) {
+                1 + (head - f32::from(data.height_m[idx])).round().clamp(1.0, 127.0) as u8
+            } else { u8::from(column_height < water_level) };
+        let optical = if tidal && data.water[idx] != 0 { suspended } else { heat };
+        data.climate[idx] = [unit_byte(optical), unit_byte(wet), unit_byte(canopy), 255];
         cursor.next_sample += 1;
         if cursor.next_sample % BUDGET_STRIDE == 0 && cursor.next_sample < total && !budget.has_time() {
             return false;
         }
     }
+    super::surface::finish(data, cfg.world_y(water_level));
     true
 }
 
@@ -136,7 +182,7 @@ mod tests {
     use std::time::Duration;
 
     fn cfg() -> WorldSampleConfig {
-        WorldSampleConfig { generator_version: 53, seed: 74, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter }
+        WorldSampleConfig { planet: None, generator_version: 53, seed: 74, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter }
     }
 
     #[test]
@@ -181,7 +227,7 @@ mod tests {
                 cfg().world_y(column.height),
             );
             let k = (j * TILE_SAMPLES + i) as usize;
-            assert_eq!(data.climate[k], [unit_byte(heat), unit_byte(wet)]);
+            assert_eq!(data.climate[k][..2], [unit_byte(heat), unit_byte(wet)]);
         }
     }
 

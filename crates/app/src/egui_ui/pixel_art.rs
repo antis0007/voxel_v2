@@ -60,6 +60,7 @@ pub fn glyph(ch: u8, accent: Color32) -> Option<Color32> {
         b'4' => HIGHLIGHT,
         b'5' => GOLD,
         b'6' => EMBER,
+        b'A' => top_light(accent),
         _ => return None,
     })
 }
@@ -101,14 +102,14 @@ fn perimeter_cell(index: i32, nx: i32, ny: i32) -> (i32, i32) {
         return (index, 0);
     }
     let index = index - w;
-    if index < h {
-        return (w - 1, index);
+    if index < h - 1 {
+        return (w - 1, index + 1);
     }
-    let index = index - h;
-    if index < w {
-        return (w - 1 - index, h - 1);
+    let index = index - (h - 1);
+    if index < w - 1 {
+        return (w - 2 - index, h - 1);
     }
-    (0, (h - 1 - (index - w)).max(0))
+    (0, (h - 2 - (index - (w - 1))).max(1))
 }
 
 /// Rainbow selection frame for a chosen slot.
@@ -116,14 +117,23 @@ fn perimeter_cell(index: i32, nx: i32, ny: i32) -> (i32, i32) {
 /// Cells sit on the two-pixel art lattice and roughly a third of them drop out
 /// to the dither threshold, so the frame reads as pixel art instead of a stroke.
 /// Hue travels twice around the perimeter and drifts with `seconds`, coverage
-/// thins toward the bottom, and a short inner halo gathers under the top edge.
+/// thins toward the bottom, with shaded pixels and one falling spark per side.
 /// The vertical density gradient is the same one the world interaction overlay
 /// uses, which is what ties the two effects together.
 pub fn rainbow_selection(painter: &egui::Painter, rect: egui::Rect, seconds: f64) {
-    const CELL: f32 = 2.0;
-    let nx = ((rect.width() / CELL).round() as i32).max(1);
-    let ny = ((rect.height() / CELL).round() as i32).max(1);
-    let perimeter = 2 * (nx + ny);
+    if !painter.is_visible() || !rect.intersects(painter.clip_rect()) { return; }
+    let still = super::magic_fx::reduced(painter.ctx());
+    let seconds = if still { 2.0 } else { (seconds * 12.0).floor() / 12.0 };
+    // Whole physical pixels at fractional desktop/UI scales as well as 1x.
+    let pixels_per_point = painter.ctx().pixels_per_point().max(0.1);
+    let cell_size = (2.0 * pixels_per_point).round().max(1.0) / pixels_per_point;
+    let rect = egui::Rect::from_min_max(
+        egui::pos2((rect.left()*pixels_per_point).round()/pixels_per_point, (rect.top()*pixels_per_point).round()/pixels_per_point),
+        rect.max,
+    );
+    let nx = ((rect.width() / cell_size).floor() as i32).max(2);
+    let ny = ((rect.height() / cell_size).floor() as i32).max(2);
+    let perimeter = 2 * (nx + ny) - 4;
     let drift = (seconds * 0.18) as f32;
 
     for index in 0..perimeter {
@@ -132,24 +142,25 @@ pub fn rainbow_selection(painter: &egui::Painter, rect: egui::Rect, seconds: f64
         if dither4(cx, cy) > 0.35 + up * 0.55 {
             continue;
         }
-        let hue = index as f32 / perimeter as f32 * 2.0 + drift;
+        let hue = ((index as f32 / perimeter as f32 * 2.0 + drift) * 12.0).floor() / 12.0;
         let cell = egui::Rect::from_min_size(
-            rect.min + egui::vec2(cx as f32 * CELL, cy as f32 * CELL),
-            egui::vec2(CELL, CELL),
+            rect.min + egui::vec2(cx as f32 * cell_size, cy as f32 * cell_size),
+            egui::vec2(cell_size, cell_size),
         );
         painter.rect_filled(cell, 0, hsv(hue, 0.72, 0.72 + up * 0.28));
     }
 
-    // Inner halo: three rows under the top edge, fading downward.
-    for row in 0..3 {
+    // Dithered shade pixels replace translucent rainbow fog.
+    for row in 0..2 {
         let up = 1.0 - row as f32 / 3.0;
-        let alpha = (34.0 * up) as u8;
+        let alpha = (24.0 * up) as u8;
         for column in 0..nx {
+            if dither4(column, row) > 0.3 * up { continue; }
             let hue = column as f32 / nx as f32 * 2.0 + drift;
             let shade = hsv(hue, 0.55, 0.88);
             let cell = egui::Rect::from_min_size(
-                rect.min + egui::vec2(column as f32 * CELL, (row + 1) as f32 * CELL),
-                egui::vec2(CELL, CELL),
+                rect.min + egui::vec2(column as f32 * cell_size, (row + 1) as f32 * cell_size),
+                egui::vec2(cell_size, cell_size),
             );
             painter.rect_filled(
                 cell,
@@ -158,6 +169,27 @@ pub fn rainbow_selection(painter: &egui::Painter, rect: egui::Rect, seconds: f64
             );
         }
     }
+    // Keep the icon and stack count clear: sparks fall in the narrow side gutters.
+    // One per side; more read as noise next to the halo and the frame.
+    let clipped = painter.with_clip_rect(painter.clip_rect().intersect(rect.shrink(2.0)));
+    for i in 0..2 {
+        let seed = ((i * 37 + 11) % 67) as f32 / 67.0;
+        let age = (seconds as f32 * (0.22 + seed * 0.10) + i as f32 * 0.5).fract();
+        let y = rect.top() + 3.0 + age * age * (rect.height() - 14.0).max(0.0);
+        let inset = 2.0 + ((seed * 2.0 + age).floor() % 2.0) * cell_size;
+        let x = if i % 2 == 0 { rect.left() + inset } else { rect.right() - inset - cell_size };
+        let hue = ((drift + seed) * 12.0).floor() / 12.0;
+        let body = hsv(hue, 0.55, 0.85);
+        for tail in 0..2 {
+            let alpha = ((1.0 - age) * (120.0 - tail as f32 * 60.0)) as u8;
+            let color = if tail == 0 { mix(body, PAPER, 0.55) } else { body };
+            clipped.rect_filled(egui::Rect::from_min_size(
+                egui::pos2((x / cell_size).floor() * cell_size, (y / cell_size).floor() * cell_size - tail as f32 * cell_size),
+                egui::vec2(cell_size, cell_size)), 0,
+                Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha));
+        }
+    }
+    if !still { painter.ctx().request_repaint_after(std::time::Duration::from_millis(83)); }
 }
 
 #[cfg(test)]

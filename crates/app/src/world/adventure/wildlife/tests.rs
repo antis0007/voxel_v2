@@ -3,7 +3,45 @@ use crate::world::WorldType;
 use engine_core::VoxelScalePreset;
 
 fn world(scale: VoxelScalePreset) -> World {
-    World::with_seed(WorldType::Superflat, scale, 2738958700)
+    let mut w = World::with_seed(WorldType::Superflat, scale, 2738958700);
+    let feet = Vec3::new(0.0, (w.terrain_height_at(0, 0) + 1) as f32 * scale.meters() + 0.02, 0.0);
+    load_spawn_neighborhood(&mut w, feet);
+    w
+}
+
+// Production wildlife never loads terrain. Positive fixtures explicitly make
+// the same generated cells resident; no blocks or world-version gates change.
+pub(super) fn load_spawn_neighborhood(w: &mut World, feet: Vec3) {
+    let scale = w.voxel_scale.meters();
+    let mut chunks = std::collections::HashSet::new();
+    let mut include = |point: Vec3, radius: f32| {
+        let a = crate::world::chunk_coord_from_world_block(((point - Vec3::new(radius, 4.0, radius)) / scale).floor().as_ivec3());
+        let b = crate::world::chunk_coord_from_world_block(((point + Vec3::new(radius, 4.0, radius)) / scale).floor().as_ivec3());
+        for x in a.x..=b.x { for y in a.y..=b.y { for z in a.z..=b.z { chunks.insert(IVec3::new(x, y, z)); } } }
+    };
+    include(feet, 12.0);
+    let cx = (feet.x / PATCH_METERS).floor() as i32;
+    let cz = (feet.z / PATCH_METERS).floor() as i32;
+    for x in cx - 1..=cx + 1 { for z in cz - 1..=cz + 1 { for slot in 0..2 {
+        let (_, mut point) = candidate(w.seed, x, z, slot);
+        let cell = (point / scale).floor().as_ivec3();
+        point.y = (w.terrain_height_at(cell.x, cell.z) + 1) as f32 * scale + 0.02;
+        include(point, 3.0);
+    } } }
+    for chunk in chunks { assert!(w.admit_edit_chunk(chunk), "explicit fixture residency"); }
+}
+
+#[test]
+fn wildlife_does_not_spawn_or_load_unresident_terrain() {
+    let w = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 2738958700);
+    let feet = Vec3::new(0.0, (w.terrain_height_at(0, 0) + 1) as f32 + 0.02, 0.0);
+    let resident = w.chunks.len();
+    let revision = w.revision();
+    let mut a = Adventure::default();
+    spawn(&mut a, &w, feet);
+    assert!(a.enemies.is_empty());
+    assert_eq!(w.chunks.len(), resident);
+    assert_eq!(w.revision(), revision);
 }
 fn round_trip(a: &Adventure) -> State {
     let mut bytes = Vec::new();
@@ -49,7 +87,8 @@ fn wildlife_flees_without_attacking_at_all_scales() {
             let feet = e.pos + Vec3::Z * 2.0;
             for i in 0..240 {
                 super::super::navigation::gravity(&mut e, &w, 1.0/120.0);
-                tick(&mut e, &w, feet, i as f32 / 120.0, 1.0/120.0);
+                let mut navigation_budget = 1;
+                tick(&mut e, &w, feet, i as f32 / 120.0, 1.0/120.0, None, &mut navigation_budget);
                 assert!(free(&w, e.pos, kind));
                 assert_eq!(e.tell, 0.0);
                 assert!(!e.visible);
@@ -113,10 +152,15 @@ fn wildlife_support_rejects_cliffs_and_fluids_at_all_scales() {
 #[test]
 fn wildlife_populates_generated_outdoor_grass_without_editing_terrain() {
     for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::HalfMeter, VoxelScalePreset::QuarterMeter] {
-        let w = World::with_seed(WorldType::Hills, scale, 2738958700);
+        let mut w = World::with_seed(WorldType::Hills, scale, 2738958700);
         let mut a = Adventure::default();
         let feet = Vec3::new(0.0,(w.terrain_height_at(0,0)+1) as f32*scale.meters()+0.02,0.0);
+        load_spawn_neighborhood(&mut w, feet);
+        let resident = w.chunks.len();
+        let revision = w.revision();
         spawn(&mut a,&w,feet);
+        assert_eq!(w.chunks.len(), resident);
+        assert_eq!(w.revision(), revision);
         assert!(!a.enemies.is_empty(), "grass habitat absent at {scale:?}");
         assert!(a.enemies.iter().all(|e| free(&w,e.pos,e.kind)));
         assert!(a.records.is_empty());

@@ -76,7 +76,9 @@ impl Routes {
         let key = match via {
             Some(v) => {
                 let &cell = routes.cell_index.get(&v)?;
-                let joined = DIRS.iter().any(|d| v + *d * size == from) && !network.closed.contains(&(v, from));
+                let joined = DIRS.iter().any(|d| v + *d * size == from)
+                    && !network.closed.contains(&(v, from))
+                    && !network.no_extract.contains(&(v, from));
                 if !joined {
                     return None;
                 }
@@ -161,8 +163,12 @@ impl NetRoutes {
                     open[side] = ni;
                 }
                 if let Some(&port) = port_index.get(&n) {
-                    touch.push(port);
-                    starts[port as usize].push(ci as u32);
+                    if !network.no_insert.contains(&(c, n)) {
+                        touch.push(port);
+                    }
+                    if !network.no_extract.contains(&(c, n)) {
+                        starts[port as usize].push(ci as u32);
+                    }
                 }
             }
             links.push(open);

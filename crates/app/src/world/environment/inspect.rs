@@ -10,12 +10,18 @@ pub struct Inspection {
     pub condition: &'static str,
     pub water_ul: u64,
     pub sediment_mg: u64,
+    pub pollution_mg: u64,
+    pub air: [f32; super::super::industry::SPECIES],
 }
 
 pub fn at(world: &World, p: IVec3) -> Option<Inspection> {
-    if !State::enabled(world.generator_version) {
-        return None;
+    let pollution_mg=world.industry.contamination(p,world.voxel_scale.meters());
+    let air=world.industry.concentration(p+IVec3::Y,world.voxel_scale.meters());
+    if pollution_mg > 0 || air.iter().zip(&super::super::industry::config::CONFIG.species)
+        .any(|(&v, species)| v > 1.0 && species.harm_mg_m3 > 0.0) {
+        return Some(Inspection { condition: "Pollution", water_ul: world.water_microlitres(p), sediment_mg: 0, pollution_mg, air });
     }
+    if !State::enabled(world.generator_version) { return None; }
     let mass = sediment_cell_mass(world);
     let stock = world.environment.sediment_at(p);
     let observation = |condition| Inspection {
@@ -23,6 +29,7 @@ pub fn at(world: &World, p: IVec3) -> Option<Inspection> {
         water_ul: world.environment.patches.get(&world.environment.owner(p))
             .map_or_else(|| world.water_microlitres(p), |patch| patch.soil.water),
         sediment_mg: stock,
+        pollution_mg, air,
     };
     if stock >= mass {
         return Some(observation("Flow Blocked"));

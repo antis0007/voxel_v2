@@ -15,6 +15,7 @@ const MAX_MENDS: u32 = 8;
 const LASH_RANGE: f32 = 2.8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Action {
     Weave,
     Lash,
@@ -22,6 +23,7 @@ pub(super) enum Action {
     Shift,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Payload {
     #[default]
     Shard,
@@ -29,12 +31,14 @@ pub(super) enum Payload {
     Fan,
 }
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Node {
     pub pos: Vec3,
     /// Zero or less means shattered: its strands carry nothing.
     pub health: f32,
 }
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Bolt {
     pub path: [u8; MAX_NODES],
     pub len: u8,
@@ -45,7 +49,11 @@ pub(super) struct Bolt {
     pub aim: Vec3,
 }
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct State {
+    /// Derived presentation state; rebuilt by simulation after loading.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    motion: motion::Motion,
     pub run: Option<Run<Action>>,
     pub nodes: [Node; MAX_NODES],
     pub count: u8,
@@ -182,6 +190,21 @@ pub(super) fn tick(
     sounds: &mut Vec<Sound>,
     navigation_budget: &mut usize,
 ) -> (f32, Vec3) {
+    let result = tick_actions(e, world, feet, eye, dt, shots, sounds, navigation_budget);
+    motion::advance(e, world, dt, sounds);
+    result
+}
+
+fn tick_actions(
+    e: &mut Enemy,
+    world: &mut World,
+    feet: Vec3,
+    eye: Vec3,
+    dt: f32,
+    shots: &mut Vec<Projectile>,
+    sounds: &mut Vec<Sound>,
+    navigation_budget: &mut usize,
+) -> (f32, Vec3) {
     initialize(e);
     navigation::gravity(e, world, dt);
     if (feet - e.home).length() > 48.0 {
@@ -297,6 +320,16 @@ pub(super) fn tick(
 
 mod lattice;
 mod model;
+mod motion;
+pub(super) fn append_lights(e: &Enemy, out: &mut Vec<(Vec3, f32, [f32; 3], f32)>) {
+    let color = [[0.64, 0.36, 1.0], [1.0, 0.40, 0.12], [0.22, 1.0, 0.68]][boss_look::index(e)];
+    for i in 0..e.glass.count as usize {
+        if !e.glass.intact(i) { continue; }
+        let charged = e.glass.bolt.is_some_and(|b| b.path[b.at as usize] as usize == i);
+        let health = (e.glass.nodes[i].health / node_health(e)).clamp(0.0, 1.0);
+        out.push((e.glass.nodes[i].pos, 3.8, color, 0.45 + health * 0.45 + if charged { 0.8 } else { 0.0 }));
+    }
+}
 pub(super) use lattice::{carry, route, strike_nodes};
 pub(super) use model::model;
 

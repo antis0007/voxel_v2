@@ -10,6 +10,9 @@ use super::shell_worker::ShellBake;
 use super::band::GlobeMask;
 use super::tile::{TILE_CELLS, TILE_SAMPLES, TileId};
 use glam::{DVec3, Mat3, Mat4, Vec3};
+use std::{collections::HashMap, time::Instant};
+
+const MORPH_SECONDS: f32 = 0.35;
 
 /// Tile vertex grid edge: the 65x65 lattice plus a skirt ring (`GLOBE_SKIRT_SIDE`).
 pub const SKIRT_SIDE: u32 = TILE_SAMPLES + 2;
@@ -26,10 +29,10 @@ pub struct GlobeUniform {
     pub radius_m: f32,
     pub sea_level_m: f32,
     pub focal_px: f32,
-    /// Bit 0 lean tier, bit 1 cloud shadow on, bit 2 night lights on.
+    /// Bit 0 lean tier, bit 1 cloud shadow on, bit 2 night lights on, bits 8-15 debug view id.
     pub flags: u32,
-    /// Glow colour rgb, strength.
-    pub limb: [f32; 4],
+    /// Moon direction in body space, w moon strength (1 = a risen planet moon).
+    pub moon_body: [f32; 4],
     /// Camera-relative body-space view-projection with reverse-Z.
     pub view_proj: [[f32; 4]; 4],
 }
@@ -59,7 +62,7 @@ pub fn body_view_proj(eye_chart_m: DVec3, forward: Vec3, projection: Mat4) -> (D
     let to_body = Mat3::from_cols(frame.x_axis.as_vec3(), frame.y_axis.as_vec3(), frame.z_axis.as_vec3());
     let forward_body = (to_body * forward).normalize();
     let up_body = to_body * Vec3::Y;
-    let view = Mat4::look_to_rh(Vec3::ZERO, forward_body, up_body);
+    let view = glam::camera::rh::view::look_to_mat4(Vec3::ZERO, forward_body, up_body);
     (chart::to_body(eye_chart_m), projection * view)
 }
 
@@ -67,17 +70,20 @@ pub struct Globe {
     pipeline: wgpu::RenderPipeline,
     shell_pipeline: wgpu::RenderPipeline,
     shell: ShellResources,
-    /// Faces baked at least once; the shell draws only when all six are.
+    /// Faces baked at least once; ready faces can draw while others are pending.
     shell_faces: u8,
+    draw_shell: bool,
     bind_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     mask: wgpu::Buffer,
+    uploaded_mask: GlobeMask,
     instances: wgpu::Buffer,
     indices: wgpu::Buffer,
     shell_indices: wgpu::Buffer,
     tiles: TilePool,
     draw_count: u32,
     instance_scratch: Vec<TileInstance>,
+    morph_started: HashMap<TileId, Instant>,
 }
 
 /// Per-frame globe counters for the render stats.
@@ -94,13 +100,14 @@ impl Globe {
     pub fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat) -> Globe {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("globe shader"),
-            source: wgpu::ShaderSource::Wgsl(crate::shader_sources::globe_shader_source().into()),
+            source: wgpu::ShaderSource::Wgsl(crate::shader_sources::globe_shader_source_for_filtering(
+                device.features().contains(wgpu::Features::FLOAT32_FILTERABLE)).into()),
         });
         let layout = shell_gpu::bind_group_layout(device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("globe pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipeline = shell_gpu::pipeline(device, &pipeline_layout, &shader, color_format, false);
         let shell_pipeline = shell_gpu::pipeline(device, &pipeline_layout, &shader, color_format, true);
@@ -146,9 +153,17 @@ impl Globe {
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&shell.sampler) },
                 wgpu::BindGroupEntry { binding: 6, resource: shell.lights.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 7, resource: mask.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: shell.blend.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: shell.light_groups.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(&shell.planet_depth.view) },
+                wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(&shell.noise.view) },
+                wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::Sampler(&shell.noise.sampler) },
+                wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(&tiles.normal_view) },
             ],
         });
-        Globe { pipeline, shell_pipeline, shell, shell_faces: 0, bind_group, uniform, mask, instances, indices, shell_indices, tiles, draw_count: 0, instance_scratch: Vec::with_capacity(MAX_RESIDENT + SHELL_FACES as usize) }
+        Globe { pipeline, shell_pipeline, shell, shell_faces: 0, draw_shell: false, bind_group, uniform, mask,
+            uploaded_mask: bytemuck::Zeroable::zeroed(), instances, indices, shell_indices, tiles,
+            draw_count: 0, instance_scratch: Vec::with_capacity(MAX_RESIDENT + SHELL_FACES as usize), morph_started: HashMap::new() }
     }
 
     /// The only production entry point: evict, upload, then prepare, in that order.
@@ -188,38 +203,82 @@ impl Globe {
     /// Writes the uniform and one instance per resident tile of `selection.draw`.
     pub(crate) fn prepare(&mut self, queue: &wgpu::Queue, selection: &Selection, eye_body: DVec3, uniform: GlobeUniform) {
         self.instance_scratch.clear();
+        let now = Instant::now();
+        self.morph_started.retain(|id, _| self.tiles.slot(*id).is_some());
         for id in &selection.draw {
             if self.instance_scratch.len() == MAX_RESIDENT {
                 break;
             }
             if let Some(slot) = self.tiles.slot(*id) {
-                self.instance_scratch.push(instance(*id, slot, eye_body));
+                let mut data = instance(*id, slot, eye_body);
+                let started = *self.morph_started.entry(*id).or_insert(now);
+                if let Some(parent_slot) = id.parent().and_then(|p| self.tiles.slot(p)) {
+                    let t = (now.duration_since(started).as_secs_f32()/MORPH_SECONDS).clamp(0.0,1.0);
+                    data.origin_body[3] = (t*t*(3.0-2.0*t))
+                        * super::scheduler::detail_factor(*id,eye_body,f64::from(uniform.focal_px)
+                            * if (uniform.flags >> 16) & 3 == 1 { 2.0 } else { 1.0 });
+                    data.pad = parent_slot + 1;
+                }
+                self.instance_scratch.push(data);
             }
         }
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
         let count = self.instance_scratch.len();
-        self.instance_scratch.extend((0..SHELL_FACES as u8).map(|face| instance(TileId::root(face), 0, eye_body)));
         if count > 0 {
-            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.instance_scratch[..count]));
+            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.instance_scratch));
         }
-        let shell_offset = (MAX_RESIDENT * std::mem::size_of::<TileInstance>()) as u64;
-        queue.write_buffer(&self.instances, shell_offset, bytemuck::cast_slice(&self.instance_scratch[count..]));
-        self.instance_scratch.truncate(count);
+        // Leave a metre of slack for the shader's f32 altitude. Shell data
+        // still streams below this point for ground shadows and later ascent.
+        self.draw_shell = count > 0 && self.shell_ready() && crate::render::draw_clouds() && (uniform.flags & 8) == 0
+            && eye_body.length() - f64::from(uniform.radius_m) > super::shell::HANDOFF_M.0 - 1.0;
+        if self.draw_shell {
+            self.instance_scratch.clear();
+            self.instance_scratch.extend((0..SHELL_FACES as u8).map(|face| instance(TileId::root(face), 0, eye_body)));
+            let shell_offset = (MAX_RESIDENT * std::mem::size_of::<TileInstance>()) as u64;
+            queue.write_buffer(&self.instances, shell_offset, bytemuck::cast_slice(&self.instance_scratch));
+        }
         self.draw_count = count as u32;
     }
 
+    /// Prevents refinement through several newly visible levels in one frame.
+    pub fn can_refine(&self, id: TileId) -> bool {
+        id.level == 0 || self.morph_started.get(&id)
+            .is_some_and(|start| start.elapsed().as_secs_f32() >= MORPH_SECONDS)
+    }
+
     /// Writes the resident-chunk mask the opaque tiles discard under.
-    pub fn set_mask(&self, queue: &wgpu::Queue, mask: &GlobeMask) {
-        queue.write_buffer(&self.mask, 0, bytemuck::bytes_of(mask));
+    pub fn set_mask(&mut self, queue: &wgpu::Queue, mask: &GlobeMask) {
+        if self.uploaded_mask.coverage != mask.coverage {
+            queue.write_buffer(&self.mask, 0, bytemuck::bytes_of(mask));
+            self.uploaded_mask = *mask;
+        } else if bytemuck::bytes_of(&self.uploaded_mask.params) != bytemuck::bytes_of(&mask.params) {
+            let offset = std::mem::offset_of!(GlobeMask, params) as u64;
+            queue.write_buffer(&self.mask, offset, bytemuck::bytes_of(&mask.params));
+            self.uploaded_mask.params = mask.params;
+        }
     }
 
     /// Uploads finished shell faces; a face from a stale resolution is ignored.
-    pub fn upload_shell(&mut self, queue: &wgpu::Queue, bakes: &[ShellBake]) {
+    pub fn upload_shell(&mut self, queue: &wgpu::Queue, bakes: impl IntoIterator<Item = ShellBake>) {
+        self.shell.planet_depth.upload_once(queue);
+        self.shell.noise.upload_once(queue);
         for bake in bakes {
+            let face = bake.face;
             if self.shell.upload_face(queue, bake) {
-                self.shell_faces |= 1 << bake.face;
+                self.shell_faces |= 1 << face;
             }
         }
+        self.shell.update_blend(queue);
+    }
+
+    pub fn shell_upload_bytes(&self, bake: &ShellBake) -> usize { self.shell.upload_bytes(bake) }
+    pub fn shell_can_upload(&self, face: u8) -> bool { self.shell.can_upload(face) }
+    pub fn set_shell_wind(&mut self, wind: [f32; 2]) { self.shell.set_wind(wind); }
+    pub fn set_shell_flow(&mut self, controls: &crate::world::CloudControls, sky_time_s: f32) {
+        self.shell.set_flow(controls, sky_time_s);
+    }
+    pub fn set_shell_obstacles(&mut self, weights: Option<std::sync::Arc<[f32]>>) {
+        self.shell.set_obstacles(weights);
     }
 
     /// Returns the light count for `GlobeUniform.eye_body[3]`.
@@ -232,7 +291,7 @@ impl Globe {
     }
 
     pub fn shell_ready(&self) -> bool {
-        self.shell_faces == 0b11_1111
+        self.shell_faces != 0
     }
 
     #[cfg(test)]
@@ -254,18 +313,25 @@ impl Globe {
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..TILE_INDEX_COUNT, 0, 0..self.draw_count);
-        if self.shell_ready() {
+        if self.draw_shell {
             let first = MAX_RESIDENT as u32;
             pass.set_pipeline(&self.shell_pipeline);
             pass.set_index_buffer(self.shell_indices.slice(..), wgpu::IndexFormat::Uint16);
-            pass.draw_indexed(0..SHELL_INDEX_COUNT, 0, first..first + SHELL_FACES);
+            for face in 0..SHELL_FACES {
+                if self.shell_faces & (1 << face) != 0 {
+                    pass.draw_indexed(0..SHELL_INDEX_COUNT, 0, first + face..first + face + 1);
+                }
+            }
         }
     }
 
     /// Drops every resident tile and shell face, as for a different world.
     pub fn clear(&mut self) {
         self.tiles.clear();
+        self.morph_started.clear();
         self.shell_faces = 0;
+        self.draw_shell = false;
+        self.shell.clear_history();
         self.draw_count = 0;
     }
 

@@ -45,6 +45,7 @@ pub fn apply(p: &mut Preferences) {
     };
     ACTIVE.store(true, Ordering::Relaxed);
     crate::render::shadow::set_enabled(false);
+    crate::render::sky_volume::set_enabled(false);
 }
 
 /// Integrated graphics, detected from the adapter. Unlike `apply`, this keeps
@@ -56,6 +57,7 @@ pub fn apply(p: &mut Preferences) {
 /// shadows are not a saved setting, so they stay off on every launch.
 pub fn apply_integrated(p: &mut Preferences, first_run: bool) {
     crate::render::shadow::set_enabled(false);
+    crate::render::sky_volume::set_enabled(false);
     eprintln!("[quality] integrated GPU: shadows off{}",
         if first_run { "; first run, integrated profile applied" } else { "; saved preferences kept" });
     if !first_run {

@@ -57,6 +57,7 @@ pub(super) fn tend(adventure: &mut Adventure, world: &mut World) {
         };
         let state = adventure.relic_state(relic);
         let pos = relic.pos;
+        let guardian = bosses::name(bosses::kind(relic.kind));
         let family = shrine.family;
         let door = shrine.cells(access::DOOR);
         let sealed = door.iter().any(|p| world.get(*p) == family.door_block());
@@ -67,16 +68,17 @@ pub(super) fn tend(adventure: &mut Adventure, world: &mut World) {
             if (solved || valves)
                 && replace(world, &door, Some(family.door_block()), BlockId::Air) > 0
             {
-                world.expedition.say(if solved {
-                    family.opened_message()
-                } else {
-                    "The valves vent the furnace. Its door grinds open."
-                });
+                let at = door.first().map_or(pos, |c| cell_metres(world, *c));
+                world.expedition.say_at(
+                    if solved { family.opened_message() } else { "The valves vent the furnace. Its door grinds open." },
+                    format!("Shrine: {guardian}\nDoor: Open"),
+                    at,
+                );
                 sound(&mut adventure.sounds, Cue::Clang, Some(pos), 0.9);
             }
         }
         for t in shrine.treasures() {
-            open_treasure(adventure, world, &shrine, t, state & BOSS_DEFEATED != 0, pos);
+            open_treasure(adventure, world, &shrine, t, state & BOSS_DEFEATED != 0, pos, guardian);
         }
     }
 }
@@ -92,7 +94,11 @@ fn treasure_open(world: &World, shrine: &Shrine, t: &Treasure, boss_down: bool) 
 /// Grants one treasure room once: clears its seal (lever gate or boss ward),
 /// fills the cache, and drops a found wand of the room's tier. The pedestal
 /// turns to tombstone, which cannot be edited, so the grant never repeats.
-fn open_treasure(adventure: &mut Adventure, world: &mut World, shrine: &Shrine, t: Treasure, boss_down: bool, pos: Vec3) {
+fn cell_metres(world: &World, c: glam::IVec3) -> Vec3 {
+    (c.as_vec3() + Vec3::splat(0.5)) * world.sample_config().voxel_meters()
+}
+
+fn open_treasure(adventure: &mut Adventure, world: &mut World, shrine: &Shrine, t: Treasure, boss_down: bool, pos: Vec3, guardian: &str) {
     let pedestal = shrine.cells(t.pedestal);
     if pedestal.iter().all(|p| world.get(*p) == BlockId::TombStone) || !treasure_open(world, shrine, &t, boss_down) {
         return;
@@ -112,13 +118,14 @@ fn open_treasure(adventure: &mut Adventure, world: &mut World, shrine: &Shrine, 
     if replace(world, &pedestal, None, BlockId::TombStone) != pedestal.len() {
         return;
     }
-    world.expedition.say(match t.opens {
-        Opens::Boss => "Reward Vault Open",
-        Opens::Lever(_) => "Treasure Gate Open",
-        Opens::Cracked => "Cache Open",
-    });
+    let (message, seal) = match t.opens {
+        Opens::Boss => ("Reward Vault Open", "Guardian Defeated"),
+        Opens::Lever(_) => ("Treasure Gate Open", "Lever Pin Pulled"),
+        Opens::Cracked => ("Cache Open", "Cracked Wall Broken"),
+    };
     sound(&mut adventure.sounds, Cue::Treasure, Some(pos), 0.8);
     let Some(&c) = cache.first() else {
+        world.expedition.say_at(message, format!("Shrine: {guardian}\nSeal: {seal}"), pos);
         return;
     };
     let seed = hash_u32(
@@ -128,13 +135,16 @@ fn open_treasure(adventure: &mut Adventure, world: &mut World, shrine: &Shrine, 
             ^ u32::from(t.index).wrapping_mul(0x9e37_79b9),
     )
     .max(1);
+    let at = cell_metres(world, c);
+    let mut reward = format!("{} ×{}", family.cache_block().display_name(), cache.len());
     if let Some(item) = adventure.mint_wand(super::super::wand_items::generate(seed, u32::from(t.tier))) {
-        let v = world.sample_config().voxel_meters();
+        reward.push_str(&format!(" · Wand Tier {}", t.tier));
         world.inventory.dropped.push(crate::world::inventory::DroppedStack {
-            pos: (c.as_vec3() + Vec3::splat(0.5)) * v + Vec3::Y,
+            pos: at + Vec3::Y,
             stack: crate::world::inventory::ItemStack::new(item, 1),
         });
     }
+    world.expedition.say_at(message, format!("Shrine: {guardian}\nSeal: {seal}\nReward: {reward}"), at);
 }
 
 #[cfg(test)]

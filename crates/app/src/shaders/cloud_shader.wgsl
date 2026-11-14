@@ -309,6 +309,9 @@ fn cell_low_aabb(w: CellWeather) -> CellAABB {
     aabb.y_min += CLOUD_LOW_ALTITUDE_OFFSET_M;
     aabb.y_max += CLOUD_LOW_ALTITUDE_OFFSET_M;
 
+    aabb.y_min = cloud_atmospheric_height(aabb.y_min);
+    aabb.y_max = cloud_atmospheric_height(aabb.y_max);
+
     return aabb;
 }
 
@@ -337,9 +340,12 @@ fn cell_mid_aabb(w: CellWeather) -> CellAABB {
     aabb.y_max += CLOUD_MID_ALTITUDE_OFFSET_M;
     let nominal_min = max(mix(220.0, 420.0, mid_base_ctl) * 0.94
         - mix(20.0, 45.0, altostratus_ctl) - 2.0, 0.0) + CLOUD_MID_ALTITUDE_OFFSET_M;
-    let lift = max(cloud_layer_bounds().mid_base - nominal_min, 0.0);
+    let lift = max(cloud_unscaled_layer_bounds().mid_base - nominal_min, 0.0);
     aabb.y_min += lift;
     aabb.y_max += lift;
+
+    aabb.y_min = cloud_atmospheric_height(aabb.y_min);
+    aabb.y_max = cloud_atmospheric_height(aabb.y_max);
 
     return aabb;
 }
@@ -363,6 +369,9 @@ fn cell_high_aabb(w: CellWeather) -> CellAABB {
 
     aabb.y_min += CLOUD_HIGH_ALTITUDE_OFFSET_M;
     aabb.y_max += CLOUD_HIGH_ALTITUDE_OFFSET_M;
+
+    aabb.y_min = cloud_atmospheric_height(aabb.y_min);
+    aabb.y_max = cloud_atmospheric_height(aabb.y_max);
 
     return aabb;
 }
@@ -500,6 +509,30 @@ fn scene_depth_distance(ndc: vec2<f32>, dir: vec3<f32>) -> f32 {
     // world positions. The basis w components carry projection coefficients.
     let view_depth = cam.ray_up.w / max(depth + cam.ray_right.w, 1e-8);
     return view_depth / max(dot(dir, cam.camera_forward.xyz), 1e-4);
+}
+
+// How far a planet's surface falls below the flat cloud frame at `xz`; zero without a globe.
+fn cloud_planet_drop(xz: vec2<f32>) -> f32 {
+    if cam.planet[0].x <= 0.0 || cam.planet[0].w < -0.5 {
+        return 0.0;
+    }
+    let h = xz - cam.camera_pos.xz;
+    return dot(h, h) / (2.0 * cam.planet[0].x);
+}
+
+// A march point in the deck's frame: the deck curves down with the planet, so the point rises.
+fn cloud_bent(ro: vec3<f32>, rd: vec3<f32>, t: f32) -> vec3<f32> {
+    let p = ro + rd * t;
+    return vec3<f32>(p.x, p.y + cloud_planet_drop(p.xz), p.z);
+}
+
+// Tangent of the bent ray at `t`, for local slab tests in the deck's frame.
+fn cloud_bent_dir(ro: vec3<f32>, rd: vec3<f32>, t: f32) -> vec3<f32> {
+    if cam.planet[0].x <= 0.0 || cam.planet[0].w < -0.5 {
+        return rd;
+    }
+    let h = ro.xz + rd.xz * t - cam.camera_pos.xz;
+    return vec3<f32>(rd.x, rd.y + dot(h, rd.xz) / cam.planet[0].x, rd.z);
 }
 
 fn slab_intersection(ro: vec3<f32>, rd: vec3<f32>, y0: f32, y1: f32) -> vec2<f32> {
@@ -725,27 +758,6 @@ fn cloud_type_height_gradient(h: f32, cloud_type: f32) -> f32 {
 }
 
 // ============================================================
-// MACRO WEATHER FIELD
-// Large-scale (80–400km) smooth coverage variation.
-// Uses domain-warped FBM to produce organic cloud streets,
-// elongated clusters, and realistic clear-sky gaps. The
-// domain warp is computed at a coarser scale so it is
-// smooth and stable — no high-frequency jumping.
-// ============================================================
-
-// macro_coverage_bias takes world_xz ALREADY advected by the caller at the
-// appropriate multiplier (matches the low-layer shape noise advection at 8x).
-// The macro field itself does NOT apply additional time advection — this keeps
-// macro coverage anchored to the same world-space frame as the shape noise.
-// Multi-scale advection drift (macro field vs shape noise) was the primary cause
-// of visible coverage flicker as the macro and shape fields drifted out of sync.
-fn macro_coverage_bias(world_xz: vec2<f32>, wind: vec2<f32>, time: f32, wspd: f32) -> f32 {
-    // Reuse the nonperiodic weather organization instead of eight additional
-    // procedural-noise evaluations at every view and shadow density sample.
-    return mix(0.35, 1.55, smoothstep(0.18, 0.82, weather_bank(world_xz)));
-}
-
-// ============================================================
 // DENSITY SAMPLERS
 // Accept pre-sampled CellWeather — call weather_at_world once
 // before the march loop and pass it to each sample call.
@@ -763,12 +775,9 @@ fn sample_low_density(
     shadow_lod         : bool,
     sample_footprint_m : f32,
     weather            : CellWeather,
-    // macro_bias sampled at the step position (p.xz + wind offset), passed in from
-    // the march loop. Evaluated per-step for seamless continuity across cell boundaries.
-    macro_bias_precomp : f32,
 ) -> f32 {
     return photographic_low_density(vec3<f32>(p.x, eff_y, p.z), base_y, top_y,
-        sample_footprint_m, weather, macro_bias_precomp, shadow_lod);
+        sample_footprint_m, weather, shadow_lod);
 }
 
 fn sample_cirrus_density(
@@ -776,19 +785,29 @@ fn sample_cirrus_density(
     base_y             : f32,
     top_y              : f32,
     eff_y              : f32,
-    sample_footprint_m : f32,
+    world_footprint_m  : f32,
     weather            : CellWeather,
 ) -> f32 {
+    let horizontal_scale = cloud_horizontal_scale() * cloud_size_ratio(light.weather_globals[2].x);
+    let sample_footprint_m = world_footprint_m / horizontal_scale;
     let cirrus_amt = weather.high_amount;
     if cirrus_amt <= 0.001 { return 0.0; }
+
+    // Every cirrus form uses this same amount. Skip the noise and flow
+    // lookups only when the authored bank or height profile is fully zero.
+    let height_shape = density_height_profile(eff_y, base_y, top_y, 0.08, 0.05);
+    let ice_bank = smoothstep(0.46, 0.82, weather.coverage)
+        * smoothstep(0.48, 0.82, cirrus_amt);
+    let effective_cirrus_amt = cirrus_amt * height_shape * ice_bank;
+    if effective_cirrus_amt == 0.0 { return 0.0; }
 
     let wind = safe_normalize2(light.weather_globals[0].zw, vec2<f32>(0.96, -0.12));
     let side = vec2<f32>(-wind.y, wind.x);
     let time = light.weather_globals[0].x;
     let wspd = max(light.weather_globals[0].y, 0.0);
 
-    let advected_xz = p.xz + wind * time * wspd * 12.0
-        * CLOUD_ADVECTION_SPEED_SCALE;
+    let advected_xz = (p.xz + wind * time * wspd * 12.0
+        * CLOUD_ADVECTION_SPEED_SCALE + cloud_flow_warp(p.xz, 0.5, LAYER_HIGH).xy) / horizontal_scale;
 
     // Compress the along-wind domain, so fibers stretch ALONG the wind.
     let along_wind  = dot(advected_xz, wind);
@@ -802,7 +821,6 @@ fn sample_cirrus_density(
     let h_frac = remap01(eff_y, base_y, top_y);
 
     let lod_shape  = clamp(log2(max(sample_footprint_m * 0.00060 * SHAPE_TEX_SIZE,  1.0)), 0.0, 7.0);
-    let lod_detail = clamp(log2(max(sample_footprint_m * 0.0018  * DETAIL_TEX_SIZE, 1.0)), 0.0, 6.0);
 
     // Large-scale fiber shape on the anisotropic domain.
     // Very compressed Y to keep the sheet extremely thin.
@@ -823,28 +841,34 @@ fn sample_cirrus_density(
         max(0.5, lod_shape)
     ).r;
 
-    let fine_keep  = 1.0 - smoothstep(14.0, 36.0, sample_footprint_m);
-    let detail_tex = sample_detail_global(stretched_xz, h_frac * 120.0, 0.0015, 0.13, lod_detail);
-    let detail_fbm = detail_tex.r * 0.625 + detail_tex.g * 0.25 + detail_tex.b * 0.125;
-    let curl_str   = detail_tex.a * 2.0 - 1.0;
-    let s3         = saturate1(detail_fbm - curl_str * 0.15);
+    let fine_keep = 1.0 - smoothstep(14.0, 36.0, sample_footprint_m);
+    var fine_fiber = 0.5;
+    if fine_keep > 0.0 {
+        let lod_detail = clamp(log2(max(sample_footprint_m * 0.0018 * DETAIL_TEX_SIZE, 1.0)), 0.0, 6.0);
+        let detail_tex = sample_detail_global(stretched_xz, h_frac * 120.0, 0.0015, 0.13, lod_detail);
+        let detail_fbm = detail_tex.r * 0.625 + detail_tex.g * 0.25 + detail_tex.b * 0.125;
+        let curl_str = detail_tex.a * 2.0 - 1.0;
+        let s3 = saturate1(detail_fbm - curl_str * 0.15);
+        fine_fiber = mix(0.5, s3, fine_keep);
+    }
 
-    // Very thin vertical profile for ice-crystal sheets (top_soft=0.05 vs 0.20 for cumulus).
-    let height_shape = density_height_profile(eff_y, base_y, top_y, 0.08, 0.05);
     let density_ctl  = mix(0.45, 1.35, authored_cloud_density());
-    let fiber        = s1 * 0.72 + s2 * 0.20 + mix(0.5, s3, fine_keep) * 0.08;
-    // Keep ice sheets in their own weather banks. A faint layer everywhere
-    // still accumulates into bright radial streaks on long horizon rays.
-    let ice_bank = smoothstep(0.46, 0.82, weather.coverage)
-        * smoothstep(0.48, 0.82, cirrus_amt);
-    let effective_cirrus_amt = cirrus_amt * height_shape * ice_bank;
+    let fiber        = s1 * 0.72 + s2 * 0.20 + fine_fiber * 0.08;
     let thresh = mix(0.46, 0.24, cirrus_amt);
     // Break the fibres into mares' tails of different lengths instead of one
     // continuous sheet across the dome.
     let tail = weather_bank_noise(vec2<f32>(along_wind * 0.00055, perp_wind * 0.0016));
 
-    return smoothstep(thresh, thresh + 0.16, fiber) * effective_cirrus_amt * density_ctl * 0.18
+    let fibres = smoothstep(thresh, thresh + 0.16, fiber) * effective_cirrus_amt * density_ctl * 0.18
         * smoothstep(0.32, 0.68, tail * 0.85 + fiber * 0.15);
+    let forms = cirrus_form_weights(advected_xz);
+    var grain = 0.0;
+    if forms.y > 0.01 {
+        grain = cirrocumulus_grain(along_wind, perp_wind, sample_footprint_m)
+            * effective_cirrus_amt * density_ctl * 0.20 * smoothstep(0.30, 0.60, tail);
+    }
+    let veil = (0.55 + 0.45 * s1) * effective_cirrus_amt * density_ctl * 0.075;
+    return fibres * forms.x + grain * forms.y + veil * forms.z;
 }
 
 fn sample_mid_density(
@@ -852,16 +876,15 @@ fn sample_mid_density(
     base_y             : f32,
     top_y              : f32,
     eff_y              : f32,
-    sample_footprint_m : f32,
+    world_footprint_m  : f32,
     weather            : CellWeather,
 ) -> f32 {
+    let horizontal_scale = cloud_horizontal_scale() * cloud_size_ratio(light.weather_globals[2].x);
+    let sample_footprint_m = world_footprint_m / horizontal_scale;
     let wind = safe_normalize2(light.weather_globals[0].zw, vec2<f32>(0.9, -0.4));
     let side = vec2<f32>(-wind.y, wind.x);
     let time = light.weather_globals[0].x;
     let wspd = max(light.weather_globals[0].y, 0.0) * 0.7;
-
-    let advected_xz = p.xz + wind * time * wspd * 9.5
-        * CLOUD_ADVECTION_SPEED_SCALE;
 
     let ac_bias = authored_altocumulus() * (0.45 + weather.convection * 0.55)
                 + weather.convection * 0.20;
@@ -875,6 +898,9 @@ fn sample_mid_density(
     let ac_amt = weather.mid_amount * ac_bias / mid_bias_sum * mid_weight;
     let as_amt = weather.mid_amount * as_bias / mid_bias_sum * mid_weight;
     if ac_amt + as_amt <= 0.001 { return 0.0; }
+
+    let advected_xz = (p.xz + wind * time * wspd * 9.5
+        * CLOUD_ADVECTION_SPEED_SCALE + cloud_flow_warp(p.xz, 0.5, LAYER_MID).xy) / horizontal_scale;
 
     let mid_lod = clamp(
         log2(max(sample_footprint_m * 0.0007 * SHAPE_TEX_SIZE, 1.0)),
@@ -951,7 +977,9 @@ fn sample_mid_density(
     let as_density = veil * effective_as_amt * density_ctl * 1.05
         * mix(0.25, 1.0, smoothstep(0.16, 0.72, streak));
 
-    return max(ac_density, as_density);
+    let lens = lenticular_density(p.xz, wind, h, weather.convection, weather.humidity)
+        * weather.mid_amount * density_ctl * 0.9;
+    return max(max(ac_density, as_density), lens);
 }
 
 fn sample_mid_density_shadow(
@@ -966,14 +994,24 @@ fn sample_mid_density_shadow(
 
 fn shadow_field_at_world(world_xz: vec2<f32>) -> vec4<f32> {
     let uv0 = weather_uv(world_xz, 0);
-    let uv1 = weather_uv(world_xz, 1);
-    let uv2 = weather_uv(world_xz, 2);
     let w0 = weather_level_weight(uv0, 0);
+    if w0 == 1.0 {
+        return sample_weather_bilinear(cloud_shadow_tex, uv0, 0);
+    }
+    let uv1 = weather_uv(world_xz, 1);
     let w1 = weather_level_weight(uv1, 1) * (1.0 - w0);
     let w2 = max(1.0 - w0 - w1, 0.0);
-    return sample_weather_bilinear(cloud_shadow_tex, uv0, 0) * w0
-        + sample_weather_bilinear(cloud_shadow_tex, uv1, 1) * w1
-        + sample_weather_bilinear(cloud_shadow_tex, uv2, 2) * w2;
+    var field = vec4<f32>(0.0);
+    if w0 > 0.0 {
+        field += sample_weather_bilinear(cloud_shadow_tex, uv0, 0) * w0;
+    }
+    if w1 > 0.0 {
+        field += sample_weather_bilinear(cloud_shadow_tex, uv1, 1) * w1;
+    }
+    if w2 > 0.0 {
+        field += sample_weather_bilinear(cloud_shadow_tex, weather_uv(world_xz, 2), 2) * w2;
+    }
+    return field;
 }
 
 fn layer_wind_advection_offset(layer_id: i32) -> vec2<f32> {
@@ -1045,11 +1083,11 @@ fn cell_aabb_for_layer(w: CellWeather, layer_id: i32) -> CellAABB {
 // and integration weights are the same as the separate integrals.
 fn sample_segment_medium(
     p: vec3<f32>, ray_dir: vec3<f32>, layer_id: i32, footprint: f32,
-    wind_offset: vec2<f32>, step_weather: CellWeather,
+    wind_offset: vec2<f32>, step_weather: CellWeather, step_bounds: CellAABB,
     segment_length: f32, jitter: f32, phase: f32, step_index: i32,
     quadrature: f32, light_dir: vec3<f32>, layer_thickness: f32,
-    trace_shadow: bool, dist_fade: f32, extinction: f32,
-) -> vec2<f32> {
+    trace_shadow: bool, dist_fade: f32, extinction: f32, layer_bounds: vec2<f32>,
+) -> vec3<f32> {
     let view_taps = select(1, 2, quadrature > 0.0);
     let light_taps = select(3, 2, layer_id == LAYER_HIGH);
     let query_count = view_taps + select(0, light_taps, trace_shadow);
@@ -1059,11 +1097,12 @@ fn sample_segment_medium(
     var optical_depth = 0.0;
     var reach = 0.0;
     var shadow_phase = 0.0;
+    var alpha = -1.0;
     for (var query = 0; query < query_count; query += 1) {
         let shadow_query = query >= view_taps;
         var q = p;
         var weather = step_weather;
-        var local_bounds: CellAABB;
+        var local_bounds = step_bounds;
         var sample_footprint = footprint;
         var shadow_segment = 0.0;
         if !shadow_query {
@@ -1074,21 +1113,20 @@ fn sample_segment_medium(
                     0.5 + fract(stratum + 0.5) * 0.5, query == 1);
                 q = start_p + ray_dir * segment_length * offset;
                 weather = weather_at_world(q.xz + wind_offset);
+                local_bounds = cell_aabb_for_layer(weather, layer_id);
             }
-            local_bounds = cell_aabb_for_layer(weather, layer_id);
             if !cell_aabb_valid(local_bounds) || q.y < local_bounds.y_min || q.y > local_bounds.y_max {
                 continue;
             }
         } else {
             if query == view_taps {
                 let density = mix(density_first, density_second, quadrature * 0.5) * dist_fade;
-                let alpha = 1.0 - exp(-density * extinction * segment_length);
-                if density <= 0.0005 || alpha <= 0.0002 { break; }
-                let bounds = cloud_layer_bounds();
-                let y0 = select(select(bounds.low_base, bounds.mid_base, layer_id == LAYER_MID), bounds.high_base, layer_id == LAYER_HIGH);
-                let y1 = select(select(bounds.low_top, bounds.mid_top, layer_id == LAYER_MID), bounds.high_top, layer_id == LAYER_HIGH);
-                let exit_distance = max(slab_intersection(p, light_dir, y0, y1).y, 0.0);
+                if density <= 0.0005 { break; }
+                alpha = 1.0 - exp(-density * extinction * segment_length);
+                if alpha <= 0.0002 { break; }
+                let exit_distance = max(slab_intersection(p, light_dir, layer_bounds.x, layer_bounds.y).y, 0.0);
                 reach = min(exit_distance, clamp(layer_thickness * 3.0, 60.0, 900.0));
+                if reach <= 0.0 { break; }
                 shadow_phase = mix(0.22, 0.78, weather_bank_noise(p.xz / 137.0 + vec2<f32>(8.3, -2.1)));
             }
             let tap_index = query - view_taps;
@@ -1118,18 +1156,14 @@ fn sample_segment_medium(
         } else if layer_id == LAYER_MID {
             density = sample_mid_density(q, local_bounds.y_min, local_bounds.y_max, q.y, sample_footprint, weather);
         } else {
-            var bias = 1.0;
-            if shadow_query || weather.coverage > 0.02 || weather.storm > 0.04 {
-                bias = macro_coverage_bias(q.xz + wind_offset, vec2<f32>(0.0), 0.0, 0.0);
-            }
             density = sample_low_density(q, local_bounds.y_min, local_bounds.y_max, q.y,
-                1.0, 0.0, 0.0, shadow_query, sample_footprint, weather, bias);
+                1.0, 0.0, 0.0, shadow_query, sample_footprint, weather);
         }
         if shadow_query { optical_depth += density * shadow_segment * sigma; }
         else if query == 0 { density_first = density; }
         else { density_second = density; }
     }
-    return vec2<f32>(mix(density_first, density_second, quadrature * 0.5), optical_depth);
+    return vec3<f32>(mix(density_first, density_second, quadrature * 0.5), optical_depth, alpha);
 }
 
 // Sun reaching a cloud at twilight, with its luminance lifted toward 0.30.
@@ -1170,11 +1204,13 @@ fn march_layer_core(
     // ---- Coarse early-out using global envelope ----
     // When the camera is inside the slab, slab_intersection returns (1e9, -1e9) for
     // near-horizontal rays. Bypass the global envelope check in that case.
-    let env_slab  = slab_intersection(ray_origin, ray_dir, base_y, top_y);
+    // On a planet the deck falls away, so the flat envelope reaches down to its lowest point in range.
+    let env_base = base_y - cloud_planet_drop(cam.camera_pos.xz + vec2<f32>(cam_dist_offset + max_dist, 0.0));
+    let env_slab  = slab_intersection(ray_origin, ray_dir, env_base, top_y);
     var env_enter = max(env_slab.x, 0.0);
     var env_exit  = min(env_slab.y, max_dist);
     
-    let cam_inside_slab = ray_origin.y >= base_y && ray_origin.y <= top_y;
+    let cam_inside_slab = ray_origin.y >= env_base && ray_origin.y <= top_y;
     if cam_inside_slab {
         env_enter = 0.0;
         env_exit = min(max(env_slab.y, 0.0), max_dist);
@@ -1245,6 +1281,8 @@ fn march_layer_core(
     let shadow_dir = select(sun_dir, moon_dir, night > 0.7);
     // Undersides pick up the ground. Clear days bounce green, low sun bounces
     // warm earth, and a storm bounce goes dull so the deck does not glow.
+    // Dusk earth stays only mildly warm: a saturated orange bounce under a
+    // sky-lit base mixed to brown.
     let ground_tint = mix(vec3<f32>(0.30, 0.33, 0.25), vec3<f32>(0.46, 0.34, 0.24), twilight_light);
     let ground_tint_w = mix(ground_tint, vec3<f32>(0.16, 0.18, 0.17),
         saturate1(light.weather_clip_summaries[0].z));
@@ -1284,7 +1322,7 @@ fn march_layer_core(
     var shadow_cache_reused = false;
 
     // ---- Step budget: sufficient for the shorter march distances.
-    let global_step_budget = select(select(192, 72, mid_layer), 32, cirrus_layer);
+    let global_step_budget = select(select(128, 48, mid_layer), 24, cirrus_layer);
 
     // Fine spacing resolves cloud shape. A solid deck still uses `need` so the
     // march reaches the far side of the slab inside the same step budget.
@@ -1294,9 +1332,14 @@ fn march_layer_core(
     let fine_dt = mix(layer_dt_min, layer_dt_max, grazing_f);
 
     var march_t = env_enter;
+    let powder_strength = mix(0.30, 0.62, smoothstep(0.04, 0.42, sun_dir.y));
+    let low_sun = 1.0 - smoothstep(0.0, 0.24, sun_dir.y);
     let grazing_sun = 1.0 - smoothstep(0.0, 0.45, sun_dir.y);
     for (var i: i32 = 0; i < global_step_budget; i = i + 1) {
         if trans <= 0.02 || march_t >= env_exit { break; }
+        // The entire segment is beyond the distance fade. Avoid even the
+        // weather/AABB lookup when no point on it can contribute.
+        if cam_dist_offset + march_t >= fade_dist { break; }
         let steps_left = max(global_step_budget - i, 1);
         let need = (env_exit - march_t) / f32(steps_left);
         // A pixel spans several metres at range and the density LOD already
@@ -1312,7 +1355,7 @@ fn march_layer_core(
         let segment_length = min(dt, env_exit - segment_start);
         let jitter = 0.05 + fract(phase + f32(i) * 0.618033989) * 0.90;
         var t_cur = segment_start + segment_length * jitter;
-        var p = ray_origin + ray_dir * t_cur;
+        var p = cloud_bent(ray_origin, ray_dir, t_cur);
 
         // ---- PER-STEP: CONTINUOUS WEATHER + AABB ----
         // Weather sampled at the exact step position — no cell grid, no seams.
@@ -1343,8 +1386,9 @@ fn march_layer_core(
         // vertical volume. A point-only cull skipped entire thin layers when
         // sample spacing exceeded their depth, making clouds switch off.
         var integration_length = segment_length;
-        if abs(ray_dir.y) > 1e-5 {
-            let local_hit = slab_intersection(ray_origin, ray_dir, step_aabb.y_min, step_aabb.y_max);
+        let bent_dir = cloud_bent_dir(ray_origin, ray_dir, t_cur);
+        if abs(bent_dir.y) > 1e-5 {
+            let local_hit = slab_intersection(p - bent_dir * t_cur, bent_dir, step_aabb.y_min, step_aabb.y_max);
             let local_start = max(segment_start, local_hit.x);
             let local_end = min(segment_start + segment_length, local_hit.y);
             integration_length = max(local_end - local_start, 0.0);
@@ -1354,7 +1398,7 @@ fn march_layer_core(
                 continue;
             }
             t_cur = local_start + integration_length * jitter;
-            p = ray_origin + ray_dir * t_cur;
+            p = cloud_bent(ray_origin, ray_dir, t_cur);
         } else if p.y < step_aabb.y_min || p.y > step_aabb.y_max {
             total_steps += 1;
             march_t = segment_start + segment_length;
@@ -1390,21 +1434,24 @@ fn march_layer_core(
         let reuse_shadow = layer_id == LAYER_LOW && shadow_cache_ok
             && shadow_cache_step == i - 1 && !shadow_cache_reused;
         let medium = sample_segment_medium(p, ray_dir, layer_id, sample_footprint_m,
-            wx_offset_march, step_weather, integration_length, jitter, phase, i, quadrature,
-            shadow_dir, layer_thickness_m, macro_blend < 1.0 && !reuse_shadow, dist_fade, extinction);
+            wx_offset_march, step_weather, step_aabb, integration_length, jitter, phase, i, quadrature,
+            shadow_dir, layer_thickness_m, macro_blend < 1.0 && !reuse_shadow, dist_fade, extinction,
+            vec2<f32>(base_y, top_y));
         let raw_density = medium.x;
         let sample_density = raw_density * dist_fade;
         debug_density_max = max(debug_density_max, sample_density);
 
-        let step_alpha_cheap = 1.0 - exp(-sample_density * extinction * integration_length);
-        let pre_step_trans   = trans;
-
-        if sample_density > 0.0001 {
-            trans          *= 1.0 - step_alpha_cheap;
-            distance_moment += pre_step_trans * step_alpha_cheap * t_from_cam;
-        }
-
         total_steps += 1;
+        march_t = segment_start + segment_length;
+        if sample_density <= 0.0001 { continue; }
+
+        var step_alpha_cheap = medium.z;
+        if step_alpha_cheap < 0.0 {
+            step_alpha_cheap = 1.0 - exp(-sample_density * extinction * integration_length);
+        }
+        let pre_step_trans   = trans;
+        trans          *= 1.0 - step_alpha_cheap;
+        distance_moment += pre_step_trans * step_alpha_cheap * t_from_cam;
 
         if sample_density > 0.0005 && step_alpha_cheap > 0.0002 {
             let layer_mid_y = (step_base_y + step_top_y) * 0.5;
@@ -1492,8 +1539,8 @@ fn march_layer_core(
             // Beer-powder (Schneider) sits on the primary only: it peaks on a
             // thin sun-facing edge and falls off inside the body.
             let albedo = mix(0.90, 0.46, step_weather.storm);
-            let beer0 = exp(-shadow_d);
             let beer1 = exp(-shadow_d * 0.50);
+            let beer0 = beer1 * beer1;
             // Octave extinction roughly halves per order (Hillaire). 0.08 on the last
             // order lit a thick core almost as brightly as its sunlit face, so
             // cumulus read as flat white cut-outs with no billow shading.
@@ -1502,8 +1549,7 @@ fn march_layer_core(
             // Powder is the sun-facing edge brightening. It weakens as the sun
             // drops: a low sun crosses the whole cloud thickness, so there is
             // no thin lit edge to brighten.
-            let powder = 1.0 - exp(-shadow_d * 2.0);
-            let powder_strength = mix(0.30, 0.62, smoothstep(0.04, 0.42, sun_dir.y));
+            let powder = 1.0 - beer0 * beer0;
             let primary_trans = beer0 * mix(1.0, powder, powder_strength);
 
             // Multiple scattering fills dense cores and barely touches thin
@@ -1539,7 +1585,6 @@ fn march_layer_core(
             // three light taps miss the column above it. Low sun lights the
             // side, so the floor lifts back out of the way of the rim.
             let base_shade = mix(0.68, 1.0, smoothstep(0.0, 0.46, h_frac));
-            let low_sun = 1.0 - smoothstep(0.0, 0.24, sun_dir.y);
             let core_shade = mix(base_shade, 1.0, low_sun * 0.85);
 
             // Bases take the afterglow, tops take the zenith of this day.
@@ -1577,7 +1622,6 @@ fn march_layer_core(
 
             radiance += pre_step_trans * scatter * step_alpha_cheap;
         }
-        march_t = segment_start + segment_length;
     }
 
     return CloudSample(
@@ -1614,10 +1658,10 @@ fn approx_cirrus_transmittance(dir: vec3<f32>) -> f32 {
     return exp(-d_cirrus * 0.045 * 20.0);
 }
 
-fn cloud_with_aerial_perspective(cloud: CloudSample, dir: vec3<f32>) -> CloudSample {
+fn cloud_with_aerial_perspective(cloud: CloudSample, dir: vec3<f32>, sky_color: vec3<f32>) -> CloudSample {
     if cloud.transmittance >= 0.9999 { return cloud; }
     var result = cloud;
-    let ap = aerial_perspective(dir, cloud.mean_distance, cam.world_params.x, atmosphere_color(dir));
+    let ap = aerial_perspective(dir, cloud.mean_distance, cam.world_params.x, sky_color);
     result.radiance = cloud.radiance * ap.a + ap.rgb * (1.0 - cloud.transmittance);
     return result;
 }
@@ -1675,9 +1719,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // the ray enters that layer's slab. When the camera is inside a layer,
     // the origin is the camera itself. This makes clouds real volumetric
     // objects rather than a screen-space billboard illusion.
-    let low_ro  = compute_layer_ray_origin(cam.camera_pos.xyz, dir, bounds.low_base,  bounds.low_top);
-    let mid_ro  = compute_layer_ray_origin(cam.camera_pos.xyz, dir, bounds.mid_base,  bounds.mid_top);
-    let high_ro = compute_layer_ray_origin(cam.camera_pos.xyz, dir, bounds.high_base, bounds.high_top);
+    // Entry is found against the flat slab lowered to the deck's farthest drop on a planet.
+    let fall = cloud_planet_drop(cam.camera_pos.xz + vec2<f32>(CLOUD_MAX_DISTANCE_M, 0.0));
+    let low_ro  = compute_layer_ray_origin(cam.camera_pos.xyz, dir, bounds.low_base - fall,  bounds.low_top);
+    let mid_ro  = compute_layer_ray_origin(cam.camera_pos.xyz, dir, bounds.mid_base - fall,  bounds.mid_top);
+    let high_ro = compute_layer_ray_origin(cam.camera_pos.xyz, dir, bounds.high_base - fall, bounds.high_top);
 
     // Distance from camera to each slab-entry point (0 when camera is inside the layer).
     let low_offset  = length(low_ro.origin  - cam.camera_pos.xyz);
@@ -1719,11 +1765,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     // ---- Depth Sort & Composite ----
     let rain = march_rain_volume(dir, max_dist, cone_spread, in.pos.xy);
-    var layers: array<CloudSample, 4>;
-    layers[0] = cloud_with_aerial_perspective(low, dir);
-    layers[1] = cloud_with_aerial_perspective(mid, dir);
-    layers[2] = cloud_with_aerial_perspective(high, dir);
-    layers[3] = cloud_with_aerial_perspective(rain, dir);
+    var layers = array<CloudSample, 4>(low, mid, high, rain);
+    if min(min(low.transmittance, mid.transmittance), min(high.transmittance, rain.transmittance)) < 0.9999 {
+        // Layers share one view ray and one sky lookup. Only the distance
+        // through the atmosphere differs.
+        let sky_color = atmosphere_color(dir);
+        for (var layer = 0; layer < 4; layer += 1) {
+            layers[layer] = cloud_with_aerial_perspective(layers[layer], dir, sky_color);
+        }
+    }
     
     var dists: array<f32, 4>;
     dists[0] = select(1e9, low.mean_distance, low.transmittance < 0.9999);

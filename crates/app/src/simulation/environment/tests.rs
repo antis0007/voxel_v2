@@ -127,3 +127,25 @@ fn environment_sleeping_world_has_no_soil_rule_work() {
         start.elapsed()
     );
 }
+
+#[test]
+fn environment_clock_advances_while_a_sky_ray_is_blocked() {
+    let mut world = uniform(VoxelScalePreset::OneMeter, B::Dirt);
+    let p = IVec3::new(8, 30, 8);
+    let chunk = world.chunks.get_mut(&IVec3::ZERO).unwrap();
+    let mut chunk = chunk;
+    Arc::make_mut(&mut chunk).blocks[ChunkData::local_index(8, 31, 8)] = B::Air;
+    drop(chunk);
+    assert!(world.environment.wake(p));
+    let mut sources = Residency::default();
+    let mut blocks = HashSet::new();
+    let mut chunks = HashSet::new();
+    for _ in 0..12_000 {
+        update(&mut world, &mut sources, p, &mut blocks, &mut chunks, super::super::Budget::UNBOUNDED);
+    }
+    assert!(
+        world.environment.lag_seconds() <= 1,
+        "environment {} s behind",
+        world.environment.lag_seconds()
+    );
+}

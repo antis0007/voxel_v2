@@ -55,7 +55,19 @@ fn globe_column_owned(chart_xz: vec2<f32>) -> bool {
 // 0 under resident chunks; an unowned column inside the disc is a hole the globe fills.
 // Past the disc edge alpha ramps 0 to 1 over GLOBE_FADE_M, where horizon rings lie beneath.
 fn globe_mask_alpha(chart_xz: vec2<f32>) -> f32 {
-    if globe_column_owned(chart_xz) { return 0.0; }
+    if globe_column_owned(chart_xz) {
+        // Retain an opaque parent under exposed columns and diagonal corners,
+        // matching the world cover's conservative replacement boundary.
+        let span = max(globe_mask.params.x, 1e-3);
+        let centre = (floor(chart_xz / span) + vec2<f32>(0.5)) * span;
+        for (var z = -1; z <= 1; z += 1) {
+            for (var x = -1; x <= 1; x += 1) {
+                if x == 0 && z == 0 { continue; }
+                if !globe_column_owned(centre + vec2<f32>(f32(x), f32(z)) * span) { return 1.0; }
+            }
+        }
+        return 0.0;
+    }
     let radius = globe_mask.params.y;
     let d = length(chart_xz - globe_mask.params.zw);
     if radius <= 0.0 || d < radius { return 1.0; }

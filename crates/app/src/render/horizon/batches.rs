@@ -32,6 +32,11 @@ impl DrawBatch {
             .iter()
             .all(|p| p.truncate().dot(center) + p.w + p.truncate().abs().dot(self.extent) >= 0.0)
     }
+
+    pub fn nearby(&self, eye: Vec3, radius: f32) -> bool {
+        let delta = ((self.center - eye).abs() - self.extent).max(Vec3::ZERO);
+        delta.x * delta.x + delta.z * delta.z <= radius * radius
+    }
 }
 
 #[cfg(test)]
@@ -40,7 +45,9 @@ pub fn partition(mesh: &mut ChunkMesh, scale: f32, origin: (i32, i32)) -> Vec<Dr
 }
 
 pub fn partition_variants(mesh:&mut ChunkMesh,scale:f32,origin:(i32,i32),variants:Option<&super::collar::Ranges>)->Vec<DrawBatch> {
-    let mut groups: BTreeMap<(Variant,u32, i32, i32), (Vec<u32>, Vec3, Vec3)> = BTreeMap::new();
+    // Keep both variants of a spatial region adjacent so page packing can
+    // share their unchanged vertices instead of uploading two landscapes.
+    let mut groups: BTreeMap<(u32, i32, i32, Variant), (Vec<u32>, Vec3, Vec3)> = BTreeMap::new();
     for (number,tri) in mesh.indices.chunks_exact(3).enumerate() {
         let index=(number*3) as u32;
         let variant=variants.map_or(Variant::Common,|v|{
@@ -56,9 +63,10 @@ pub fn partition_variants(mesh:&mut ChunkMesh,scale:f32,origin:(i32,i32),variant
         let level = ((reach / 512.0).max(1.0) as u32).ilog2().min(5);
         let width = (256u32 << level) as f32;
         let key = (
-            variant,            level,
+            level,
             (center.x / width).floor() as i32,
             (center.z / width).floor() as i32,
+            variant,
         );
         let group = groups.entry(key).or_insert_with(|| {
             (
@@ -75,7 +83,7 @@ pub fn partition_variants(mesh:&mut ChunkMesh,scale:f32,origin:(i32,i32),variant
     }
     let mut indices = Vec::with_capacity(mesh.indices.len());
     let mut batches = Vec::with_capacity(groups.len());
-    for ((variant,_,_,_), (group, min, max)) in groups {
+    for ((_,_,_,variant), (group, min, max)) in groups {
         let start = indices.len() as u32;
         indices.extend(group);
         batches.push(DrawBatch {

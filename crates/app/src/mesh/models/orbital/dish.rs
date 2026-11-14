@@ -6,7 +6,7 @@ pub(super) fn build(mesh:&mut Model,w:&World,day:&DayNightCycle,viewer:Vec3) {
     let p=(a.as_vec3()+Vec3::splat(0.5))*w.voxel_scale.meters();
     if (p-viewer).length_squared()>256.0*256.0 || !orbital::radio::intact(w) {return}
     let mark=mesh.mark();
-    let alloy=[0.27,0.33,0.37]; let ceramic=[0.76,0.73,0.63];
+    let alloy=super::palette::STEEL; let ceramic=super::palette::CERAMIC;
     part(mesh,p+Vec3::Y*0.53,Vec3::new(1.8,0.16,1.8),Quat::IDENTITY,alloy,0.5);
     strut(mesh,p+Vec3::Y*0.5,p+Vec3::Y*2.0,0.16,alloy);
     let pivot=p+Vec3::Y*2.0;
@@ -33,7 +33,7 @@ pub(super) fn build(mesh:&mut Model,w:&World,day:&DayNightCycle,viewer:Vec3) {
         mesh.rotate_since(bowl,pivot,Quat::from_rotation_arc(Vec3::Y,(target-pivot).normalize()));
     } else if let Some(site)=r.target.and_then(|cell|orbital::site(w.seed,cell)) {
         let height=orbital::hold_height(&w.sample_config(),&w.orbital,site);
-        let target=Vec3::new(site.x+650.0,height+orbital::UPPER_ANCHORAGE_OFFSET_M,site.z+260.0);
+        let target=orbital::crown_position(site,height);
         mesh.rotate_since(bowl,pivot,Quat::from_rotation_arc(Vec3::Y,(target-pivot).normalize()));
     }
     for v in &mut mesh.vertices[mark..] {if v.surface[2]!=62.0 {v.surface[1]=2.0;}}

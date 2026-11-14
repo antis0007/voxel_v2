@@ -16,6 +16,7 @@ pub const COST_TEXT: [&str; 6] = ["", "2 copper + 1 crystal", "4 copper + 2 iron
 #[derive(Default)]
 pub struct State { pub level: u32, pub knowledge: u32, pub dish: Option<IVec3>, pub target: Option<IVec2> }
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action { Upgrade, Listen, Handshake, BuildDish, RepairDish, Aim(IVec2), TrackRelay }
 #[derive(Clone, Copy, Default)]
 pub struct Link { pub receive: bool, pub transmit: bool, pub quality: f32, pub directional: bool }

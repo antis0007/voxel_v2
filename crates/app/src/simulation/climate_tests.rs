@@ -26,6 +26,7 @@ fn uniform(material: BlockId, ambient_c: f32) -> World {
 
 fn hills() -> WorldSampleConfig {
     WorldSampleConfig {
+        planet: None,
         generator_version: engine_worldgen::CURRENT_GENERATOR_VERSION,
         seed: 2738958700,
         world_type: WorldType::Hills,

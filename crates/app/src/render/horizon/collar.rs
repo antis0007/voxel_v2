@@ -1,4 +1,5 @@
 //! One dry, installed column edge joined to the actual parent surface.
+//! collar_set assembles these transactions across the complete perimeter.
 //! No source sampling, radial cutoffs, shader changes or collision geometry.
 use crate::mesh::{ChunkMesh, Vertex3};
 use glam::{IVec3, Vec3};
@@ -180,6 +181,8 @@ impl Prepared {
             return Self::Missing;
         }
         let mut edges = [Edge::default(); 4];
+        let mut complete = [0u32; 4];
+        let mut fragments = Vec::<(usize, usize, f32, f32)>::new();
         for (i, indices) in mesh.indices.chunks_exact(3).enumerate() {
             if i % 256 == 0 && cancel.load(Ordering::Relaxed) {
                 return Self::Missing;
@@ -228,22 +231,36 @@ impl Prepared {
                     && tri.iter().all(|v| {
                         dry(v) && v.normal == [0.0, 1.0, 0.0] && v.pos[1] == tri[0].pos[1]
                     });
+                // An opaque vertical wall or underside is not a second top.
+                // Rejecting these made every cliff and coarse perimeter skirt
+                // disable its entire edge, even when the dry top was complete.
+                if tri.iter().all(dry) && !flat_top
+                    && tri.iter().all(|v| v.normal[1] <= 0.0) {
+                    continue;
+                }
                 for unit in 0..WIDTH {
                     let start = origin[along] + unit as f32;
                     if hi.pos[along] <= start || lo.pos[along] >= start + 1.0 {
                         continue;
                     }
-                    if !flat_top || lo.pos[along] > start || hi.pos[along] < start + 1.0 {
+                    if !flat_top {
                         edge.blocked |= 1 << unit;
                         continue;
                     }
-                    let t = (start + 0.5 - lo.pos[along]) / (hi.pos[along] - lo.pos[along]);
+                    let low = (lo.pos[along] - start).max(0.0);
+                    let high = (hi.pos[along] - start).min(1.0);
+                    if low == 0.0 && high == 1.0 {
+                        complete[side] |= 1 << unit;
+                    } else {
+                        fragments.push((side, unit, low, high));
+                    }
+                    let t = ((start + 0.5 - lo.pos[along]) / (hi.pos[along] - lo.pos[along])).clamp(0.0, 1.0);
                     let mut sample = lerp(lo, hi, t);
                     sample.pos[axis] = plane;
                     sample.pos[along] = start + 0.5;
                     if edge.tops[unit].is_some_and(|old| old.pos[1] != sample.pos[1]) {
                         edge.blocked |= 1 << unit;
-                    } else {
+                    } else if edge.tops[unit].is_none() || (low <= 0.5 && high >= 0.5) {
                         edge.tops[unit] = Some(sample);
                     }
                 }
@@ -251,6 +268,23 @@ impl Prepared {
         }
         if cancel.load(Ordering::Relaxed) {
             return Self::Missing;
+        }
+        // A coarse top's diagonal can split a unit at the join. Verify the
+        // union of coplanar fragments before rejecting the complete edge.
+        fragments.sort_unstable_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)).then(a.2.total_cmp(&b.2)));
+        let mut covered = [[0.0_f32; WIDTH]; 4];
+        for (side, unit, low, high) in fragments {
+            let end = &mut covered[side][unit];
+            if low <= *end { *end = end.max(high); }
+        }
+        for (side, edge) in edges.iter_mut().enumerate() {
+            for unit in 0..WIDTH {
+                if edge.tops[unit].is_some() && complete[side] & (1 << unit) == 0
+                    && covered[side][unit] < 1.0
+                {
+                    edge.blocked |= 1 << unit;
+                }
+            }
         }
         if edges
             .iter()
@@ -272,7 +306,7 @@ impl Prepared {
 pub(crate) struct Input {
     pub column: (i32, i32),
     pub side: usize,
-    tops: [Vertex3; WIDTH],
+    tops: [Option<Vertex3>; WIDTH],
     pub dependencies: Vec<Arc<Installed>>,
 }
 impl Input {
@@ -287,6 +321,7 @@ impl Input {
         }
         let scope = dependencies[0].scope;
         let mut tops: [Option<Vertex3>; WIDTH] = [None; WIDTH];
+        let mut blocked = 0u32;
         for source in dependencies {
             if (source.scope.coord.x, source.scope.coord.z) != column
                 || source.scope.world_epoch != scope.world_epoch
@@ -299,13 +334,11 @@ impl Input {
                 Prepared::Empty => {}
                 Prepared::Edges(edges) => {
                     let edge = &edges.values[side];
-                    if edge.blocked != 0 {
-                        return None;
-                    }
-                    for (out, incoming) in tops.iter_mut().zip(edge.tops) {
+                    blocked |= edge.blocked;
+                    for (unit, (out, incoming)) in tops.iter_mut().zip(edge.tops).enumerate() {
                         if let Some(value) = incoming {
                             if out.is_some_and(|old| old.pos[1] != value.pos[1]) {
-                                return None;
+                                blocked |= 1 << unit;
                             }
                             *out = Some(value);
                         }
@@ -313,15 +346,14 @@ impl Input {
                 }
             }
         }
-        let first = tops[0]?;
-        let mut complete = [first; WIDTH];
-        for (out, value) in complete.iter_mut().zip(tops) {
-            *out = value?;
+        for (unit, top) in tops.iter_mut().enumerate() {
+            if blocked & (1 << unit) != 0 { *top = None; }
         }
+        if tops.iter().all(Option::is_none) { return None; }
         Some(Arc::new(Self {
             column,
             side,
-            tops: complete,
+            tops,
             dependencies: dependencies.to_vec(),
         }))
     }
@@ -362,8 +394,39 @@ impl Input {
                         && a.scope.world_epoch == b.scope.world_epoch
                         && a.scope.cache_epoch == b.scope.cache_epoch
                 })
-            && bytemuck::cast_slice::<Vertex3, u8>(&self.tops)
-                == bytemuck::cast_slice::<Vertex3, u8>(&other.tops)
+            && self.tops.iter().zip(&other.tops).all(|(a, b)| match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => bytemuck::bytes_of(a) == bytemuck::bytes_of(b),
+                _ => false,
+            })
+    }
+
+    /// Close the exposed silhouette where a complete parent stitch is
+    /// unavailable. Every strip starts at a verified opaque resident top.
+    pub(super) fn append_curtain(&self, mesh: &mut ChunkMesh) {
+        let (axis, along, sign) = axes(self.side);
+        let mut normal = Vec3::ZERO;
+        normal[axis] = sign;
+        for top in self.tops.iter().flatten() {
+            let mut a = *top;
+            let mut b = *top;
+            a.pos[along] -= 0.5;
+            b.pos[along] += 0.5;
+            a.ao_strength = -2.0 - a.ao_strength.clamp(0.0, 1.0);
+            b.ao_strength = a.ao_strength;
+            let mut c = a;
+            let mut d = b;
+            // Keep the upper edge attached to the exact voxel top. The
+            // bottom leans out into the unowned column, beneath its surface.
+            c.pos[axis] += sign * 0.5;
+            d.pos[axis] += sign * 0.5;
+            c.pos[1] -= 24.0;
+            d.pos[1] -= 24.0;
+            for side in [normal, -normal] {
+                triangle(mesh, [a, b, d], side);
+                triangle(mesh, [a, d, c], side);
+            }
+        }
     }
 }
 
@@ -522,11 +585,30 @@ pub(crate) fn apply(
     cancel: &AtomicBool,
     limit: usize,
 ) -> Option<Outcome> {
+    if input.tops.iter().any(Option::is_none) {
+        return Some(Outcome::Ineligible);
+    }
+    // Prefer a longer grade into the parent. Preserve the narrow join where
+    // water, edits, or another surface make the wider strip ineligible.
+    match apply_strip(mesh, input, cancel, limit, 4.0)? {
+        Outcome::Ineligible => apply_strip(mesh, input, cancel, limit, 1.0),
+        applied => Some(applied),
+    }
+}
+
+fn apply_strip(
+    mesh: &mut ChunkMesh,
+    input: &Input,
+    cancel: &AtomicBool,
+    limit: usize,
+    span: f32,
+) -> Option<Outcome> {
     use super::edits::clip;
+    let tops = input.tops.map(Option::unwrap);
     let (axis, along, sign) = axes(input.side);
-    let plane = input.tops[0].pos[axis];
-    let end = plane + sign;
-    let u0 = input.tops[0].pos[along] - 0.5;
+    let plane = tops[0].pos[axis];
+    let end = plane + sign * span;
+    let u0 = tops[0].pos[along] - 0.5;
     let u1 = u0 + WIDTH as f32;
     if plane == end || u0 + 1.0 == u0 {
         return Some(Outcome::Ineligible);
@@ -554,6 +636,13 @@ pub(crate) fn apply(
             mesh.vertices[indices[1] as usize],
             mesh.vertices[indices[2] as usize],
         ];
+        if tri.iter().any(|v| {
+            !bytemuck::cast_slice::<Vertex3, f32>(std::slice::from_ref(v))
+                .iter()
+                .all(|f| f.is_finite())
+        }) {
+            return Some(Outcome::Ineligible);
+        }
         if bounds.iter().any(|&(a, b, less)| {
             tri.iter()
                 .all(|v| if less { v.pos[a] >= b } else { v.pos[a] <= b })
@@ -565,21 +654,35 @@ pub(crate) fn apply(
         for &(a, b, less) in &bounds {
             inside = clip(&inside, a, b, less);
         }
-        // Exact fallbacks, water, crowns, and model/detail intersections are not
-        // a single dry heightfield. Never remove them to force eligibility.
-        if tri.iter().any(|v| {
-            !super::edits::is_backdrop_ao(v.ao_strength)
-                || v.surface[2] != 0.0
-                || !bytemuck::cast_slice::<Vertex3, f32>(std::slice::from_ref(v))
-                    .iter()
-                    .all(|f| f.is_finite())
-        }) {
-            return Some(Outcome::Ineligible);
-        }
         let clipped_area = projected_area(&inside);
         if clipped_area <= 0.0 {
             kept.extend_from_slice(indices);
             continue;
+        }
+        // Trees above the strip are independent of its dry heightfield. Keep
+        // only uniform, valid packed log/leaf materials unchanged; they never
+        // contribute to the terrain area or the replacement surface.
+        let key = tri[0].surface[2];
+        let material_id = (key as u32) / 64;
+        let vegetation = key >= 0.0
+            && key.fract() == 0.0
+            && matches!((key as u32) % 64, 5 | 6)
+            && material_id > 0
+            && material_id <= crate::world::BlockId::COUNT as u32
+            && crate::world::BlockId::from_u32(material_id - 1).surface().shader_key() == key
+            && tri.iter().all(|v| {
+                super::edits::is_backdrop_ao(v.ao_strength) && v.surface[2] == key
+            });
+        if vegetation {
+            kept.extend_from_slice(indices);
+            continue;
+        }
+        // Positive-area water, exact fallbacks, and unknown or mixed materials
+        // still make the join ineligible. Never remove them to force a join.
+        if tri.iter().any(|v| {
+            !super::edits::is_backdrop_ao(v.ao_strength) || v.surface[2] != 0.0
+        }) {
+            return Some(Outcome::Ineligible);
         }
         if let Some([low, high]) = section(&inside, axis, end, along) {
             outer.push(Outer { low, high });
@@ -603,7 +706,7 @@ pub(crate) fn apply(
         }
     }
     // A full strip must exist in the parent. Gaps/overlap are ineligible.
-    if (area - WIDTH as f32).abs() > 0.001 || outer.is_empty() {
+    if (area - WIDTH as f32 * span).abs() > 0.001 || outer.is_empty() {
         return Some(Outcome::Ineligible);
     }
     outer.sort_by(|a, b| a.low.pos[along].total_cmp(&b.low.pos[along]));
@@ -633,9 +736,13 @@ pub(crate) fn apply(
         return Some(Outcome::Ineligible);
     }
     let mapped = |mut v: Vertex3, unit: usize| -> Option<Vertex3> {
-        let t = ((v.pos[axis] - plane) / sign).clamp(0.0, 1.0);
+        let t = ((v.pos[axis] - plane) / (sign * span)).clamp(0.0, 1.0);
         let height = outer_height(&outer, along, v.pos[along])?;
-        v.pos[1] = input.tops[unit].pos[1] * (1.0 - t) + height * t;
+        let top = tops[unit];
+        v.pos[1] = top.pos[1] * (1.0 - t) + height * t;
+        for (color, near) in v.color.iter_mut().zip(top.color) {
+            *color = near * (1.0 - t) + *color * t;
+        }
         Some(v)
     };
     for piece in &pieces {
@@ -698,8 +805,8 @@ pub(crate) fn apply(
         }
     }
     for unit in 1..WIDTH {
-        let left = input.tops[unit - 1];
-        let right = input.tops[unit];
+        let left = tops[unit - 1];
+        let right = tops[unit];
         if left.pos[1] == right.pos[1] {
             continue;
         }

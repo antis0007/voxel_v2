@@ -6,6 +6,31 @@ use std::collections::HashSet;
 pub const MAX_CELLS: usize = 32768;
 pub const MAX_BODIES: usize = 64;
 pub const MAX_BODY_VOXELS: usize = 128;
+pub const MAX_TREE_BODY_VOXELS: usize = 4096;
+
+/// Integer shears preserve unique cells through rotation. Motion and snapshot
+/// validation both compute the trigonometry once per pose.
+pub(super) struct VoxelRotation([(f32, f32, u32, usize, usize); 3]);
+impl VoxelRotation {
+    pub(super) fn new(rotation: Quat) -> Self {
+        let (x, y, z) = rotation.to_euler(glam::EulerRot::XYZ);
+        Self([(z, 0, 1), (y, 2, 0), (x, 1, 2)].map(|(angle, a, b)| {
+            let steps = (angle.abs() / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as u32;
+            let theta = angle / steps as f32;
+            ((theta * 0.5).tan(), theta.sin(), steps, a, b)
+        }))
+    }
+    pub(super) fn apply(&self, mut q: IVec3) -> IVec3 {
+        for &(shear, sine, steps, a, b) in &self.0 {
+            for _ in 0..steps {
+                q[a] -= (shear * q[b] as f32).round() as i32;
+                q[b] += (sine * q[a] as f32).round() as i32;
+                q[a] -= (shear * q[b] as f32).round() as i32;
+            }
+        }
+        q
+    }
+}
 #[derive(Clone, Copy)]
 pub struct ThermalCell {
     pub temperature: f32,
@@ -22,19 +47,56 @@ impl Default for ThermalCell {
     }
 }
 pub struct RigidBody {
+    /// Only chopped trees dissolve into loot; player-built log assemblies persist.
+    pub felled_tree: bool,
     pub origin: IVec3,
     pub position: Vec3,
     pub velocity: Vec3,
     pub rotation: Quat,
     pub angular: Vec3,
     pub debt: f32,
-    /// Felled-tree bodies hold logs while they fall. This is runtime-only
+    /// Felled-tree bodies hold the wood and crown while they fall. This is runtime-only
     /// presentation state; it is not serialized and restarts at zero on load.
     pub settle_time: f32,
     /// Runtime-only water-contact edge for splash emission.
     pub was_submerged: bool,
     pub voxels: Vec<(IVec3, BlockId)>,
     pub occupied: Vec<(IVec3, BlockId)>,
+}
+impl RigidBody {
+    /// Centre of the material actually represented in the world lattice.
+    /// Rebasing fragments around this point preserves total linear momentum
+    /// even when the parent's continuous pose has sub-voxel displacement.
+    pub(super) fn occupied_center(&self) -> Vec3 {
+        let (weighted, mass) = self.occupied.iter().fold((Vec3::ZERO, 0.0_f32), |(sum, mass), (p, b)| {
+            let m = (b.material().physics.density / 1000.0).max(0.01);
+            (sum + p.as_vec3() * m, mass + m)
+        });
+        weighted / mass.max(0.01)
+    }
+
+    /// Mass in water-density voxel units; inertia in mass * voxel-length squared.
+    /// Keep the full tensor: long diagonal beams must resist torque along their
+    /// actual principal axes, rather than along the world grid.
+    pub(super) fn mass_properties(&self) -> (f32, Vec3, glam::Mat3) {
+        let mass = self.voxels.iter().map(|(_, b)|
+            (b.material().physics.density / 1000.0).max(0.01)).sum::<f32>().max(0.01);
+        let center = self.voxels.iter().map(|(p, b)|
+            p.as_vec3() * (b.material().physics.density / 1000.0).max(0.01))
+            .sum::<Vec3>() / mass;
+        let mut inertia = glam::Mat3::ZERO;
+        for (p, b) in &self.voxels {
+            let m = (b.material().physics.density / 1000.0).max(0.01);
+            let r = p.as_vec3() - center;
+            let outer = glam::Mat3::from_cols(r * r.x, r * r.y, r * r.z);
+            inertia += (glam::Mat3::IDENTITY * (r.length_squared() + 1.0 / 6.0) - outer) * m;
+        }
+        (mass, center, inertia.inverse())
+    }
+
+    pub(super) fn inverse_inertia(&self, inverse: glam::Mat3, torque: Vec3) -> Vec3 {
+        self.rotation * (inverse * (self.rotation.conjugate() * torque))
+    }
 }
 #[derive(Default)]
 pub struct Sandbox {
@@ -54,6 +116,30 @@ pub fn key(p: IVec3) -> (i32, i32, i32) {
     (p.x, p.y, p.z)
 }
 impl Sandbox {
+    /// Detaches existing world cells into a free-flying body; false when full or overlapping.
+    pub fn add_debris(&mut self, origin: IVec3, cells: &[(IVec3, BlockId)], velocity: Vec3) -> bool {
+        if !velocity.is_finite() || cells.is_empty()
+            || cells.len() > MAX_BODY_VOXELS
+            || self.bodies.len() >= MAX_BODIES
+            || self.bodies.iter().any(|b| b.occupied.iter().any(|(q, _)| cells.iter().any(|(p, _)| p == q)))
+        {
+            return false;
+        }
+        self.bodies.push(RigidBody {
+            felled_tree: false,
+            origin,
+            position: Vec3::ZERO,
+            velocity,
+            rotation: Quat::IDENTITY,
+            angular: Vec3::ZERO,
+            debt: 0.0,
+            settle_time: 0.0,
+            was_submerged: false,
+            voxels: cells.iter().map(|&(p, b)| (p - origin, b)).collect(),
+            occupied: cells.to_vec(),
+        });
+        true
+    }
     /// The recorded cell, or one at the local air or ground ambient.
     pub fn cell(&self, p: IVec3) -> ThermalCell {
         self.cells.get(&key(p)).copied().unwrap_or_else(|| self.ambient_cell(p, BlockId::Air))
@@ -82,15 +168,18 @@ impl Sandbox {
         true
     }
     pub fn can_admit(&self, positions: &[IVec3]) -> bool {
-        self.cells.len()
-            + positions
-                .iter()
-                .enumerate()
-                .filter(|(i, p)| {
-                    !positions[..*i].contains(p) && !self.cells.contains_key(&key(**p))
-                })
-                .count()
-            <= MAX_CELLS
+        // The common case needs no duplicate detection or allocation at all.
+        if self.cells.len().saturating_add(positions.len()) <= MAX_CELLS {
+            return true;
+        }
+        let mut incoming = crate::fast_hash::FastSet::default();
+        for &p in positions {
+            if !self.cells.contains_key(&key(p)) {
+                incoming.insert(p);
+                if self.cells.len() + incoming.len() > MAX_CELLS { return false; }
+            }
+        }
+        true
     }
 
     pub fn note_fire(&mut self, p: IVec3) {
@@ -103,13 +192,37 @@ impl Sandbox {
         self.fire_lights.remove(&p);
     }
 
+    /// Strike the assembly owning a cell, with torque about its centre of mass.
+    /// Direction and strength are world-space metres per second of impulse.
+    pub fn strike_body(&mut self, cell: IVec3, direction: Vec3, strength: f32, scale: f32) -> bool {
+        if !direction.is_finite() || direction.length_squared() < 1e-8
+            || !strength.is_finite() || strength <= 0.0 || !scale.is_finite() || scale <= 0.0 {
+            return false;
+        }
+        let Some(index) = self.bodies.iter().position(|b| b.occupied.iter().any(|(p, _)| *p == cell)) else {
+            return false;
+        };
+        let body = &mut self.bodies[index];
+        let (mass, center, inverse) = body.mass_properties();
+        let arm = cell.as_vec3() - (body.origin.as_vec3() + body.position + body.rotation * center);
+        let impulse = direction.normalize() * (strength.min(40.0) / scale);
+        let axis = direction.normalize();
+        let response = (1.0 / mass + axis.dot(body.inverse_inertia(inverse, arm.cross(axis)).cross(arm))).max(0.0);
+        let strength = strength.min(40.0);
+        body.velocity = (body.velocity + impulse / mass).clamp_length_max(120.0 / scale);
+        body.angular = (body.angular + body.inverse_inertia(inverse, arm.cross(impulse))).clamp_length_max(12.0);
+        body.settle_time = 0.0;
+        super::rigid::fracture_at(&mut self.bodies, index, cell,
+            0.5 * strength * strength * response, strength * response);
+        true
+    }
+
     /// Apply a bounded radial impulse to every assembly in range.
     ///
     /// Positions and radii are in metres; body velocities are stored in voxel
     /// units per second, so the caller supplies the current voxel scale. This
     /// is the shared hook used by kinetic weapons and blasts. It deliberately
-    /// touches only kinematic state: no blocks are edited, so a pulse can
-    /// never duplicate or delete an assembly.
+    /// changes motion and may split weak bonds. No blocks are edited or minted.
     pub fn apply_radial_impulse(
         &mut self,
         centre: Vec3,
@@ -122,44 +235,73 @@ impl Sandbox {
             || !strength.is_finite()
             || radius <= 0.0
             || strength <= 0.0
+            || !voxel_scale.is_finite()
+            || voxel_scale <= 0.0
         {
             return;
         }
         let scale = voxel_scale.max(1e-6);
         let radius_sq = radius * radius;
-        for body in &mut self.bodies {
+        let mut fractures = Vec::new();
+        for (index, body) in self.bodies.iter_mut().enumerate() {
             if body.occupied.is_empty() {
                 continue;
             }
-            let centre_cells = body
-                .occupied
-                .iter()
-                .map(|(p, _)| p.as_vec3() + Vec3::splat(0.5))
-                .sum::<Vec3>()
-                / body.occupied.len() as f32;
-            let body_centre = centre_cells * scale;
-            let delta = body_centre - centre;
-            let distance_sq = delta.length_squared();
-            if distance_sq >= radius_sq {
-                continue;
+            let (mass, local_center, inverse) = body.mass_properties();
+            let center_cells = body.origin.as_vec3() + body.position
+                + body.rotation * local_center + Vec3::splat(0.5);
+            let mut impulse = Vec3::ZERO;
+            let mut torque = Vec3::ZERO;
+            let mut strongest: Option<(IVec3, f32, f32)> = None;
+            // Integrate pressure over the actual cells. A blast can hit the end
+            // of a beam even when its centre of mass lies outside the radius.
+            for (p, material) in &body.occupied {
+                let point = p.as_vec3() + Vec3::splat(0.5);
+                let delta = point * scale - centre;
+                let d2 = delta.length_squared();
+                if d2 >= radius_sq { continue; }
+                let falloff = 1.0 - d2.sqrt() / radius;
+                let direction = if d2 > 1e-6 { delta / d2.sqrt() } else { Vec3::Y };
+                let push = (direction + Vec3::Y * 0.28).normalize_or_zero()
+                    * (strength * falloff / scale);
+                impulse += push;
+                torque += (point - center_cells).cross(push);
+                let cell_mass = (material.material().physics.density / 1000.0).max(0.01);
+                let speed = push.length() * scale / cell_mass;
+                let energy = 0.5 * cell_mass * speed * speed;
+                if strongest.is_none_or(|(_, e, _)| energy > e) { strongest = Some((*p, energy, speed)); }
             }
-            let falloff = 1.0 - (distance_sq / radius_sq).sqrt();
-            let direction = if delta.length_squared() > 1e-6 {
-                delta.normalize()
-            } else {
-                Vec3::Y
-            };
-            // A little upward bias makes ground-level pulses read as impacts
-            // rather than sliding assemblies sideways through the floor.
-            let impulse =
-                (direction + Vec3::Y * 0.28).normalize_or_zero() * (strength * falloff / scale);
-            body.velocity += impulse;
-            body.angular = (body.angular
-                + Vec3::Y.cross(direction) * (strength * 0.28 * falloff / scale))
-                .clamp_length_max(3.0);
+            body.velocity = (body.velocity + impulse / mass).clamp_length_max(120.0 / scale);
+            body.angular = (body.angular + body.inverse_inertia(inverse, torque)).clamp_length_max(12.0);
+            if impulse != Vec3::ZERO { body.settle_time = 0.0; }
+            if let Some((cell, energy, speed)) = strongest { fractures.push((index, cell, energy, speed)); }
+        }
+        for (index, cell, energy, speed) in fractures {
+            super::rigid::fracture_at(&mut self.bodies, index, cell, energy, speed);
         }
     }
     pub fn encode(&self, out: &mut Vec<u8>) {
+        self.encode_cells(out);
+        self.encode_bodies(out, |_| true);
+    }
+
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn encode_thermal_image(&self, out: &mut Vec<u8>) {
+        self.encode_cells(out);
+        out.extend_from_slice(&0_u32.to_le_bytes());
+    }
+
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn encode_rigid_image(&self, out: &mut Vec<u8>, listener: Vec3, reach: f32) {
+        out.extend_from_slice(&0_u32.to_le_bytes());
+        let r2 = reach * reach;
+        self.encode_bodies(out, |body| {
+            body.origin.as_vec3().distance_squared(listener) <= r2
+                || body.occupied.iter().any(|(p, _)| p.as_vec3().distance_squared(listener) <= r2)
+        });
+    }
+
+    fn encode_cells(&self, out: &mut Vec<u8>) {
         fn push(o: &mut Vec<u8>, v: u32) {
             o.extend_from_slice(&v.to_le_bytes());
         }
@@ -178,8 +320,14 @@ impl Sandbox {
             }
             push(out, c.gas as u32);
         }
-        push(out, self.bodies.len() as u32);
-        for b in &self.bodies {
+    }
+
+    fn encode_bodies(&self, out: &mut Vec<u8>, include: impl Fn(&RigidBody) -> bool) {
+        fn push(o: &mut Vec<u8>, v: u32) { o.extend_from_slice(&v.to_le_bytes()); }
+        fn pos(o: &mut Vec<u8>, p: IVec3) { for v in p.to_array() { push(o, v as u32); } }
+        let selected: Vec<_> = self.bodies.iter().filter(|b| include(b)).collect();
+        push(out, selected.len() as u32);
+        for b in selected {
             pos(out, b.origin);
             for v in b
                 .position
@@ -192,8 +340,11 @@ impl Sandbox {
             {
                 push(out, v.to_bits());
             }
-            for list in [&b.voxels, &b.occupied] {
-                push(out, list.len() as u32);
+            for (index, list) in [&b.voxels, &b.occupied].into_iter().enumerate() {
+                // Tag the first list count without adding words to the save.
+                // Untagged older bodies retain their legacy all-log meaning.
+                let flags = if index == 0 { 0x8000_0000 | ((b.felled_tree as u32) << 30) } else { 0 };
+                push(out, list.len() as u32 | flags);
                 for &(p, id) in list {
                     pos(out, p);
                     push(out, id.as_u32());
@@ -241,6 +392,7 @@ impl Sandbox {
         }
         let count = next()? as usize;
         ensure!(count <= MAX_BODIES, "Too many rigid bodies");
+        let mut claimed = crate::fast_hash::FastSet::default();
         for _ in 0..count {
             let origin = pos(next)?;
             let position = vec(next)?;
@@ -256,16 +408,25 @@ impl Sandbox {
                     && angular.length() < 100.0,
                 "Invalid rigid transform"
             );
+            let rotation = rotation.normalize();
+            let lattice = VoxelRotation::new(rotation);
+            let base = origin + position.round().as_ivec3();
             let mut lists = Vec::new();
-            for _ in 0..2 {
-                let n = next()? as usize;
-                ensure!(n > 0 && n <= MAX_BODY_VOXELS, "Invalid rigid voxel count");
-                let mut list = Vec::new();
+            let mut tree_tag = None;
+            for index in 0..2 {
+                let raw_count = next()?;
+                if index == 0 && raw_count & 0x8000_0000 != 0 {
+                    tree_tag = Some(raw_count & 0x4000_0000 != 0);
+                }
+                let n = if index == 0 && tree_tag.is_some() { raw_count & 0x3fff_ffff } else { raw_count } as usize;
+                ensure!(n > 0 && n <= MAX_TREE_BODY_VOXELS, "Invalid rigid voxel count");
+                let mut list = Vec::with_capacity(n);
+                let mut seen = crate::fast_hash::FastSet::default();
                 for _ in 0..n {
                     let p = pos(next)?;
                     let raw = next()?;
                     ensure!((raw as usize) < BlockId::COUNT, "Invalid rigid material");
-                    ensure!(!list.iter().any(|(q, _)| *q == p), "Duplicate rigid voxel");
+                    ensure!(seen.insert(p), "Duplicate rigid voxel");
                     list.push((p, BlockId::from_u32(raw)));
                 }
                 lists.push(list);
@@ -273,29 +434,32 @@ impl Sandbox {
             let occupied = lists.pop().unwrap();
             let voxels = lists.pop().unwrap();
             ensure!(occupied.len() == voxels.len(), "Rigid mass mismatch");
+            let all_logs = voxels.iter().all(|(_, b)| *b == BlockId::Log);
+            let tree = tree_tag.unwrap_or(all_logs);
+            let tree_material = |b| matches!(b, BlockId::Log | BlockId::Leaves | BlockId::PineLeaves);
+            ensure!(!tree || voxels.iter().all(|(_, b)| tree_material(*b)), "Invalid felled tree material");
+            ensure!(tree || all_logs || voxels.len() <= MAX_BODY_VOXELS, "Oversized rigid assembly");
             ensure!(
                 voxels.iter().zip(&occupied).all(|((p, b), (q, id))| b == id
-                    && matches!(b, BlockId::RigidCore | BlockId::Log | BlockId::Planks)
-                    && p.as_i64vec3().abs().max_element() <= MAX_BODY_VOXELS as i64
-                    && origin
-                        + (position + rotation.normalize() * p.as_vec3())
+                    && ((tree && tree_material(*b)) || matches!(b, BlockId::RigidCore | BlockId::Log | BlockId::Planks) || b.is_solid())
+                    && p.as_i64vec3().abs().max_element() <= if tree || all_logs { MAX_TREE_BODY_VOXELS as i64 } else { MAX_BODY_VOXELS as i64 }
+                    && (base + lattice.apply(*p) == *q || origin
+                        + (position + rotation * p.as_vec3())
                             .round()
                             .as_ivec3()
-                        == *q),
+                        == *q)),
                 "Rigid geometry disagrees with transform"
             );
             ensure!(
-                s.bodies.iter().all(|body| body
-                    .occupied
-                    .iter()
-                    .all(|(p, _)| !occupied.iter().any(|(q, _)| p == q))),
+                occupied.iter().all(|(p, _)| claimed.insert(*p)),
                 "Overlapping rigid bodies"
             );
             s.bodies.push(RigidBody {
+                felled_tree: tree,
                 origin,
                 position,
                 velocity,
-                rotation: rotation.normalize(),
+                rotation,
                 angular,
                 debt,
                 settle_time: 0.0,
@@ -314,6 +478,7 @@ mod tests {
 
     fn body(center: IVec3) -> RigidBody {
         RigidBody {
+            felled_tree: false,
             origin: center,
             position: Vec3::ZERO,
             velocity: Vec3::ZERO,

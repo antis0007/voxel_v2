@@ -4,6 +4,11 @@ use super::{ChunkCache, ChunkKey};
 use crate::world::{ChunkData, WorldSampleConfig, WorldSnapshot, CHUNK_SIZE};
 use glam::IVec3;
 use std::{collections::{HashMap, HashSet}, path::PathBuf, sync::{Arc, Weak}, time::{Duration, Instant}};
+#[path = "quality_plan.rs"]
+mod planning;
+#[cfg(test)]
+#[path = "quality_plan_integration_tests.rs"]
+mod plan_tests;
 
 pub(super) const COLUMN_LIMIT: usize = 16;
 pub(super) const BYTE_LIMIT: usize = 128 * 1024 * 1024;
@@ -24,8 +29,9 @@ impl Dependency {
         let chunk = match (&self.chunk,snapshot.chunks.get(&self.coord)) {
             (Some(old),Some(new))=>Weak::ptr_eq(old,&Arc::downgrade(new)), (None,None)=>true, _=>false,
         };
-        chunk && self.record == snapshot.regions.records.get(&self.coord)
-            .map(|r|(r.generation,r.offset,r.len,r.checksum,r.version))
+        // Disk writeback does not change an unchanged resident mesh source.
+        chunk && (self.chunk.is_some() || self.record == snapshot.regions.records.get(&self.coord)
+            .map(|r|(r.generation,r.offset,r.len,r.checksum,r.version)))
     }
 }
 struct Column {
@@ -35,6 +41,7 @@ struct Column {
     members: Vec<IVec3>,
     dependencies: Vec<Dependency>,
     admitted: bool,
+    planned: Option<(u64, super::visibility::ColumnRange)>,
 }
 #[derive(Default)]
 pub(super) struct QualityProxies {
@@ -46,6 +53,7 @@ pub(super) struct QualityProxies {
     previous_water: Option<Arc<crate::world::WaterSnapshot>>,
     /// `ChunkCache::quality_sync_inputs` after the last visible-set rebuild.
     sync_key: Option<QualitySyncInputs>,
+    plans: planning::Inputs,
 }
 
 /// What the membership sync's visible-set rebuild reads that can change
@@ -100,6 +108,14 @@ fn has_edits(snapshot: &WorldSnapshot, deps: &[Dependency]) -> bool {
 impl ChunkCache {
     /// Current non-promoted records, including retained/pending cover. Root uses
     /// this exact set to prove a canonical parent before allowing retirement.
+    /// Parent proof is only consumed by retirement, never by admission.
+    pub fn quality_parent_validation_needed(&self) -> bool {
+        let now = Instant::now();
+        self.quality_proxies.columns.values().any(|column|
+            column.unwanted_since.is_some_and(|since| now.duration_since(since) >= RELEASE_DELAY)
+                && now.duration_since(column.source_changed) >= RELEASE_DELAY)
+    }
+
     pub fn quality_columns(&self) -> Vec<(i32,i32)> {
         let mut columns:Vec<_>=self.quality_proxies.columns().collect();columns.sort_unstable();columns
     }
@@ -110,10 +126,16 @@ impl ChunkCache {
         self.quality_proxies.coords.iter().filter(|q|!self.edit_proxies.persistent_wanted(&(q.x,q.z))).copied().collect()
     }
     pub(super) fn quality_mesh_fits(&self, key:ChunkKey, bytes:usize, reserved:bool) -> bool {
+        if !self.quality_proxies.coords.contains(&key.coord)
+            || self.edit_proxies.persistent_wanted(&(key.coord.x, key.coord.z)) {
+            return true;
+        }
         let coords=self.quality_charge_coords();
-        if !coords.contains(&key.coord) {return true;}
         let installed:usize=coords.iter().filter_map(|q|self.gpu_meshes.get(q)).map(|m|m.bytes).sum();
-        installed.saturating_add(self.pending_gpu.bytes_matching(&coords))
+        // This sub-budget describes the post-publication quality set. The
+        // global reservation separately bounds old/new upload overlap.
+        installed.saturating_sub(self.gpu_meshes.get(&key.coord).map_or(0,|m|m.bytes))
+            .saturating_add(self.pending_gpu.bytes_matching(&coords))
             .saturating_add(if reserved {0}else{bytes})<=BYTE_LIMIT
     }
     fn sync_quality_membership(&mut self,snapshot:&WorldSnapshot,streamer:&mut super::ChunkStreamer) {
@@ -155,6 +177,7 @@ impl ChunkCache {
         self.quality_proxies.cfg=Some(snapshot.cfg);
         self.quality_proxies.root=Some(Arc::clone(&snapshot.regions.root));
         self.quality_proxies.cache_epoch=self.gpu_world_epoch;
+        let plan_revision = self.quality_proxies.plans.observe(snapshot);
         let mut wanted_order=Vec::new();let mut seen=HashSet::new();
         for &q in wanted {
             if wanted_order.len()==COLUMN_LIMIT {break;}
@@ -164,9 +187,10 @@ impl ChunkCache {
                 || q.1.checked_mul(CHUNK_SIZE).and_then(|v|v.checked_sub(CHUNK_SIZE)).is_none() {continue;}
             if seen.insert(q) {wanted_order.push(q);}
         }
+        self.edit_proxies.quality_requested = seen.clone();
         let water_changed:HashSet<_>=self.quality_proxies.previous_water.as_ref().map_or_else(HashSet::new,|old|
             snapshot.water_levels.changed_chunks(old)
-                .filter(|(q,a,b)|a!=b || snapshot.water_levels.precision.changed(&old.precision,*q))
+                .filter(|(q,_,_)| *crate::AB_OLD || snapshot.water_levels.surface_changed(old, *q, snapshot.cfg.voxel_scale))
                 .map(|(q,_,_)|q).collect());
         self.quality_proxies.previous_water=Some(Arc::clone(&snapshot.water_levels));
         let mut retire=Vec::new();
@@ -190,7 +214,7 @@ impl ChunkCache {
                 .chain(self.quality_proxies.columns()).collect();
             if !shared.contains(&key) && shared.len()>=super::edit_proxies::COLUMN_LIMIT {continue;}
             self.quality_proxies.columns.entry(key).or_insert_with(||Column {
-                since:now,unwanted_since:None,source_changed:now,members:Vec::new(),dependencies:Vec::new(),admitted:false});
+                since:now,unwanted_since:None,source_changed:now,members:Vec::new(),dependencies:Vec::new(),admitted:false,planned:None});
         }
         let interest=self.edit_proxies.columns().chain(self.quality_proxies.columns()).collect();
         self.column_y_cache.set_supplemental_interest(interest);
@@ -202,6 +226,9 @@ impl ChunkCache {
         let mut promotions=Vec::new();
         for key in columns {
             let Some(range)=self.column_y_cache.range(key) else {continue;};
+            // GPU progress still runs below. Only unchanged source planning is reused.
+            if self.quality_proxies.columns[&key].planned == Some((plan_revision, range))
+                && !self.edit_proxies.persistent_wanted(&key) { continue; }
             let mut low=range.0.max(floor);let mut high=range.1.min(ceiling);
             let known=dependencies(snapshot,key,&[]);
             for d in &known {
@@ -222,6 +249,7 @@ impl ChunkCache {
             let c=self.quality_proxies.columns.get_mut(&key).unwrap();
             if c.dependencies.len()!=deps.len() || !c.dependencies.iter().all(|d|d.matches(snapshot)) {c.source_changed=now;}
             c.members=members;c.dependencies=deps;
+            c.planned=Some((plan_revision,range));
             self.quality_proxies.rebuild_coords();
         }
         for (key,members) in promotions {
@@ -245,9 +273,11 @@ impl ChunkCache {
             self.gpu_bytes=self.gpu_meshes.values().map(|m|m.bytes).sum();
             self.mark_mesh_set_changed();
         }
-        let retained:HashSet<_>=self.visible_coords.iter().chain(self.published_coords.iter())
-            .chain(self.edit_proxies.coords.iter()).chain(self.horizon_pin_coords.iter()).copied().collect();
-        self.lod_meshes.retain(|q|!retired_coords.contains(&q) || retained.contains(&q));
+        if !retired_coords.is_empty() {
+            let retained:HashSet<_>=self.visible_coords.iter().chain(self.published_coords.iter())
+                .chain(self.edit_proxies.coords.iter()).chain(self.horizon_pin_coords.iter()).copied().collect();
+            self.lod_meshes.retain(|q|!retired_coords.contains(&q) || retained.contains(&q));
+        }
         let charge=self.quality_charge_coords();
         let occupied=charge.iter().filter_map(|q|self.gpu_meshes.get(q)).map(|m|m.bytes).sum::<usize>()
             .saturating_add(self.pending_gpu.bytes_matching(&charge));
@@ -258,5 +288,31 @@ impl ChunkCache {
             .map(|&coord|ChunkKey{coord,lod:0}).collect();
         keys.sort_unstable_by_key(|key|(self.quality_proxies.pending_since(&key.coord),key.coord.x,key.coord.z,key.coord.y));
         keys.truncate(ENQUEUE_LIMIT);keys
+    }
+}
+
+#[cfg(test)]
+mod writeback_tests {
+    use super::*;
+    use crate::{fluid::VoxelScalePreset, world::{BlockId, World, WorldType}};
+
+    #[test]
+    fn quality_source_checks_voxels_before_disk_record() {
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
+        let p = IVec3::new(1, 1, 1);
+        world.set(p, BlockId::Air);
+        let snapshot = world.snapshot();
+        let mut dependency = Dependency::capture(&snapshot, IVec3::ZERO);
+        assert!(dependency.chunk.is_some());
+        dependency.record = Some((123, 456, 789, 101, 112));
+        assert!(dependency.matches(&snapshot));
+        world.set(p, BlockId::Stone);
+        assert!(!dependency.matches(&world.snapshot()));
+        let mut evicted = snapshot.clone();
+        Arc::make_mut(&mut evicted.chunks).remove(&IVec3::ZERO);
+        assert!(!dependency.matches(&evicted));
+        let mut cold = Dependency::capture(&evicted, IVec3::ZERO);
+        cold.record = Some((123, 456, 789, 101, 112));
+        assert!(!cold.matches(&evicted));
     }
 }

@@ -216,39 +216,6 @@ impl LightingState {
     }
 }
 
-/// What hangs in the air at the player's position: fireflies on warm nights over
-/// grass and hills, pollen on summer days over plains, diamond dust over snow, and
-/// embers under a blood moon or emberglow dusk. Zero underground.
-pub fn ambience(
-    cfg: &super::WorldSampleConfig,
-    eye_m: glam::Vec3,
-    lighting: &LightingState,
-    event: Option<ActiveEvent>,
-) -> [f32; 4] {
-    let scale = cfg.voxel_meters().max(1e-3);
-    let w = super::biome_weights(
-        cfg,
-        (eye_m.x / scale).floor() as i32,
-        (eye_m.z / scale).floor() as i32,
-    );
-    let day = lighting.daylight;
-    let night = 1.0 - day;
-    // Winter foliage runs blue; read the season from the tint rather than recompute it.
-    let winter = smoothstep(
-        0.10,
-        0.30,
-        lighting.foliage_tint[2] - lighting.foliage_tint[0],
-    );
-    let fireflies =
-        smoothstep(0.55, 0.92, night) * (w.plains + w.hills * 0.7) * (1.0 - winter * 0.8);
-    let pollen = day * day * w.plains * (1.0 - winter);
-    let dust = day * w.snow;
-    let embers = event
-        .filter(|e| matches!(e.kind, SkyEvent::BloodMoon | SkyEvent::Emberglow))
-        .map_or(0.0, |e| e.intensity * 0.8);
-    [fireflies * 0.9, pollen * 0.6, dust * 0.9, embers]
-}
-
 /// Where the `n`th star of a shower lands, as a metre offset from the player.
 /// Always 30 to 80 m away: far enough to be a trek, near enough to be found.
 pub fn star_landing(weather_seed: u32, n: u32) -> (f32, f32) {

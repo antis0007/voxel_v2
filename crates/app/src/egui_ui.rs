@@ -2,7 +2,10 @@ use egui::{Align2, Color32, RichText};
 mod adventure;
 pub mod blueprints;
 pub mod block_page;
+pub mod storage_scan;
+mod brew_view;
 mod station_page;
+mod slot_grid;
 pub mod trade_page;
 mod chip_art;
 mod chip_canvas;
@@ -14,41 +17,66 @@ mod chip_report;
 mod chip_tools;
 mod debug_overlay;
 mod controls;
+mod event_log;
 #[cfg(test)]
 mod text_rules;
 mod description_copy;
 mod factory;
 mod habitats;
+mod hud_style;
+mod hud_layout;
 mod front_end;
 mod grimoire;
 pub(crate) mod held_art;
 pub(crate) mod icons;
 mod icons_spells;
 mod inventory;
+pub(crate) mod workshop;
+pub(crate) use inventory::creative_items;
 mod look_at;
 mod loading_screen;
 mod planet_loading;
+mod planet_editor;
+pub mod world_loader;
 mod main_menu;
 mod menu_scene;
 mod schematics;
+mod online_browser;
+pub mod coop_panel;
+pub mod chat;
 pub(crate) mod menu_capture;
 mod orbital;
+mod lift_panel;
+pub mod flight_hud;
+pub mod system_map;
+pub mod map_hub;
+pub mod nav_console;
 mod magic_fx;
+mod motion;
 pub mod map;
+pub(crate) mod quest_log;
+mod mortality;
 pub(crate) mod magic_style;
 pub(crate) mod pixel_art;
 mod presentation;
 pub(crate) mod progression_hud;
+pub(crate) mod records;
+pub mod goals_hud;
+mod prism;
 mod sigils;
 pub mod subtitles;
 mod production;
+mod magic_guide;
 mod recipe_book;
+pub(crate) use recipe_book::{open_magic_guide, publish_study};
 mod relics;
 mod resonance;
 mod settings;
-mod tinkering;
+mod tool_station;
+mod projects;
 mod tool_hud;
 pub(crate) mod typography;
+pub(crate) mod themes;
 mod wand_atelier;
 mod wand_xmb;
 mod wands;
@@ -80,15 +108,22 @@ pub enum UiMode {
 }
 
 pub enum UiAction {
+    LocalChat(String),
+    Study(crate::world::progression::study::Lesson),
+    StudyMaterials(crate::world::progression::study::Lesson, bool),
     None,
     RequestOrbital(glam::IVec2, crate::world::orbital::Channel),
     OrbitalReceiver(crate::world::orbital::receiver::Action),
     OrbitalRadio(crate::world::orbital::radio::Action),
+    SystemMap,
     Factory(crate::world::factory::Action),
+    WorkshopMap(Option<(glam::IVec3, &'static str)>),
     /// Chip designer and controller installation.
     Chip(crate::world::factory::chips::Action),
     /// Creative catalogue grant: item and requested count.
     GiveItem(crate::world::inventory::Item, u32),
+    SelectCreativeItem(crate::world::inventory::Item, u32, usize),
+    SelectCreativeRow(Vec<crate::world::inventory::Item>),
     DropInventory(usize),
     StartWorld {
         name: String,
@@ -96,17 +131,26 @@ pub enum UiAction {
         world_type: WorldType,
         voxel_scale: VoxelScalePreset,
         seed: u32,
+        planet: Option<engine_voxel::PlanetSettings>,
+        difficulty: crate::world::adventure::difficulty::Difficulty,
         mode: crate::world::rules::GameMode,
+        systems: crate::world::systems::Systems,
     },
     /// Replaces the open world's rules; the world folder keeps them.
     SetRules(crate::world::rules::Rules),
+    /// Changes the open world's difficulty; saved with the world.
+    SetDifficulty(crate::world::adventure::difficulty::Difficulty),
     SetWeatherPreset(crate::world::WeatherPreset),
     RandomizeWeather,
     Resume,
+    /// Leave the death screen.
+    Respawn,
     BackToWorldSelect,
     SaveWorld,
     OpenWorld(String),
     RefreshWorlds,
+    /// Confirmed in the world browser; clears the player's save folder.
+    DeleteAllWorlds,
     RenameWorld {
         id: String,
         name: String,
@@ -115,6 +159,8 @@ pub enum UiAction {
         id: String,
         favorite: bool,
     },
+    /// Open the world to friends, join, leave or close a session.
+    Coop(coop_panel::Request),
     Quit,
 }
 
@@ -374,7 +420,18 @@ fn creative_tools_ui_plain(
     tool_settings_ui(ui, creative_state, &mut brush, &mut area);
     ui.separator();
     ui.small("LMB remove · RMB place · B close");
-    ui.collapsing("Player settings", |ui| {
+    ui.collapsing("Flight", |ui| {
+        if ui.checkbox(&mut player.flying, "Flight").changed() {
+            player.vel = glam::Vec3::ZERO;
+            player.movement.fall_speed = 0.0;
+            player.jump_tap_timer = 0.0;
+        }
+        ui.add(egui::Slider::new(&mut player.flight.speed, 4.0..=64.0).text("Speed").suffix(" m/s"));
+        ui.add(egui::Slider::new(&mut player.flight.boost, 1.0..=4.0).text("Sprint Boost").suffix("x"));
+        ui.checkbox(&mut player.flight.camera_direction, "Camera Direction");
+        ui.checkbox(&mut player.flight.land_on_descent, "Land on Descent");
+        ui.small("[Ctrl] Boost · [Alt] Precision · [Shift] Descend");
+        if ui.button("Reset Flight").clicked() { player.flight = Default::default(); }
         ui.add(egui::Slider::new(&mut player.scale, 0.25..=3.0).text("Player scale"));
         ui.selectable_value(&mut player.fly_mode, FlyMode::Creative, "Flight");
         ui.selectable_value(&mut player.fly_mode, FlyMode::Noclip, "Noclip");
@@ -444,8 +501,9 @@ fn draw_held_tool_overlay(
     ctx: &egui::Context,
     pose: &HeldToolPoseState,
     tool: ToolKind,
-    time_of_day: f32,
 ) {
+    // Hands belong to the Blender rig; this overlay only draws creative tools.
+    if tool == ToolKind::Hand { return; }
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Background,
         egui::Id::new("held_tool_overlay"),
@@ -465,7 +523,7 @@ fn draw_held_tool_overlay(
 
     // True 3D projection mapping
     let aspect = rect.width() / rect.height().max(1.0);
-    let proj = Mat4::perspective_rh(70.0_f32.to_radians(), aspect, 0.01, 10.0);
+    let proj = glam::camera::rh::proj::directx::perspective(70.0_f32.to_radians(), aspect, 0.01, 10.0);
 
     // 2. Base camera bobbing
     let bob_x = (walk_t * 1.0).sin() * 0.006 * bob_weight;
@@ -496,125 +554,9 @@ fn draw_held_tool_overlay(
     } else {
         1.0 - smooth((swing_t - 0.48) / 0.52)
     };
-    let placing = pose.action_kind == Some(ToolUseAction::Place);
-    let swing_g = stroke;
-    let swing_f = stroke;
     let equip_y = -equip * 0.6;
 
-    if tool == ToolKind::Hand {
-        // Compact expedition glove: articulated knuckles, stitched leather cuff
-        // and a mineral-teal sleeve. Keep its silhouette below the sight line.
-        let mat = base_mat
-            * Mat4::from_translation(Vec3::new(
-                0.82 - swing_g * if placing { 0.025 } else { 0.09 },
-                -0.69 + swing_f * if placing { 0.035 } else { -0.035 } + equip_y,
-                -1.26 - swing_f * if placing { 0.19 } else { 0.12 },
-            ))
-            * Mat4::from_rotation_z(
-                (-10.0 - swing_g * if placing { 3.0 } else { 9.0 }).to_radians(),
-            )
-            * Mat4::from_rotation_x(
-                (-24.0 + swing_f * if placing { -6.0 } else { 10.0 }).to_radians(),
-            )
-            * Mat4::from_rotation_y(-22.0_f32.to_radians())
-            * Mat4::from_scale(Vec3::splat(0.85));
-        let sun_height = ((time_of_day - 0.25) * std::f32::consts::TAU)
-            .sin()
-            .max(0.0);
-        let illumination = 0.30 + 0.70 * sun_height.sqrt();
-        let leather = shade_color(Color32::from_rgb(111, 83, 57), illumination);
-        let seam = shade_color(Color32::from_rgb(155, 125, 82), illumination);
-        let cloth = shade_color(Color32::from_rgb(49, 73, 66), illumination);
-        let dark = shade_color(Color32::from_rgb(65, 52, 41), illumination);
-        let copper = shade_color(Color32::from_rgb(162, 113, 62), illumination);
-        for (center, size, color) in [
-            (
-                Vec3::new(0.0, -0.34, 0.0),
-                Vec3::new(0.22, 0.53, 0.22),
-                cloth,
-            ),
-            (
-                Vec3::new(0.0, -0.12, 0.0),
-                Vec3::new(0.23, 0.14, 0.23),
-                dark,
-            ),
-            (
-                Vec3::new(0.0, -0.05, 0.0),
-                Vec3::new(0.235, 0.025, 0.235),
-                seam,
-            ),
-            (
-                Vec3::new(0.0, 0.095, 0.0),
-                Vec3::new(0.185, 0.25, 0.19),
-                leather,
-            ),
-            (
-                Vec3::new(0.018, 0.08, 0.099),
-                Vec3::new(0.10, 0.13, 0.012),
-                dark,
-            ),
-            (
-                Vec3::new(0.018, 0.09, 0.108),
-                Vec3::new(0.08, 0.10, 0.010),
-                leather,
-            ),
-            (
-                Vec3::new(-0.108, 0.055, 0.015),
-                Vec3::new(0.065, 0.13, 0.12),
-                leather,
-            ),
-            (
-                Vec3::new(0.0, -0.12, 0.123),
-                Vec3::new(0.065, 0.065, 0.018),
-                copper,
-            ),
-            (
-                Vec3::new(0.0, -0.12, 0.135),
-                Vec3::new(0.035, 0.035, 0.01),
-                dark,
-            ),
-        ] {
-            add_3d_box(&mut faces, mat, proj, rect, center, size, color);
-        }
-        for finger in 0..4 {
-            let x = -0.069 + finger as f32 * 0.046;
-            let lift = if finger == 1 || finger == 2 {
-                0.012
-            } else {
-                0.0
-            };
-            let open = if placing { stroke.max(0.0) } else { 0.0 };
-            add_3d_box(
-                &mut faces,
-                mat,
-                proj,
-                rect,
-                Vec3::new(x, 0.23 + lift + open * 0.025, -open * 0.035),
-                Vec3::new(0.039, 0.065 + open * 0.035, 0.15),
-                leather,
-            );
-            add_3d_box(
-                &mut faces,
-                mat,
-                proj,
-                rect,
-                Vec3::new(x, 0.16, 0.099),
-                Vec3::new(0.024, 0.045, 0.012),
-                seam,
-            );
-        }
-        for stitch in 0..5 {
-            add_3d_box(
-                &mut faces,
-                mat,
-                proj,
-                rect,
-                Vec3::new(-0.078 + stitch as f32 * 0.039, -0.025, 0.104),
-                Vec3::new(0.012, 0.018, 0.012),
-                seam,
-            );
-        }
-    } else {
+    if tool != ToolKind::Hand {
         // Solid, camera-relative wand with a quiet wrist pivot instead of a spinning sprite.
         let accent = match tool {
             ToolKind::BuildersWand => Color32::from_rgb(99, 204, 196),
@@ -1328,9 +1270,40 @@ fn block_icon_texel(block: BlockId, color: Color32, top: bool, x: u32, y: u32) -
         BlockId::Stone | BlockId::Basalt | BlockId::Limestone => {
             tint = shade_color(color, 0.89 + ((x / 3 + y / 2) % 3) as f32 * 0.065);
         }
-        _ => {}
+        _ => tint = family_icon_texel(block.surface().texture_kind, color, tint, x, y, hash),
     }
     tint
+}
+
+/// Surface-family pattern for blocks without an authored icon texel, so
+/// catalogue cubes of one colour still read as different materials. `x` and
+/// `y` are on the 7x7 face grid; `tint` is the plain speckled colour.
+fn family_icon_texel(kind: u32, color: Color32, tint: Color32, x: u32, y: u32, hash: f32) -> Color32 {
+    let shade = |f: f32| shade_color(color, f);
+    match kind {
+        // Planks and wood-like boards: dark seam every third row.
+        11 if y % 3 == 2 => shade(0.66),
+        // Masonry panels: seam along the top and left edge of each tile.
+        12 if x == 0 || y == 0 => shade(0.78),
+        // Dressed stone: running-bond block joints.
+        54 | 58 if y % 4 == 3 || (x + y / 4 * 4).is_multiple_of(8) => shade(0.72),
+        // Cobble: dark gaps between lumps.
+        13 if (x * 5 + y * 3) % 7 < 2 => shade(0.62),
+        // Soil, moss and fungal ground: dark specks.
+        2 | 16 | 17 if hash < 3.0 => shade(0.74),
+        // Stone family variants: the same banding as plain stone.
+        3 => shade(0.89 + ((x / 3 + y / 2) % 3) as f32 * 0.065),
+        // Ores: bright flecks in the host rock.
+        14 | 15 | 20 | 21 if (x / 2 + y / 3) % 3 == 1 && hash < 7.0 => shade(1.5),
+        // Metal blocks: dark rim and a diagonal glint.
+        47..=51 if x == 0 || y == 0 => shade(0.8),
+        47..=51 if (x + y) % 6 == 0 => shade(1.28),
+        // Crystal, glass and ice: pale diagonal facets.
+        9 | 22 | 53 if (x + y) % 4 == 0 => shade(1.28),
+        // Liquids: horizontal ripples.
+        8 | 10 if y % 3 == 0 => shade(1.14),
+        _ => tint,
+    }
 }
 
 fn draw_voxel_icon(painter: &egui::Painter, rect: egui::Rect, block: BlockId) {
@@ -1342,13 +1315,16 @@ fn draw_voxel_icon(painter: &egui::Painter, rect: egui::Rect, block: BlockId) {
         icons::paint(painter, rect, icons::Icon::Machine(kind));
         return;
     }
+    // Plants and produce have their own sprites; a cube of leaf colour read as a block.
+    if icons::sprites16::paint_block(painter, rect, block) {
+        return;
+    }
     // Original 14x14 isometric sprite. One mesh of logical pixels replaces
     // 192 separately allocated skewed face meshes, whose texels were subpixel.
-    let unit = (rect.width().min(rect.height()) / grimoire::ICON)
-        .floor()
-        .max(1.0);
-    let origin = rect.center() - egui::vec2(7.0, 7.0) * unit;
-    let origin = egui::pos2(origin.x.round(), origin.y.round());
+    // Snap texels to physical pixels: whole points left the cube at 40% of a slot.
+    let ppp = painter.ctx().pixels_per_point();
+    let unit = ((rect.width().min(rect.height()) * 0.86 * ppp / 14.0).floor().max(1.0)) / ppp;
+    let origin = ((rect.center() - egui::vec2(7.0, 7.0) * unit) * ppp).round() / ppp;
     let base = material_color32(block);
     let mut mesh = egui::Mesh::default();
     for y in 0..14 {
@@ -1382,6 +1358,7 @@ fn draw_voxel_icon(painter: &egui::Painter, rect: egui::Rect, block: BlockId) {
 fn draw_palette_material_card(ui: &mut egui::Ui, size: [f32; 2], block: BlockId) -> egui::Response {
     let desired = egui::vec2(size[0], size[1]);
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
@@ -1446,24 +1423,11 @@ fn draw_hotbar_slot_button(
     slot: usize,
     selected: bool,
     drag_targeted: bool,
+    size: f32,
 ) -> egui::Response {
-    let viewport = ui.ctx().content_rect();
-    let requested_size = grimoire::SLOT
-        * ui.ctx().data(|d| {
-            d.get_temp::<f32>(egui::Id::new("hotbar_size_scale"))
-                .unwrap_or(1.0)
-        });
-    let size = requested_size.min(((viewport.width() - 32.0) / 9.0 - grimoire::GAP).floor());
-    let remaining = 9 - slot;
-    let size = size.min(
-        ((ui.available_width() - ui.spacing().item_spacing.x * (remaining - 1) as f32)
-            / remaining as f32)
-            .max(10.0),
-    );
     let ui_ratio = size / grimoire::SLOT;
-    let key_extent = 2.0 * (8.0 * ui_ratio).round().clamp(7.0, 10.0);
-    let key_font_size = (13.0 * ui_ratio).round().clamp(11.0, 16.0);
-    let desired = egui::vec2(size, size + key_extent + 1.0);
+    let key_font_size = (7.0 * ui_ratio).round().clamp(6.0, 9.0);
+    let desired = egui::vec2(size, size);
     let hover_label = if use_survival {
         survival_stack.map_or_else(
             || format!("Slot {}: Empty", slot + 1),
@@ -1473,6 +1437,13 @@ fn draw_hotbar_slot_button(
         format!("Slot {}: {}", slot + 1, block.display_name())
     };
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        let id = egui::Id::new("interaction_regression_hotbar_rects");
+        let mut rects = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
+        rects.push(rect);
+        d.insert_temp(id, rects);
+    });
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &hover_label)
     });
@@ -1487,88 +1458,31 @@ fn draw_hotbar_slot_button(
     let snap = |v: f32| (v * dpi).round() / dpi;
     let layout_frame_rect = egui::Rect::from_min_max(
         egui::pos2(snap(rect.left()), snap(rect.top())),
-        egui::pos2(snap(rect.right()), snap(rect.top() + size)),
+        egui::pos2(snap(rect.left()) + snap(size), snap(rect.top()) + snap(size)),
     );
-    let frame_rect = if selected {
-        layout_frame_rect.translate(egui::vec2(0.0, 1.0))
-    } else {
-        grimoire::react(&response, layout_frame_rect, false)
-    };
+    let frame_rect = layout_frame_rect;
     icons::frame(painter, frame_rect, selected);
     if response.hovered() || response.has_focus() || drag_targeted {
         grimoire::focus(painter, frame_rect);
     }
 
-    // A square keycap grows from the frame's lower edge. Its own bounds stay
-    // on the layout slot while the selected frame and icon sit one pixel low.
-    let key_rect = egui::Rect::from_min_max(
-        egui::pos2(
-            snap(layout_frame_rect.center().x - key_extent * 0.5),
-            snap(layout_frame_rect.bottom() - 1.0),
-        ),
-        egui::pos2(
-            snap(layout_frame_rect.center().x + key_extent * 0.5),
-            snap(layout_frame_rect.bottom() + key_extent - 1.0),
-        ),
-    );
-    let key_edge = if selected {
-        grimoire::GOLD
-    } else {
-        grimoire::SILVER_DARK
-    };
-    painter.rect_filled(key_rect, 0, key_edge);
-    painter.rect_filled(key_rect.shrink(1.0), 0, presentation::INK);
-    painter.rect_filled(
-        egui::Rect::from_min_size(
-            key_rect.min + egui::vec2(1.0, 1.0),
-            egui::vec2(key_extent - 2.0, 1.0),
-        ),
-        0,
-        if selected { grimoire::GOLD_LIGHT } else { grimoire::SILVER },
-    );
-    painter.text(
-        key_rect.center(),
-        Align2::CENTER_CENTER,
-        hotbar_key_label(slot),
-        egui::FontId::monospace(key_font_size),
-        if selected {
-            grimoire::GOLD_LIGHT
-        } else {
-            grimoire::SILVER
-        },
-    );
-
     if use_survival {
         if let Some(stack) = survival_stack {
-            let icon_size = grimoire::ICON.min(size - 4.0);
+            let icon_size = (grimoire::ICON * ui_ratio).min(size - 4.0);
             let icon_rect = egui::Rect::from_center_size(
                 egui::pos2(snap(frame_rect.center().x), snap(frame_rect.center().y)),
                 egui::vec2(icon_size, icon_size),
             );
             inventory::draw_item_icon(painter, icon_rect, stack.item);
-            progression_hud::wear_bar(painter, frame_rect, crate::world::inventory::SlotAddr::Hotbar(slot));
             if stack.count > 1 {
-                let count_str = format!("{}", stack.count);
-                let font = egui::FontId::monospace(11.0);
-                let pos = frame_rect.right_bottom() - egui::vec2(2.0, 2.0);
-                painter.text(
-                    pos + egui::vec2(1.0, 1.0),
-                    Align2::RIGHT_BOTTOM,
-                    &count_str,
-                    font.clone(),
-                    presentation::INK,
-                );
-                painter.text(
-                    pos,
-                    Align2::RIGHT_BOTTOM,
-                    count_str,
-                    font,
-                    presentation::PAPER,
-                );
+                inventory::stack_count(painter, frame_rect, ui_ratio, stack.count);
             }
+            progression_hud::wear_bar(painter, frame_rect, if slot == 9 {
+                crate::world::inventory::SlotAddr::Offhand
+            } else { crate::world::inventory::SlotAddr::Hotbar(slot) });
         }
     } else if block != BlockId::Air {
-        let icon_size = grimoire::ICON.min(size - 4.0);
+        let icon_size = (grimoire::ICON * ui_ratio).min(size - 4.0);
         let icon_rect = egui::Rect::from_center_size(
             frame_rect.center(),
             egui::vec2(icon_size, icon_size),
@@ -1576,7 +1490,20 @@ fn draw_hotbar_slot_button(
         draw_voxel_icon(painter, icon_rect, block);
     }
 
-    response.on_hover_text(hover_label)
+    // Quiet corner shortcuts leave the count's lower-right corner unobstructed.
+    let key_pos = frame_rect.left_top() + egui::vec2(2.0, 1.0);
+    let key_font = egui::FontId::monospace(key_font_size);
+    painter.text(key_pos + egui::vec2(0.5, 0.5), Align2::LEFT_TOP,
+        if slot == 9 { "·" } else { hotbar_key_label(slot) }, key_font.clone(), presentation::INK);
+    painter.text(key_pos, Align2::LEFT_TOP, if slot == 9 { "·" } else { hotbar_key_label(slot) }, key_font,
+        if selected { grimoire::GOLD_LIGHT } else { grimoire::SILVER });
+    if use_survival { response } else { response.on_hover_text(hover_label) }
+}
+
+fn hotbar_slot_size(scale: f32, available: f32, offhand: bool) -> f32 {
+    let count = if offhand { 11.0 } else { 9.0 };
+    let gaps = 8.0 * grimoire::GAP + if offhand { 16.0 } else { 0.0 };
+    (grimoire::SLOT * scale).min((available - gaps) / count).floor().max(1.0)
 }
 
 fn draw_hotbar_row(
@@ -1586,12 +1513,23 @@ fn draw_hotbar_row(
     survival_inv: Option<&crate::world::inventory::SurvivalInventory>,
     drag_source: &mut Option<DragSource>,
     drag_target_slot: &mut Option<usize>,
-) {
+) -> egui::Rect {
     *drag_target_slot = None;
     let use_survival = survival_inv.is_some()
         && creative_state.tool == ToolKind::Hand
-        && !player.flying
         && !creative_state.show_panel;
+    let scale = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::new("hotbar_size_scale")).unwrap_or(1.0));
+    let size = hotbar_slot_size(scale, ui.ctx().content_rect().width() - 32.0, use_survival);
+    let offhand_right = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new("offhand_right")).unwrap_or(false));
+    let draw_offhand = |ui: &mut egui::Ui| {
+        draw_hotbar_slot_button(ui, BlockId::Air, survival_inv.and_then(|inv| inv.offhand),
+            true, 9, false, false, size).on_hover_text("Offhand");
+    };
+    if use_survival && !offhand_right {
+        draw_offhand(ui);
+        ui.add_space((8.0 - ui.spacing().item_spacing.x).max(0.0));
+    }
+    let mut main_rect = egui::Rect::NOTHING;
     let hotbar = *creative_state.hotbar();
     for (slot, block) in hotbar.into_iter().enumerate() {
         let survival_stack = survival_inv.and_then(|inv| inv.hotbar[slot]);
@@ -1603,7 +1541,14 @@ fn draw_hotbar_row(
             slot,
             slot == creative_state.selected_slot,
             *drag_target_slot == Some(slot),
+            size,
         );
+        main_rect = main_rect.union(response.rect);
+        if use_survival {
+            if let (Some(stack), Some(inv)) = (survival_stack, survival_inv) {
+                inventory::show_item_tooltip(&response, stack, inv, crate::world::inventory::SlotAddr::Hotbar(slot));
+            }
+        }
         if response.clicked() {
             creative_state.select_slot(slot);
             if creative_state.show_palette {
@@ -1638,6 +1583,11 @@ fn draw_hotbar_row(
             );
         }
     }
+    if use_survival && offhand_right {
+        ui.add_space((8.0 - ui.spacing().item_spacing.x).max(0.0));
+        draw_offhand(ui);
+    }
+    main_rect
 }
 
 fn quick_tool_ui_plain(
@@ -1688,16 +1638,20 @@ pub struct EguiUi {
     pub library_revision: u64,
     pub preferences_status: Option<String>,
     pub new_world_name: String,
+    planet_editor: planet_editor::State,
     home_page: front_end::HomePage,
     browser: world_browser::BrowserState,
     pub expedition: Option<crate::world::expedition::Expedition>,
     pub factory: crate::world::factory::View,
     pub adventure: crate::world::adventure::View,
     pub orbital: crate::world::orbital::View,
+    pub lift: crate::world::orbital::express::View,
     pub survival: crate::world::inventory::SurvivalInventory,
     pub survival_eat_timer: f32,
     pub survival_armor_points: u32,
     pub biome_label: &'static str,
+    /// Danger tier (0-3) under the player, for the F3 readout.
+    pub danger: u8,
     pub elevation_m: f32,
     pub show_hud: bool,
     pub target_block: Option<BlockId>,
@@ -1705,6 +1659,8 @@ pub struct EguiUi {
     pub target_machine: Option<crate::world::factory::Probe>,
     pub target_cell_temp_c: Option<f32>,
     pub target_volume_ul: Option<u64>,
+    pub target_water: Option<crate::world::water_tools::Reading>,
+    pub manyfold_hint: Option<&'static str>,
     pub target_environment: Option<crate::world::environment::inspect::Inspection>,
     pub environment_lag: u64,
     pub tool_feedback: tool_hud::Feedback,
@@ -1715,21 +1671,31 @@ pub struct EguiUi {
     pub ui_scale: f32,
     /// Independent hotbar slot size multiplier.
     pub hotbar_scale: f32,
+    pub offhand_right: bool,
     pub persistence_status: Option<String>,
     /// A short message from automatic quality, with seconds left on screen.
     pub quality_notice: Option<(String, f32)>,
     /// Sky event banner: (title, line, egui time it appeared).
     pub sky_notice: Option<(&'static str, &'static str, f64)>,
     pub region_status: Option<String>,
+    /// Difficulty of the open world, mirrored from the world each frame.
+    pub world_difficulty: crate::world::adventure::difficulty::Difficulty,
+    /// Choice on the create-world form, used by the next new world.
+    pub new_world_difficulty: crate::world::adventure::difficulty::Difficulty,
     /// Rules of the open world, mirrored from the world each frame.
     pub world_rules: crate::world::rules::Rules,
     pub new_world_mode: crate::world::rules::GameMode,
+    /// Systems the next new world plays with.
+    pub new_world_systems: crate::world::systems::Systems,
+    pub online: online_browser::BrowserState,
+    /// Friends panel; the game loop fills its view each frame.
+    pub coop: coop_panel::PanelState,
     pub region_error: Option<String>,
     pub ctx: egui::Context,
     state: egui_winit::State,
     renderer: Renderer,
     shapes: Vec<egui::ClippedPrimitive>,
-    textures_delta: egui::TexturesDelta,
+    pending_texture_frees: Vec<egui::TextureId>,
     held_tool_pose: HeldToolPoseState,
     drag_source: Option<DragSource>,
     drag_target_slot: Option<usize>,
@@ -1741,14 +1707,24 @@ pub struct EguiUi {
     /// Full diagnostics window, opened from the pause screen.
     show_perf_details: bool,
     pause_page: front_end::PausePage,
+    event_log: event_log::EventLog,
 }
 
 impl EguiUi {
+    #[cfg(feature = "multiplayer-sdr")]
+    pub fn show_friends(&mut self) {
+        self.home_page = front_end::HomePage::Online;
+        self.pause_page = front_end::PausePage::Online;
+    }
+
     /// Show a sky-event banner. Repeated calls for the same event are ignored.
     pub fn announce_sky(&mut self, title: &'static str, line: &'static str) {
         // Cosmetic sky changes need no banner; meteorites are collectible.
         if line.is_empty() { return; }
         let now = self.ctx.input(|i| i.time);
+        if self.sky_notice.is_none_or(|(t, l, _)| (t, l) != (title, line)) {
+            self.event_log.note(title, line, None);
+        }
         self.sky_notice = Some((title, line, now));
     }
 
@@ -1775,7 +1751,9 @@ impl EguiUi {
             RendererOptions::default(),
         );
         magic_fx::install(&mut renderer, device, surface_format.remove_srgb_suffix());
+        prism::install(&mut renderer, device, surface_format.remove_srgb_suffix());
         menu_scene::install(&mut renderer, device, surface_format.remove_srgb_suffix());
+        world_loader::install(&mut renderer, device, surface_format.remove_srgb_suffix());
 
         Self {
             library_entries: std::sync::Arc::default(),
@@ -1785,6 +1763,7 @@ impl EguiUi {
             library_revision: 0,
             preferences_status: None,
             new_world_name: "New world".into(),
+            planet_editor: Default::default(),
             home_page: front_end::HomePage::default(),
             browser: world_browser::BrowserState::default(),
             show_hud: true,
@@ -1792,15 +1771,19 @@ impl EguiUi {
             factory: Default::default(),
             adventure: Default::default(),
             orbital: Default::default(),
+            lift: Default::default(),
             survival: Default::default(),
             survival_eat_timer: 0.0,
             survival_armor_points: 0,
             biome_label: "Wilderness",
+            danger: 0,
             elevation_m: 0.0,
             target_block: None,
             target_machine: None,
             target_cell_temp_c: None,
             target_volume_ul: None,
+            target_water: None,
+            manyfold_hint: None,
             target_environment: None,
             environment_lag: 0,
             tool_feedback: Default::default(),
@@ -1809,18 +1792,24 @@ impl EguiUi {
             invert_mouse: false,
             ui_scale: crate::preferences::UI_SCALE_DEFAULT,
             hotbar_scale: 1.0,
+            offhand_right: false,
             persistence_status: None,
             quality_notice: None,
             sky_notice: None,
             region_status: None,
+            world_difficulty: Default::default(),
             world_rules: Default::default(),
             new_world_mode: crate::world::rules::GameMode::Survival,
+            new_world_systems: crate::world::systems::Systems::default(),
+            new_world_difficulty: Default::default(),
+            online: Default::default(),
+            coop: Default::default(),
             region_error: None,
             ctx,
             state,
             renderer,
             shapes: Vec::new(),
-            textures_delta: egui::TexturesDelta::default(),
+            pending_texture_frees: Vec::new(),
             held_tool_pose: HeldToolPoseState::default(),
             drag_source: None,
             drag_target_slot: None,
@@ -1832,6 +1821,7 @@ impl EguiUi {
             show_debug_performance_panel: std::env::var_os("VOXEL_REVIEW_F3").is_some(),
             show_perf_details: false,
             pause_page: front_end::PausePage::default(),
+            event_log: event_log::EventLog::default(),
         }
     }
 
@@ -1839,11 +1829,16 @@ impl EguiUi {
         self.state.on_window_event(window, event).consumed
     }
 
+    pub fn show_debug_overlay(&self) -> bool {
+        self.show_debug_performance_panel
+    }
+
     pub fn toggle_debug(&mut self) {
         self.show_debug_performance_panel = !self.show_debug_performance_panel;
     }
 
     pub fn begin_frame(&mut self, window: &Window) {
+        themes::apply(&self.ctx);
         typography::apply(&self.ctx);
         // Keep widget dimensions in egui points across resolutions; only the
         // explicit user preference changes their size, capped so the panels fit.
@@ -1859,6 +1854,7 @@ impl EguiUi {
                 self.hotbar_scale.clamp(0.7, 1.6),
             )
         });
+        self.ctx.data_mut(|d| d.insert_temp(egui::Id::new("offhand_right"), self.offhand_right));
         let mut raw_input = self.state.take_egui_input(window);
         if std::env::var_os("VOXEL_REVIEW_INPUT_ISOLATED").is_some() {
             raw_input.events.clear();
@@ -1872,15 +1868,16 @@ impl EguiUi {
         grimoire::review_input(&self.ctx, &mut raw_input);
         self.ctx.begin_pass(raw_input);
         magic_fx::begin_frame(&self.ctx);
+        prism::begin_frame(&self.ctx);
     }
 
     pub fn build_loading_ui(&mut self, loading: &LoadingUiState) {
         loading_screen::draw(&self.ctx, loading);
     }
 
-    /// Loading screen for a planet whose terrain solve is still running.
-    pub fn build_planet_loading_ui(&mut self, entry: &engine_worldgen::geo::Entry) {
-        planet_loading::draw(&self.ctx, entry);
+    /// World generation screen with the stage list and live globe.
+    pub fn build_world_loading_ui(&mut self, report: &world_loader::WorldLoadReport) {
+        world_loader::draw(&self.ctx, report);
     }
 
     pub fn show_title_screen(&mut self) {
@@ -2483,6 +2480,13 @@ impl EguiUi {
                             );
                             perf_value_row(
                                 ui,
+                                "Terrain Uploads",
+                                format!("{} · {} pending",
+                                    format_compact_bytes(perf.chunk_latest.upload_staging_bytes),
+                                    perf.chunk_latest.upload_staging_jobs),
+                            );
+                            perf_value_row(
+                                ui,
                                 "Mesh Workers + Results",
                                 format!(
                                     "{} / {}",
@@ -2556,7 +2560,7 @@ impl EguiUi {
         };
 
         if matches!(mode, UiMode::Paused) {
-            egui::Area::new("debug_perf_launcher".into())
+            egui::Area::new(egui::Id::new("debug_perf_launcher"))
                 .anchor(Align2::RIGHT_TOP, [-14.0, launcher_y])
                 .show(&self.ctx, |ui| {
                     egui::Frame::new()
@@ -2622,7 +2626,14 @@ impl EguiUi {
         perf: &PerfSnapshot,
         creative_state: &mut CreativeState,
         using_tool: Option<ToolUseAction>,
+        world: Option<&mut crate::world::World>,
     ) -> UiAction {
+        if matches!(mode, UiMode::Loading) {
+            self.drag_source = None;
+            self.drag_target_slot = None;
+            return UiAction::None;
+        }
+        held_art::sync_tools(&self.adventure.tool_bank);
         let mut action = UiAction::None;
         // Opt-in screenshots exercise the real screens without opening a save.
         if matches!(mode, UiMode::Playing)
@@ -2648,21 +2659,22 @@ impl EguiUi {
         self.held_tool_pose
             .update(creative_state.tool, using_tool, move_speed_mps, frame_dt);
 
-        if matches!(mode, UiMode::Loading) {
-            return UiAction::None;
+        let friends_visible = (matches!(mode, UiMode::WorldSelect) && self.home_page == front_end::HomePage::Online)
+            || (matches!(mode, UiMode::Paused) && self.pause_page == front_end::PausePage::Online);
+        if !friends_visible {
+            self.coop.hidden();
+        } else if self.coop.wants_clipboard() {
+            let text = self.state.clipboard_text();
+            self.coop.offer_clipboard(text);
         }
-
         if matches!(mode, UiMode::WorldSelect) {
-            return front_end::home(
-                self,
-                selected_world,
-                selected_voxel_scale,
-                selected_seed,
-                render_state,
-            );
+            let ctx = self.ctx.clone();
+            return ctx.root_ui(|root| {
+                front_end::home(root, self, selected_world, selected_voxel_scale, selected_seed, render_state)
+            });
         }
         if matches!(mode, UiMode::Paused) {
-            let action = front_end::pause(self, time_state, physics_state, render_state);
+            let action = front_end::pause(self, time_state, physics_state, render_state, world, player);
             if self.show_debug_performance_panel {
                 self.build_debug_performance_panel(mode, perf);
             }
@@ -2676,11 +2688,11 @@ impl EguiUi {
                     notice_expired = true;
                 } else {
                     let text = text.clone();
-                    egui::Area::new("quality_notice".into())
+                    egui::Area::new(egui::Id::new("quality_notice"))
                         .anchor(Align2::RIGHT_BOTTOM, [-16.0, -16.0])
                         .interactable(false)
                         .show(&self.ctx, |ui| {
-                            presentation::hud_frame().show(ui, |ui| {
+                            presentation::hud_frame(ui.ctx()).show(ui, |ui| {
                                 ui.label(text);
                             });
                         });
@@ -2702,8 +2714,18 @@ impl EguiUi {
                 player.yaw,
                 self.show_hud && !creative_state.any_ui_open(),
                 minimap_top,
+                self.adventure.quest.as_ref(),
+                &self.orbital.receiver,
+                physics_state.voxel_scale.meters(),
             );
             if self.show_hud {
+                if !creative_state.any_ui_open() {
+                    if let Some(hint) = self.manyfold_hint {
+                        let text = if hint == "Toss weight" { format!("[{}] {hint}", crate::keybinds::rebound_label("F")) } else { hint.into() };
+                        egui::Area::new(egui::Id::new("manyfold_focus")).anchor(Align2::CENTER_CENTER, [0.0, 48.0])
+                            .interactable(false).show(&self.ctx, |ui| { presentation::hud_frame(ui.ctx()).show(ui, |ui| { ui.label(text); }); });
+                    }
+                }
                 let mut status_rect = None;
                 if self.show_debug_performance_panel {
                     status_rect = Some(debug_overlay::draw(
@@ -2715,27 +2737,33 @@ impl EguiUi {
                             yaw: player.yaw,
                             scale_label: physics_state.voxel_scale.label(),
                             biome: self.biome_label,
+                            danger: self.danger,
                             elevation_m: self.elevation_m,
                             time_label: &time_label,
                             environment_lag: self.environment_lag,
                             cave_culled: crate::render::occlusion::last_culled(),
                             cursor: creative_state.cursor_summary(),
                             pending_cells: creative_state.pending_cells(),
+                            machine: self.target_machine.as_ref().map(crate::dev_panel::machine::lines).unwrap_or_default(),
                         },
                     ));
                 }
-                front_end::journey_hud(&self.ctx, self.expedition.as_ref(), status_rect);
+                let eye = (player.pos * physics_state.voxel_scale.meters()).to_array();
+                self.event_log.observe(self.expedition.as_ref(), &time_label, eye);
+                front_end::journey_hud(&self.ctx,
+                    self.expedition.as_ref().filter(|_| !creative_state.any_ui_open()), status_rect, eye);
                 if let Some((title, _line, since)) = self.sky_notice {
                     let age = self.ctx.input(|i| i.time) - since;
                     if age < 7.0 {
                         let fade = ((age / 0.8).min(1.0) * ((7.0 - age) / 1.2).min(1.0))
                             .clamp(0.0, 1.0) as f32;
-                        egui::Area::new("sky_notice".into())
-                            .anchor(Align2::CENTER_TOP, [0.0, 56.0])
+                        let slot = hud_layout::place(&self.ctx, "title_card");
+                        egui::Area::new(egui::Id::new("sky_notice"))
+                            .anchor(slot.align, slot.offset)
                             .interactable(false)
                             .show(&self.ctx, |ui| {
                                 ui.set_opacity(fade);
-                                presentation::hud_frame().show(ui, |ui| {
+                                presentation::hud_frame(ui.ctx()).show(ui, |ui| {
                                     ui.vertical_centered(|ui| {
                                         ui.label(
                                             RichText::new(title)
@@ -2755,8 +2783,9 @@ impl EguiUi {
                     .border_distance(player.pos * physics_state.voxel_scale.meters())
                     .filter(|d| *d < BORDER_NOTICE_M)
                 {
-                    egui::Area::new("world_border".into())
-                        .anchor(Align2::CENTER_TOP, [0.0, 34.0])
+                    let slot = hud_layout::place(&self.ctx, "world_border");
+                    let shown = egui::Area::new(egui::Id::new("world_border"))
+                        .anchor(slot.align, slot.offset)
                         .interactable(false)
                         .show(&self.ctx, |ui| {
                             ui.label(
@@ -2765,11 +2794,12 @@ impl EguiUi {
                                     .color(presentation::AMBER),
                             );
                         });
+                    hud_layout::claim(&self.ctx, "world_border", shown.response.rect);
                 }
                 if self.ctx.input(|i| i.modifiers.alt)
                     && !creative_state.any_ui_open() && !self.show_debug_performance_panel
                     && (creative_state.tool != ToolKind::Hand || self.adventure.wand == 0) {
-                    let top = if map::minimap_enabled() { 184.0 } else { 64.0 };
+                    let top = hud_layout::place(&self.ctx, "tool_hud").offset.y;
                     tool_hud::draw(&self.ctx, creative_state, &self.tool_feedback, top);
                 }
                 if !creative_state.any_ui_open() {
@@ -2778,13 +2808,16 @@ impl EguiUi {
                         .enemy_focus
                         .filter(|_| self.adventure.boss.is_none())
                     {
-                        egui::Area::new("target_name".into())
-                            .anchor(Align2::CENTER_TOP, [0.0, 74.0])
+                        let slot = hud_layout::place(&self.ctx, "enemy_focus");
+                        let shown = egui::Area::new(egui::Id::new("target_name"))
+                            .anchor(slot.align, slot.offset)
                             .interactable(false)
                             .show(&self.ctx, |ui| {
-                                presentation::hud_frame().show(ui, |ui| {
-                                    ui.set_min_width(172.0);
-                                    ui.set_max_width(260.0);
+                                presentation::hud_frame(ui.ctx()).show(ui, |ui| {
+                                    // A focused creature is a compact inspection,
+                                    // not a second boss banner. Bound the actual
+                                    // width: min/max alone let the row expand.
+                                    ui.set_width(210.0_f32.min((ui.ctx().content_rect().width() - 32.0).max(80.0)));
                                     ui.vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = 2.0;
                                         ui.horizontal(|ui| {
@@ -2796,7 +2829,7 @@ impl EguiUi {
                                             );
                                             if enemy.frozen {
                                                 ui.label(
-                                                    RichText::new("FROZEN")
+                                                    RichText::new("Frozen")
                                                         .size(11.0)
                                                         .strong()
                                                         .color(Color32::from_rgb(120, 214, 248)),
@@ -2817,6 +2850,14 @@ impl EguiUi {
                                                 },
                                             );
                                         });
+                                        if let Some(cue) = enemy.combat_cue {
+                                            use crate::world::adventure::CombatCue;
+                                            let (label, color) = match cue {
+                                                CombatCue::Rush => ("Rush · Step sideways", presentation::AMBER),
+                                                CombatCue::Exposed => ("Exposed · +25% damage", presentation::JADE),
+                                            };
+                                            ui.colored_label(color, RichText::new(label).size(11.0));
+                                        }
                                         if !enemy.affixes.is_empty() || enemy.status.any() || enemy.shield > 0.0 {
                                             ui.horizontal_wrapped(|ui| {
                                                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -2853,7 +2894,7 @@ impl EguiUi {
                                                 }
                                                 if enemy.shield > 0.0 {
                                                     ui.label(
-                                                        RichText::new(format!("WARD {:.0}", enemy.shield))
+                                                        RichText::new(format!("Ward {:.0}", enemy.shield))
                                                             .size(11.0)
                                                             .color(Color32::from_rgb(204, 140, 255)),
                                                     );
@@ -2863,7 +2904,7 @@ impl EguiUi {
                                         let ratio =
                                             (enemy.health / enemy.maximum.max(1.0)).clamp(0.0, 1.0);
                                         let (bar_r, _) = ui.allocate_exact_size(
-                                            egui::vec2(ui.available_width().max(150.0), 6.0),
+                                            egui::vec2(ui.available_width().max(1.0), 5.0),
                                             egui::Sense::hover(),
                                         );
                                         let p = ui.painter();
@@ -2888,6 +2929,7 @@ impl EguiUi {
                                     });
                                 });
                             });
+                        hud_layout::claim(&self.ctx, "enemy_focus", shown.response.rect);
                     } else if let Some(block) =
                         self.target_block.filter(|block| *block != BlockId::Air)
                     {
@@ -2902,6 +2944,10 @@ impl EguiUi {
                                 block,
                                 temperature_c: self.target_cell_temp_c,
                                 volume_ul: self.target_volume_ul,
+                                water: self.target_water,
+                                bucket_ul: self.survival.hotbar[creative_state.selected_slot].and_then(|s| match s.item {
+                                    crate::world::inventory::Item::Bucket(ul) => Some(ul), _ => None,
+                                }),
                                 environment: self.target_environment,
                                 distance_m: self.tool_feedback.distance_m,
                                 hint,
@@ -2914,31 +2960,26 @@ impl EguiUi {
                     }
                 }
             }
-            if !creative_state.show_palette && (self.show_hud || creative_state.any_ui_open()) {
-                let hotbar = egui::Area::new("hotbar_overlay".into())
-                    .anchor(Align2::CENTER_BOTTOM, [0.0, -10.0])
+            if !creative_state.show_palette && creative_state.block_page.is_none()
+                && (self.show_hud || creative_state.any_ui_open()) {
+                let show_offhand = creative_state.tool == ToolKind::Hand && !creative_state.show_panel;
+                let offhand_span = if show_offhand {
+                    hotbar_slot_size(self.hotbar_scale.clamp(0.7, 1.6), self.ctx.content_rect().width() - 32.0, true) + 8.0
+                } else { 0.0 };
+                let direction = if self.offhand_right { 1.0 } else { -1.0 };
+                let hotbar = egui::Area::new(egui::Id::new("hotbar_overlay"))
+                    .anchor(Align2::CENTER_BOTTOM, [direction * offhand_span * 0.5, -13.0])
                     .interactable(creative_state.show_panel || creative_state.show_palette)
                     .show(&self.ctx, |ui| {
-                        egui::Frame::new()
-                            .fill(grimoire::SILVER_DARK)
-                            .stroke(egui::Stroke::new(1.0, grimoire::GOLD_DARK))
-                            .corner_radius(egui::CornerRadius::ZERO)
-                            .inner_margin(egui::Margin::same(3))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = grimoire::GAP;
-                                    draw_hotbar_row(
-                                        ui,
-                                        creative_state,
-                                        player,
-                                        Some(&self.survival),
-                                        &mut self.drag_source,
-                                        &mut self.drag_target_slot,
-                                    );
-                                });
-                            });
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = grimoire::GAP;
+                            draw_hotbar_row(ui, creative_state, player, Some(&self.survival),
+                                &mut self.drag_source, &mut self.drag_target_slot)
+                        }).inner
                     });
+                let main_hotbar_rect = hotbar.inner;
                 if self.show_hud && !creative_state.any_ui_open() {
+                    tool_hud::traversal(&self.ctx, player, physics_state.voxel_scale.meters());
                     let held_food =
                         self.survival.hotbar[creative_state.selected_slot].and_then(|stack| {
                             match stack.item {
@@ -2947,11 +2988,11 @@ impl EguiUi {
                             }
                         });
                     let hotbar_rect = if creative_state.locked() {
-                        progression_hud::effects(&self.ctx);
-                        progression_hud::xp_bar(&self.ctx, hotbar.response.rect)
+                        progression_hud::xp_bar(&self.ctx, main_hotbar_rect)
                     } else {
-                        hotbar.response.rect
+                        main_hotbar_rect
                     };
+                    lift_panel::draw(&self.ctx, &self.lift, &mut action);
                     let vitals = adventure::hud(
                         &self.ctx,
                         &self.adventure,
@@ -2960,10 +3001,14 @@ impl EguiUi {
                         self.survival.eat_timer,
                         self.survival.armor_points(),
                         held_food,
-                        self.ctx.wants_pointer_input(),
+                        self.ctx.egui_wants_pointer_input(),
+                        !creative_state.locked(),
                     );
+                    if creative_state.locked() { mortality::breath(&self.ctx, vitals, player.breath()); }
+                    if creative_state.locked() && self.adventure.discoveries & (1 << 8) != 0 {
+                        mortality::levitation(&self.ctx, main_hotbar_rect, player.levitation_seconds);
+                    }
                     let use_survival = creative_state.tool == ToolKind::Hand
-                        && !player.flying
                         && !creative_state.show_panel;
                     // Item identity appears on selection, then clears the view.
                     let label: String = if use_survival {
@@ -2994,21 +3039,23 @@ impl EguiUi {
                             pos + egui::vec2(1.0, 1.0),
                             Align2::CENTER_BOTTOM,
                             &label,
-                            egui::FontId::proportional(15.0),
+                            egui::FontId::proportional(10.0),
                             presentation::INK,
                         );
                         p.text(
                             pos,
                             Align2::CENTER_BOTTOM,
                             &label,
-                            egui::FontId::proportional(15.0),
+                            egui::FontId::proportional(10.0),
                             presentation::PAPER,
                         );
                     }
 
                     // Minimal pickup / overflow badge right beside the hotbar
-                    if let Some(pickup) = &self.survival.pickup_notice {
-                        egui::Area::new("survival_pickup_toast".into())
+                    if let Some(pickup) = self.survival.pickup_notice.as_ref().filter(|p| {
+                        inventory::unlocks::pickup_toast_open(p.item, &self.adventure, creative_state.locked())
+                    }) {
+                        egui::Area::new(egui::Id::new("survival_pickup_toast"))
                             .anchor(
                                 Align2::LEFT_BOTTOM,
                                 [
@@ -3019,7 +3066,7 @@ impl EguiUi {
                             )
                             .interactable(false)
                             .show(&self.ctx, |ui| {
-                                presentation::hud_frame().show(ui, |ui| {
+                                presentation::hud_frame(ui.ctx()).show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         let (r, _) = ui.allocate_exact_size(
                                             egui::vec2(18.0, 18.0),
@@ -3040,7 +3087,7 @@ impl EguiUi {
                                                     pickup.count,
                                                     pickup.item.name()
                                                 ))
-                                                .size(11.5)
+                                                .size(9.0)
                                                 .color(presentation::JADE),
                                             );
                                         }
@@ -3075,7 +3122,12 @@ impl EguiUi {
                 if creative_state.show_wand_atelier {
                     wand_atelier::draw(&self.ctx, &mut creative_state.show_wand_atelier);
                 }
-                map::panel(&self.ctx, &mut creative_state.show_world_map);
+                let workshop = self.factory.workshop.is_some() || self.factory.count > 0;
+                if let Some(page) = map::panel(&self.ctx, &mut creative_state.show_world_map, workshop) {
+                    creative_state.close_panels();
+                    creative_state.show_palette = true;
+                    self.ctx.data_mut(|d| d.insert_temp(egui::Id::new("inventory_page"), page));
+                }
                 if creative_state.show_material_editor {
                     crate::material_studio::draw(
                         &self.ctx,
@@ -3113,6 +3165,8 @@ impl EguiUi {
                         &self.orbital,
                         &mut action,
                     );
+                    semiconductor::window(&self.ctx, &self.factory, &mut action);
+                    chip_editor::window(&self.ctx, &self.factory, &mut action);
                 } else {
                     self.hovered_palette_block = None;
                     if matches!(self.drag_source, Some(DragSource::Palette(_))) {
@@ -3146,9 +3200,16 @@ impl EguiUi {
                             DragSource::Palette(block) => {
                                 creative_state.assign_hotbar_slot(target, block);
                                 creative_state.tool = ToolKind::Hand;
+                                creative_state.show_panel = false;
+                                let item = crate::world::inventory::Item::Block(block);
+                                action = UiAction::SelectCreativeItem(item, self.survival.stack_limit(item), target);
                             }
                             DragSource::Hotbar(from) => {
-                                creative_state.swap_hotbar_slots(from, target);
+                                if creative_state.tool == ToolKind::Hand && !creative_state.show_panel {
+                                    self.survival.swap_slot_with_hotbar(crate::world::inventory::SlotAddr::Hotbar(from), target);
+                                } else {
+                                    creative_state.swap_hotbar_slots(from, target);
+                                }
                             }
                         }
                         player.selected_block = creative_state.selected_block();
@@ -3157,7 +3218,7 @@ impl EguiUi {
                 }
 
                 if self.show_hud && !creative_state.any_ui_open() {
-                    egui::Area::new("crosshair_area".into())
+                    egui::Area::new(egui::Id::new("crosshair_area"))
                         .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                         .interactable(false)
                         .show(&self.ctx, |ui| {
@@ -3188,23 +3249,24 @@ impl EguiUi {
                                 [center - egui::vec2(0.0, 7.0), center + egui::vec2(0.0, 7.0)],
                                 stroke,
                             );
+                            tool_hud::hit_marker(ui, center, self.adventure.melee_landed);
                         });
                     tool_hud::draw_break_progress(&self.ctx, &self.tool_feedback);
-                    // With a wand, the world-space rig draws the arm, fist and
-                    // shaft whatever tool is selected. This overlay uses its own
-                    // projection, so drawing it too put a second glove and tool
-                    // beside the wand, never touching it.
+                    // The Blender rig owns hands. Only creative tool geometry
+                    // may use this overlay when no wand is equipped.
                     let rig_owns_hand = self.adventure.wand > 0;
                     if !rig_owns_hand {
                         draw_held_tool_overlay(
                             &self.ctx,
                             &self.held_tool_pose,
                             creative_state.tool,
-                            time_state.time_of_day,
                         );
                     }
+                    // Survival draws the held weapon in the 3D viewmodel; the flat copy
+                    // here doubled it in the corner of the screen.
                     if creative_state.tool == ToolKind::Hand
                         && !rig_owns_hand
+                        && !creative_state.locked()
                         && self.survival.hotbar[creative_state.selected_slot].is_some_and(|s| {
                             matches!(s.item, crate::world::inventory::Item::Weapon(_))
                         })
@@ -3219,6 +3281,13 @@ impl EguiUi {
                 }
             }
             UiMode::Paused | UiMode::WorldSelect | UiMode::Loading => {}
+        }
+        if matches!(mode, UiMode::Playing) {
+            mortality::mark_death(&self.ctx, self.adventure.death.is_some(), player.pos);
+            if let Some(death) = &self.adventure.death {
+                let death_action = mortality::death_screen(&self.ctx, death, self.world_rules.keep_inventory, self.adventure.respawn_point.is_some());
+                if !matches!(death_action, UiAction::None) { action = death_action; }
+            }
         }
         grimoire::state_sheet(&self.ctx);
         wands::review_spell_card(&self.ctx, &self.adventure);
@@ -3246,6 +3315,10 @@ impl EguiUi {
                 draw_voxel_icon(&painter, rect, block);
             }
 
+        let study = recipe_book::take_study(&self.ctx);
+        if matches!(action, UiAction::None) && let Some((lesson, materials, research)) = study {
+            action = if materials { UiAction::StudyMaterials(lesson, research) } else { UiAction::Study(lesson) };
+        }
         action
     }
 
@@ -3259,12 +3332,13 @@ impl EguiUi {
         width: u32,
         height: u32,
     ) {
+        self.release_previous_textures();
         let full_output = self.ctx.end_pass();
         self.state
             .handle_platform_output(window, full_output.platform_output);
 
-        self.textures_delta = full_output.textures_delta;
-        typography::prepare_textures(&self.ctx, &mut self.textures_delta);
+        let mut textures = full_output.textures_delta;
+        typography::prepare_textures(&self.ctx, &mut textures);
         self.shapes = self
             .ctx
             .tessellate(full_output.shapes, self.ctx.pixels_per_point());
@@ -3274,9 +3348,10 @@ impl EguiUi {
             pixels_per_point: self.ctx.pixels_per_point(),
         };
 
-        for (id, image_delta) in &self.textures_delta.set {
-            self.renderer
-                .update_texture(device, queue, *id, image_delta);
+        for (id, images) in textures.set.drain() {
+            for image in &images {
+                self.renderer.update_texture(device, queue, id, image);
+            }
         }
 
         let command_buffers =
@@ -3285,6 +3360,7 @@ impl EguiUi {
 
         {
             let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("egui pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
@@ -3313,19 +3389,29 @@ impl EguiUi {
             queue.submit(command_buffers);
         }
 
-        for id in &self.textures_delta.free {
-            self.renderer.free_texture(id);
-        }
+        // The frame's draw commands can still reference these textures until
+        // its owner submits the encoder. The next UI pass can release them.
+        self.pending_texture_frees.extend(textures.free.drain());
     }
 
     pub fn end_frame_no_paint(&mut self, window: &Window) {
+        self.release_previous_textures();
         let full_output = self.ctx.end_pass();
-        let textures = full_output.textures_delta;
-        typography::defer_textures(&self.ctx, textures.set, &textures.free);
+        let mut textures = full_output.textures_delta;
+        typography::defer_textures(&self.ctx, &mut textures);
         self.state
             .handle_platform_output(window, full_output.platform_output);
-        for id in &textures.free {
-            self.renderer.free_texture(id);
+        for id in textures.free.drain() {
+            self.renderer.free_texture(&id);
+        }
+    }
+
+    fn release_previous_textures(&mut self) {
+        for id in self.pending_texture_frees.drain(..) {
+            self.renderer.free_texture(&id);
         }
     }
 }
+
+#[cfg(test)]
+mod interaction_tests;

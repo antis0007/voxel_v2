@@ -121,53 +121,56 @@ fn a_brownout_hangs_sentinel_until_reset_and_twin_watch_recovers() {
 }
 
 #[test]
-fn a_wafer_lot_is_paid_once_runs_on_fabricator_power_and_survives_a_save() {
-    let mut f = Factory::default();
-    f.topology = true;
-    let lib = Arc::make_mut(&mut f.chips.library);
+fn a_wafer_lot_is_paid_once_runs_at_game_time_and_survives_a_save() {
+    use super::production::{Production, QUANTUM, Supply};
+    let mut w = crate::world::World::with_seed(engine_voxel::WorldType::Superflat,
+        engine_core::VoxelScalePreset::OneMeter, 7);
+    let p = IVec3::new(0, 64, 0); let q = p + IVec3::X * 16;
+    for site in [p, q] { w.factory.nodes.insert(site, Node::new(Kind::Fabricator)); }
+    let lib = Arc::make_mut(&mut w.factory.chips.library);
     let project = lib.add_project("S", sentinel(registry()));
     let rev = lib.release(registry(), project, 0).unwrap();
-    let mut paid = Vec::new();
-    let said = f.chips.action(&f.nodes, Action::StartLot { revision: rev, lab: "bench".into() }, |bill| {
-        paid = bill.to_vec();
-        true
-    });
-    assert_eq!(said, "Lot 1 Started");
-    assert!(paid.iter().any(|&(r, n)| r == 5 && n >= 64), "a wafer of crystal: {paid:?}");
-    let refused = f.chips.action(&f.nodes, Action::StartLot { revision: rev, lab: "bench".into() }, |_| false);
-    assert_eq!(refused, "Missing Materials");
-    assert_eq!(f.chips.library.lots.len(), 1, "an unpaid lot does not start");
+    let bill = Production::bill(&lib.lot_bill(registry(), rev, "bench").unwrap());
+    assert!(bill.iter().any(|&(supply, n)| supply == Supply::Wafer && n > 0));
+    for &(supply, n) in &bill { Arc::make_mut(&mut w.factory.chips.production).stock[supply as usize] += n; }
+    chip_action(&mut w, p.as_vec3(), Action::StartLot { revision: rev, lab: "bench".into() });
+    assert_eq!(w.expedition.message, "Batch Queued");
+    assert!(w.factory.chips.production.stock.iter().all(|&n| n == 0));
+    assert_eq!(w.factory.chips.production.lots.len(), 1);
+    assert!(w.factory.chips.production.lots[0].reserved > 0);
+    chip_action(&mut w, p.as_vec3(), Action::StartLot { revision: rev, lab: "bench".into() });
+    assert_eq!(w.expedition.message, "Fabricator Busy");
+    chip_action(&mut w, q.as_vec3(), Action::StartLot { revision: rev, lab: "bench".into() });
+    assert_eq!(w.expedition.message, "Missing Lab Stock");
+    assert_eq!(w.factory.chips.library.lots.len(), 1);
 
-    // Wafer clocks advance only through powered Fabricator work.
-    run(&mut f, 120 * 10, |_| {});
-    assert_eq!(f.chips.library.lots[0].step, 0, "an unbound lot waits for a fabricator");
-    let site = IVec3::new(0, 0, 0);
-    let fab = Node::new(Kind::Fabricator);
-    f.nodes.insert(site, fab.clone());
-    let reserved = super::production::lot_capacity(&f.chips.library, rev).unwrap();
-    let clock = f.chips.now;
-    Arc::make_mut(&mut f.chips.production).lots.push(super::production::PoweredLot {
-        id: 1, site: (0, 0, 0), clock, credit: 0, reserved,
-    });
-    let charge = |f: &mut Factory| f.nodes.get_mut(&site).unwrap().energy = 1 << 20;
-
-    // Half way: save the bay, finish both copies, compare.
-    run(&mut f, 120 * 60, charge);
-    let mut bytes = Vec::new();
-    f.chips.encode(&mut bytes);
-    let mut words = bytes.chunks(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()));
-    let mut g = Factory { chips: Bay::decode(&mut || words.next().ok_or_else(|| anyhow::anyhow!("eof"))).unwrap(), ..Factory::default() };
-    g.topology = true;
-    g.nodes.insert(site, fab);
-    assert!(f.chips.library.lots[0].outcome.is_none(), "still in the fab");
-    run(&mut f, 120 * 300, charge);
-    run(&mut g, 120 * 300, charge);
+    let f = &mut w.factory;
+    run(f, 120, |_| {});
+    assert_eq!(f.chips.production.lots[0].clock, 0);
+    assert_eq!(f.chips.production.lots[0].credit, 0);
+    assert!(f.chips.library.lots[0].outcome.is_none());
+    let power = |f: &mut Factory| { f.nodes.get_mut(&p).unwrap().energy = 64; };
+    run(f, 37, power);
+    assert_eq!(f.chips.production.lots[0].clock, 37);
+    assert_eq!(f.chips.production.lots[0].credit, QUANTUM - 37 % QUANTUM);
+    let mut bytes = Vec::new(); f.chips.encode(&mut bytes);
+    let mut words = bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c));
+    let mut g = Factory { chips: Bay::decode(&mut || words.next().ok_or_else(|| anyhow::anyhow!("eof"))).unwrap(),
+        nodes: f.nodes.clone(), accumulator: f.accumulator, topology: true, ..Factory::default() };
+    assert_eq!(g.chips.production.lots[0].clock, f.chips.production.lots[0].clock);
+    assert_eq!(g.chips.production.lots[0].credit, f.chips.production.lots[0].credit);
+    for _ in 0..120 * 600 {
+        if f.chips.production.lots.is_empty() && g.chips.production.lots.is_empty() { break; }
+        run(f, 1, power); run(&mut g, 1, power);
+    }
     let (a, b) = (&f.chips.library, &g.chips.library);
-    assert_eq!(a.lots, b.lots);
-    assert_eq!(a.stock, b.stock);
+    assert_eq!(a.lots, b.lots); assert_eq!(a.stock, b.stock);
+    assert!(f.chips.production.lots.is_empty() && g.chips.production.lots.is_empty());
+    assert!(f.chips.production.stock.iter().all(|&n| n == 0));
     let o = a.lots[0].outcome.unwrap();
     assert!(o.good > 0 && a.stock.len() == usize::from(o.good));
-    eprintln!("lot 1 (open bench): {} dies, {} good, bins {:?}, {} slow", o.dies, o.good, o.bins, o.slow);
+    let made = a.stock.len(); run(f, 120, power);
+    assert_eq!(f.chips.library.stock.len(), made, "completed lots cannot package twice");
 }
 
 #[test]

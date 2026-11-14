@@ -156,7 +156,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 .unwrap()
                 .unwrap();
             {
-                let bytes = readback.slice(..).get_mapped_range();
+                let bytes = readback.slice(..).get_mapped_range().expect("GPU readback range");
                 let actual: &[f32] = bytemuck::cast_slice(&bytes);
                 for (i, (&got, want)) in actual.iter().zip(expected).enumerate() {
                     assert!(

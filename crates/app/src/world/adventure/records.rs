@@ -30,6 +30,7 @@ impl Adventure {
                     && !nearby.contains(site)
                     && !self.enemies.iter().any(|e| e.site == *site)
                     && !self.reliquaries.iter().any(|r| r.site == *site)
+                    && !self.engines.contains_key(site)
                     && !self.tollkeepers.contains_key(site)
             })
             .map(|(site, _)| *site)

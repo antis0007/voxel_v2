@@ -18,7 +18,7 @@ const KNOWN_FLAGS: u8 = KEEP_INVENTORY | MOB_SPAWNING | DAYLIGHT_CYCLE | PVP;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GameMode {
-    /// Gathered blocks only; no creative tools, catalogue or flight.
+    /// Gathered blocks only; traversal comes from earned abilities.
     Survival,
     /// Worlds from before rules existed load here so their tools stay.
     #[default]
@@ -56,7 +56,7 @@ impl GameMode {
 
     pub fn hint(self) -> &'static str {
         match self {
-            Self::Survival => "Creative Tools: Off · Flight: Off",
+            Self::Survival => "Creative Tools: Off · Levitation: Earned",
             Self::Creative => "Creative Tools: On · Flight: On",
             Self::Spectator => "Interaction: Off · Flight: Noclip",
             Self::Adventure => "Block Edits: Off",
@@ -110,6 +110,7 @@ impl GameMode {
 /// `spawn_protection_m` from the host world.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rules {
+    pub stacks: super::inventory::stacks::Balance,
     pub mode: GameMode,
     /// A death keeps every carried stack instead of dropping it.
     pub keep_inventory: bool,
@@ -124,11 +125,14 @@ pub struct Rules {
     /// Horizontal radius around x 0, z 0 that players stay inside; 0 is off.
     /// Session-only: the sidecar never stores it, so a reload clears it.
     pub border_m: u32,
+    /// Gameplay systems this world plays with; stored in `systems::FILE`.
+    pub systems: super::systems::Systems,
 }
 
 impl Default for Rules {
     fn default() -> Self {
         Self {
+            stacks: super::inventory::stacks::Balance::Balanced,
             mode: GameMode::Creative,
             keep_inventory: false,
             mob_spawning: true,
@@ -136,6 +140,7 @@ impl Default for Rules {
             pvp: true,
             spawn_protection_m: 0,
             border_m: 0,
+            systems: super::systems::Systems::default(),
         }
     }
 }
@@ -183,6 +188,7 @@ impl Rules {
         out.push(self.mode.code());
         out.push(flags);
         out.extend_from_slice(&self.spawn_protection_m.min(MAX_SPAWN_PROTECTION_M).to_le_bytes());
+        out.push(self.stacks.code() as u8);
         let sum = checksum(&out);
         out.extend_from_slice(&sum.to_le_bytes());
         out
@@ -190,9 +196,9 @@ impl Rules {
 
     /// Rejects any file that is not exactly one well-formed record.
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        ensure!(bytes.len() == LEN, "Rules file length {} is not {LEN}", bytes.len());
+        ensure!(bytes.len() == LEN || bytes.len() == LEN + 1, "Invalid rules file length");
         ensure!(bytes.starts_with(MAGIC), "Unsupported rules file");
-        let (body, sum) = bytes.split_at(LEN - 8);
+        let (body, sum) = bytes.split_at(bytes.len() - 8);
         let sum = u64::from_le_bytes(sum.try_into().context("Rules checksum")?);
         ensure!(checksum(body) == sum, "Rules file checksum mismatch");
         let mode = GameMode::from_code(body[8])?;
@@ -201,6 +207,7 @@ impl Rules {
         let spawn_protection_m = u16::from_le_bytes([body[10], body[11]]);
         ensure!(spawn_protection_m <= MAX_SPAWN_PROTECTION_M, "Spawn protection out of range");
         Ok(Self {
+            stacks: if body.len() > 12 { super::inventory::stacks::Balance::decode(u32::from(body[12]))? } else { super::inventory::stacks::Balance::Balanced },
             mode,
             keep_inventory: flags & KEEP_INVENTORY != 0,
             mob_spawning: flags & MOB_SPAWNING != 0,
@@ -208,6 +215,7 @@ impl Rules {
             pvp: flags & PVP != 0,
             spawn_protection_m,
             border_m: 0,
+            systems: super::systems::Systems::default(),
         })
     }
 
@@ -219,6 +227,15 @@ impl Rules {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("Cannot read {}", path.display())),
         }
+        .map(|rules| Self { systems: Self::load_systems(world_dir), ..rules })
+    }
+
+    /// A damaged systems sidecar plays with every system rather than block the world.
+    fn load_systems(world_dir: &Path) -> super::systems::Systems {
+        super::systems::Systems::load(world_dir).unwrap_or_else(|e| {
+            eprintln!("[systems] Using every system: {e:#}");
+            super::systems::Systems::default()
+        })
     }
 
     /// Replaces the file through a synced temporary so a crash keeps the old one.
@@ -231,7 +248,8 @@ impl Rules {
         file.write_all(&self.encode())?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&tmp, &path).with_context(|| format!("Cannot publish {}", path.display()))
+        std::fs::rename(&tmp, &path).with_context(|| format!("Cannot publish {}", path.display()))?;
+        self.systems.save(world_dir)
     }
 }
 
@@ -241,6 +259,7 @@ impl super::World {
     /// Every checkpoint also writes them, so a failed write here is retried there.
     pub fn set_rules(&mut self, rules: Rules) {
         self.rules = rules;
+        rules.systems.publish();
         let dir = self.regions.view.root.clone();
         if dir.is_dir()
             && let Err(e) = rules.save(&dir)

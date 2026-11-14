@@ -7,6 +7,34 @@ pub enum WaterDirection {
     IntoWorld,
 }
 
+/// Exact portable buffer exchange, quantized only for legacy cell storage.
+pub fn exchange_water_ul(world: &mut World, p: IVec3, buffer: &mut u32,
+    capacity: u32, direction: WaterDirection) -> Result<Commit<u64>, Failure> {
+    admit(world, p)?;
+    if *buffer > capacity || !matches!(world.get(p), BlockId::Air | BlockId::Water) {
+        return Err(Failure::Rejected);
+    }
+    let before = world.water_microlitres(p);
+    let exact = environment::State::enabled(world.generator_version);
+    let cell_capacity = if exact { world.environment.water_capacity_ul(p) }
+        else { engine_core::environment::cell_volume(world.voxel_scale) };
+    let mut moved = match direction {
+        WaterDirection::IntoBuffer => before.min(u64::from(capacity - *buffer)),
+        WaterDirection::IntoWorld => cell_capacity.saturating_sub(before).min(u64::from(*buffer)),
+    };
+    if !exact {
+        let quantum = engine_core::environment::cell_volume(world.voxel_scale) / 8;
+        moved -= moved % quantum;
+    }
+    if moved == 0 { return Err(Failure::NoChange); }
+    let after = match direction { WaterDirection::IntoBuffer => before - moved,
+        WaterDirection::IntoWorld => before + moved };
+    if !commit_water(world, &[(p, after)]) { return Err(Failure::Deferred); }
+    match direction { WaterDirection::IntoBuffer => *buffer += moved as u32,
+        WaterDirection::IntoWorld => *buffer -= moved as u32 }
+    Ok(Commit { position: p, revision: world.revision(), value: moved })
+}
+
 /// Transfer up to `limit` machine units. The exclusively borrowed buffer and
 /// cell commit synchronously; a failed admission changes neither quantity.
 /// Legacy worlds move whole cell packets, exact worlds preserve subpacket water.

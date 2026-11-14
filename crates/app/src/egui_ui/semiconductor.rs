@@ -13,7 +13,7 @@ use crate::world::inventory::Item;
 use egui::{Align2, Color32, FontId, RichText, Sense, Stroke, vec2};
 use glam::IVec3;
 
-const CELL: f32 = 30.0;
+const CELL: f32 = 36.0;
 const CARD: Color32 = Color32::from_rgb(33, 28, 32);
 const WELL: Color32 = Color32::from_rgb(24, 21, 25);
 
@@ -43,7 +43,10 @@ fn cell(ui: &mut egui::Ui, feed: Feed, amount: Option<f32>, edge: Option<Color32
         p.rect_filled(rect.shrink(1.0), 0, Color32::from_rgba_unmultiplied(29, 31, 34, 150));
     }
     if let Some(n) = amount {
-        p.text(rect.right_bottom() - vec2(1.5, 0.5), Align2::RIGHT_BOTTOM, amount_text(n), FontId::monospace(10.0), PAPER);
+        let at = rect.right_bottom() - vec2(2.0, 1.0);
+        let count = amount_text(n);
+        p.text(at + vec2(1.0, 1.0), Align2::RIGHT_BOTTOM, &count, FontId::monospace(13.0), Color32::BLACK);
+        p.text(at, Align2::RIGHT_BOTTOM, count, FontId::monospace(13.0), PAPER);
     }
     resp.on_hover_text(hover)
 }
@@ -55,7 +58,7 @@ fn stat(ui: &mut egui::Ui, text: &str, colour: Color32) {
         .stroke(Stroke::new(1.0, EDGE))
         .inner_margin(egui::Margin::symmetric(4, 0))
         .show(ui, |ui| {
-            ui.label(RichText::new(text).size(11.0).color(colour));
+            ui.label(RichText::new(text).size(14.0).color(colour));
         });
 }
 
@@ -102,14 +105,18 @@ fn operation_card(ui: &mut egui::Ui, index: usize, op: &Operation, view: &View, 
         None
     };
     card(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(op.name).size(12.5).color(PAPER));
+        ui.label(RichText::new(op.name).size(16.0).color(PAPER));
+        ui.horizontal_wrapped(|ui| {
             stat(ui, &format!("{} s", op.seconds), PAPER);
             stat(ui, &format!("{} kW", op.power), AMBER);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        });
+        ui.add_space(6.0);
+        feed_row(ui, op, p);
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
                 let ready = free.is_none() && p.available(op.inputs);
                 let batch = ui
-                    .add_enabled(ready, egui::Button::new("+").small())
+                    .add_enabled(ready, egui::Button::new("Batch"))
                     .on_hover_text("Batch")
                     .on_disabled_hover_text(free.unwrap_or("Missing Lab Stock"));
                 if batch.clicked() && let Some(site) = site {
@@ -118,15 +125,24 @@ fn operation_card(ui: &mut egui::Ui, index: usize, op: &Operation, view: &View, 
                 let (out, per) = op.outputs[0];
                 let target = (per * 4).min(STOCK_CAP);
                 let order = ui
-                    .add_enabled(free.is_none(), egui::Button::new("Order").small())
+                    .add_enabled(free.is_none(), egui::Button::new("Order"))
                     .on_hover_text(format!("Standing Order · {target} × {}", out.name()))
                     .on_disabled_hover_text(free.unwrap_or_default());
                 if order.clicked() && let Some(site) = site {
                     *action = UiAction::Chip(Action::SetOrder { site, recipe: index as u8, target, enabled: true });
                 }
-            });
         });
-        feed_row(ui, op, p);
+        if let Some(reason) = free {
+            ui.label(RichText::new(reason).color(AMBER));
+        }
+        for &(s, need) in op.inputs {
+            let have = p.stock[s as usize];
+            ui.label(RichText::new(format!("{}: {have} / {need}", s.name()))
+                .color(if have < need { DANGER } else { MUTED }));
+        }
+        for &(item, need) in op.raw {
+            ui.label(RichText::new(format!("{}: {need}", item.name())).color(MUTED));
+        }
     });
 }
 
@@ -140,28 +156,28 @@ fn order_card(ui: &mut egui::Ui, view: &View, site: IVec3, order: &Order, action
         ui.horizontal(|ui| {
             cell(ui, Feed::Supply(out), Some(stock as f32), None, false, &format!("{} · {stock} / {}", out.name(), order.target));
             ui.vertical(|ui| {
-                ui.label(RichText::new(op.name).size(12.5).color(icons::GOLD));
+                ui.label(RichText::new(op.name).size(14.0).color(icons::GOLD));
                 let status = view.fabrication_node.as_ref().map_or("Idle", |n| super::factory::status_label(n.status));
-                ui.label(RichText::new(status).size(11.0).color(MUTED));
+                ui.label(RichText::new(status).size(14.0).color(MUTED));
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Clear Order").clicked() {
+        });
+        ui.horizontal_wrapped(|ui| {
+                if ui.button("Clear Order").clicked() {
                     *action = UiAction::Chip(Action::ClearOrder(site));
                 }
-                if !op.raw.is_empty() && ui.small_button("Load Feed").clicked() {
+                if !op.raw.is_empty() && ui.button("Load Feed").clicked() {
                     *action = UiAction::Chip(Action::FeedOrder(site));
                 }
-            });
         });
         let mut enabled = order.enabled;
         let mut target = order.target;
         let mut changed = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             changed |= ui.checkbox(&mut enabled, "Repeat").changed();
-            ui.label(RichText::new("Target").size(11.0).color(MUTED));
+            ui.label(RichText::new("Target").size(14.0).color(MUTED));
             changed |= ui.add(egui::DragValue::new(&mut target).range(1..=STOCK_CAP)).changed();
-            icons::gauge(ui, stock as f32 / order.target.max(1) as f32, icons::TEAL, &format!("{stock} / {}", order.target));
         });
+        icons::gauge(ui, stock as f32 / order.target.max(1) as f32, icons::TEAL, &format!("{stock} / {}", order.target));
         if changed {
             *action = UiAction::Chip(Action::SetOrder { site, recipe: order.recipe, target, enabled });
         }
@@ -183,16 +199,6 @@ fn order_card(ui: &mut egui::Ui, view: &View, site: IVec3, order: &Order, action
     });
 }
 
-fn stock_strip(ui: &mut egui::Ui, p: &Production) {
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-        for s in Supply::ALL {
-            let n = p.stock[s as usize];
-            cell(ui, Feed::Supply(s), (n > 0).then_some(n as f32), None, n == 0, &format!("{} · {n} / {STOCK_CAP}", s.name()));
-        }
-    });
-}
-
 fn jobs(ui: &mut egui::Ui, view: &View, site: Option<IVec3>, action: &mut UiAction) {
     let p = &view.fabrication;
     for job in &p.jobs {
@@ -201,7 +207,7 @@ fn jobs(ui: &mut egui::Ui, view: &View, site: Option<IVec3>, action: &mut UiActi
         ui.horizontal(|ui| {
             cell(ui, Feed::Supply(op.outputs[0].0), None, None, false, op.outputs[0].0.name());
             ui.vertical(|ui| {
-                ui.label(RichText::new(op.name).size(12.5).color(PAPER));
+                ui.label(RichText::new(op.name).size(14.0).color(PAPER));
                 icons::gauge(ui, progress, icons::TEAL, &format!("{:.0}%", progress * 100.0));
             });
             if let Some(site) = site
@@ -261,32 +267,94 @@ fn review_open() -> Option<bool> {
     OPEN.get_or_init(|| std::env::var("VOXEL_REVIEW_FABRICATOR").is_ok()).then_some(true)
 }
 
-pub(super) fn section(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
-    egui::CollapsingHeader::new("Semiconductors").open(review_open()).show(ui, |ui| {
-        let p = &view.fabrication;
-        let site = view.fabrication_site;
-        if let Some(site) = site {
-            ui.small(RichText::new(format!("Fabricator · {}, {}, {}", site.x, site.y, site.z)).color(MUTED));
-            if let Some(order) = p.orders.iter().find(|o| o.site == (site.x, site.y, site.z)) {
-                order_card(ui, view, site, order, action);
+const OPEN: &str = "semiconductor_open";
+
+/// True for items some fabrication step consumes as raw input.
+pub(super) fn relevant(item: Option<Item>) -> bool {
+    item.is_some_and(|item| OPERATIONS.iter().any(|op| op.raw.iter().any(|&(raw, _)| raw == item)))
+}
+
+pub(super) fn section(ui: &mut egui::Ui, _view: &View, _action: &mut UiAction) {
+    if ui.button("Semiconductors").clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(OPEN), true));
+    }
+}
+
+pub(super) fn window(ctx: &egui::Context, view: &View, action: &mut UiAction) {
+    let id = egui::Id::new(OPEN);
+    let mut open = ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(review_open().unwrap_or(false));
+    if !open { return; }
+    let screen = ctx.content_rect();
+    let tab_id = egui::Id::new("semiconductor_tab");
+    let recipe_id = egui::Id::new("semiconductor_recipe");
+    let mut tab = ctx.data(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
+    let mut selected = ctx.data(|d| d.get_temp::<usize>(recipe_id)).unwrap_or(0).min(OPERATIONS.len() - 1);
+    egui::Window::new("Semiconductors")
+        .open(&mut open)
+        .default_size([560.0, 380.0])
+        .max_width((screen.width() - 32.0).max(160.0))
+        .max_height((screen.height() - 48.0).max(120.0))
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+            ui.horizontal_wrapped(|ui| {
+                for (value, label) in [(0, "Recipes"), (1, "Stock"), (2, "Queue")] {
+                    ui.selectable_value(&mut tab, value, label);
+                }
+                if ui.button("Designer").clicked() { super::chip_editor::open(ctx); }
+            });
+            ui.separator();
+            let p = &view.fabrication;
+            let site = view.fabrication_site;
+            if let Some(site) = site {
+                ui.label(RichText::new(format!("Fabricator · {}, {}, {}", site.x, site.y, site.z)).color(MUTED));
+            } else {
+                ui.label(RichText::new("Fabricator Required").color(AMBER));
             }
-        }
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Lab Stock").color(icons::GOLD));
-            if ui.small_button("Designer").clicked() {
-                super::chip_editor::open(ui.ctx());
-            }
+            egui::ScrollArea::vertical().id_salt("semiconductor_body")
+                .auto_shrink([false, false]).max_height(ui.available_height()).show(ui, |ui| {
+                    match tab {
+                        0 => {
+                            egui::ComboBox::from_id_salt("semiconductor_recipe_picker")
+                                .selected_text(OPERATIONS[selected].name)
+                                .show_ui(ui, |ui| {
+                                    for (i, op) in OPERATIONS.iter().enumerate() {
+                                        ui.selectable_value(&mut selected, i, op.name);
+                                    }
+                                });
+                            operation_card(ui, selected, &OPERATIONS[selected], view, action);
+                        }
+                        1 => {
+                            for supply in Supply::ALL {
+                                ui.horizontal(|ui| {
+                                    let stock = p.stock[supply as usize];
+                                    cell(ui, Feed::Supply(supply), None, None, stock == 0, supply.name());
+                                    ui.vertical(|ui| {
+                                        ui.label(supply.name());
+                                        ui.label(RichText::new(format!("{stock} / {STOCK_CAP}")).color(MUTED));
+                                    });
+                                });
+                            }
+                        }
+                        _ => {
+                            if let Some(site) = site {
+                                if let Some(order) = p.orders.iter().find(|o| o.site == (site.x, site.y, site.z)) {
+                                    order_card(ui, view, site, order, action);
+                                }
+                                reassign(ui, view, site, action);
+                            }
+                            if p.jobs.is_empty() && p.orders.is_empty() && p.lots.is_empty() {
+                                ui.label(RichText::new("Queue Empty").color(MUTED));
+                            }
+                            jobs(ui, view, site, action);
+                            lots(ui, view, site, action);
+                        }
+                    }
+                });
         });
-        stock_strip(ui, p);
-        if let Some(site) = site {
-            reassign(ui, view, site, action);
-        }
-        ui.add_space(4.0);
-        ui.label(RichText::new("Operations").color(icons::GOLD));
-        for (i, op) in OPERATIONS.iter().enumerate() {
-            operation_card(ui, i, op, view, action);
-        }
-        jobs(ui, view, site, action);
-        lots(ui, view, site, action);
+    ctx.data_mut(|d| {
+        d.insert_temp(id, open);
+        d.insert_temp(tab_id, tab);
+        d.insert_temp(recipe_id, selected);
     });
 }

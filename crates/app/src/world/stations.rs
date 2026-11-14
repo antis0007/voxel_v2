@@ -1,7 +1,6 @@
 //! Anvil, grindstone and stonecutter actions on inventory slots, and the brewing stand.
 //!
-//! Anvil and grindstone inputs stay in their inventory slots while the page is open, so the
-//! wear that `progression::Wear` keys by slot is never lost to a station slot.
+//! Station input cells reuse the persisted transient grid and participate in wear tracking.
 pub mod brewing;
 pub mod table;
 #[cfg(test)]
@@ -119,6 +118,37 @@ pub fn use_salvage(world: &mut World, a: SlotAddr) -> bool {
     let _ = world.inventory.try_insert(refund);
     world.sync_from_inventory();
     true
+}
+
+pub(crate) fn salvage_in_slot(world: &mut World, addr: SlotAddr) -> bool {
+    let Some((item, left, max)) = durable(world, addr) else { return false };
+    let Some(refund) = salvage(item, left, max) else { return false };
+    if world.inventory.slot(addr).is_none_or(|s| s.count != 1) { return false; }
+    take(world, addr, 1);
+    *world.inventory.slot_mut(addr).unwrap() = Some(refund);
+    world.sync_from_inventory();
+    true
+}
+
+pub(crate) fn cut_from_slot(world: &mut World, addr: SlotAddr, row: usize, transfer: bool) {
+    let Some(cut) = STATIONS.stonecutter.get(row) else { return };
+    let Some(input) = world.inventory.slot(addr).filter(|s| s.item == cut.input) else { return };
+    let output = ItemStack::new(cut.output, cut.count);
+    if transfer {
+        let room = world.inventory.remaining_capacity_for(output.item);
+        let batches = input.count.min(room / output.count);
+        if batches == 0 { return; }
+        take(world, addr, batches);
+        world.inventory.try_insert(ItemStack::new(output.item, batches * output.count));
+    } else {
+        let inv = &mut world.inventory;
+        let count = inv.cursor.map_or(0, |s| s.count);
+        if inv.cursor.is_some_and(|s| s.item != output.item)
+            || inv.stack_limit(output.item).saturating_sub(count) < output.count { return; }
+        take(world, addr, 1);
+        world.inventory.cursor = Some(ItemStack::new(output.item, count + output.count));
+    }
+    world.sync_from_inventory();
 }
 
 /// Cuts one block at `addr` with stonecutter row `index`. False when the row does not apply.

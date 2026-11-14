@@ -72,6 +72,12 @@ mod tests {
     }
 
     #[test]
+    fn shader_face_half_width_matches_the_atlas() {
+        let source = crate::shader_sources::globe_shader_source();
+        assert!(source.contains(&format!("const GLOBE_HALF_M: f32 = {HALF_M:.1};")), "globe_shader.wgsl GLOBE_HALF_M != {HALF_M}");
+    }
+
+    #[test]
     fn horizon_is_ready_off_the_surface_tier_with_the_globe() {
         assert!(horizon_ready(true, Tier::Transition, false, 1));
         assert!(horizon_ready(true, Tier::Orbit, false, 6));

@@ -9,7 +9,7 @@ pub(super) fn interval(world: &World, p: IVec3) -> u64 {
     let Some(patch) = world.environment.patches.get(&world.environment.owner(p)) else {
         return 1;
     };
-    if world.get(p) != patch.material || world.water_volume(p + IVec3::Y) > 0 {
+    if world.water_volume(p + IVec3::Y) > 0 {
         return 1;
     }
     let Some(law) = engine_content::environment::definition().and_then(|d| d.soil(patch.material)) else {
@@ -48,18 +48,23 @@ pub(super) fn process(
     };
     let material = world.get(p);
     let scale = patch.scale(world.voxel_scale);
+    world.environment.repair_initial_moisture(world.sample_config(), p, &mut patch);
     let before = patch.soil;
     let seconds = tick.saturating_sub(patch.last_tick).clamp(1, MAX_SECONDS) as u32;
     let mut pending = false;
     if definition.soil(material).is_none() {
-        // Excavation releases the existing pore water at its physical location.
-        // The sub-voxel wet residue is retained and exposed by inspection.
-        if matches!(material, B::Air | B::Water) {
+        // Excavation leaves damp residue. Capillary-bound moisture is not a
+        // pool: only drainable water seeps out, at the substrate's conductivity.
+        // The residue remains an owned, persisted stock until it dries.
+        if material == B::Air || (material == B::Water && !world.is_steady_surface_water(p)) {
             let old = world.water_microlitres(p);
             let room = cell_volume(scale).saturating_sub(
                 old + engine_core::environment::sediment_volume(world.environment.sediment_at(p)),
             );
-            let released = patch.soil.water.min(room);
+            let mobile = patch.soil.water.saturating_sub(law.retained_water(scale));
+            let rate = surface_flux(law.drainage_um_s, face_area_cm2(scale), seconds,
+                &mut patch.soil.flux_carry);
+            let released = mobile.min(room).min(rate);
             if released > 0 {
                 patch.soil.water -= released;
                 // Reserve the ownership handoff before checking free capacity.
@@ -70,11 +75,23 @@ pub(super) fn process(
                     patch.soil.water += released;
                 }
             }
-            pending = patch.soil.water > 0;
+            if material == B::Air && old == 0 {
+                let evaporated = surface_flux(world.environment.evaporation_um_s,
+                    face_area_cm2(scale), seconds, &mut patch.soil.flux_carry)
+                    .min(patch.soil.water);
+                patch.soil.water -= evaporated;
+                world.environment.ledger.evaporated_water += evaporated;
+            }
+            pending = patch.soil.water > law.retained_water(scale)
+                || (material == B::Air && old == 0 && patch.soil.water > 0
+                    && world.environment.evaporation_um_s > 0);
         }
     } else {
         let above = p + IVec3::Y;
-        let old = world.water_microlitres(above);
+        let mut old = world.water_microlitres(above);
+        if old > 0 && world.is_steady_surface_water(above) {
+            old = 0;
+        }
         let water = infiltrate_over(&mut patch.soil, law, scale, old, seconds);
         if water > 0 {
             if world.set_water_microlitres(above, old - water) {
@@ -97,7 +114,36 @@ pub(super) fn process(
             if direction == IVec3::NEG_Y && patch.soil.water <= law.retained_water(scale) {
                 continue;
             }
-            let Some(other_law) = definition.soil(world.get(q)) else {
+            let other_material = world.get(q);
+            let Some(other_law) = definition.soil(other_material) else {
+                // A trench or exposed mine wall is a real drainage outlet.
+                // Dry/bound moisture stays in the substrate; saturated ground
+                // supplies a finite seep instead of an inexhaustible source.
+                let mobile = patch.soil.water.saturating_sub(law.retained_water(scale));
+                if mobile > 0 && matches!(other_material, B::Air | B::Water) {
+                    let capacity = law.capacity(scale);
+                    let table = engine_worldgen::water_table(&world.sample_config(), q.x, q.z);
+                    // Unsaturated soil drains downward. A lateral outlet needs
+                    // saturated ground or a face below the aquifer head.
+                    if direction != IVec3::NEG_Y && q.y > table
+                        && patch.soil.water < capacity.saturating_mul(95) / 100 { continue; }
+                    let old = world.water_microlitres(q);
+                    let head = if q.y <= table { (table + 1) as f64 } else {
+                        p.y as f64 + f64::from(patch.extent)
+                            * patch.soil.water as f64 / capacity.max(1) as f64
+                    };
+                    let equilibrium = ((head - q.y as f64).clamp(0.0, 1.0)
+                        * cell_volume(world.voxel_scale) as f64) as u64;
+                    let room = world.environment.water_capacity_ul(q).min(equilibrium).saturating_sub(old);
+                    let rate = surface_flux(law.drainage_um_s, face_area_cm2(world.voxel_scale),
+                        seconds, &mut patch.soil.flux_carry);
+                    let seep = mobile.min(room).min(rate);
+                    if seep > 0 && world.set_water_microlitres(q, old + seep) {
+                        patch.soil.water -= seep;
+                        changed(q, blocks, chunks);
+                    }
+                    pending |= room > 0;
+                }
                 continue;
             };
             if !world.environment.can_wake(&[q]) || !ensure_patch(world, q) {
@@ -143,7 +189,7 @@ pub(super) fn process(
             let metric = p.as_vec3() * cfg.voxel_meters();
             let shade = super::light::shade(world, p);
             let conditions = engine_worldgen::ecology::Conditions {
-                temperature_c: engine_worldgen::ecology::temperature_c(&cfg, metric),
+                temperature_c: world.sandbox.cell_for(p, material).temperature.round() as i32,
                 shade_per_mille: shade,
                 moisture_per_mille: (patch.soil.water * 1_000 / law.capacity(scale).max(1)) as u32,
             };
@@ -160,7 +206,7 @@ pub(super) fn process(
                         moisture: [species.moisture_min, species.moisture_max],
                         temperature_c: [species.temperature_min_c, species.temperature_max_c],
                         shade_tolerance: species.shade_tolerance,
-                        growth_mg_m2_s: species.growth_mg_m2_s,
+                        growth_mg_m2_s: if crate::world::industry::dirty_soil(world,p) {0} else {species.growth_mg_m2_s},
                         water_ul_per_mg: species.water_ul_per_mg,
                         mature_mg_m2: species.mature_mg_m2,
                     },
@@ -175,6 +221,7 @@ pub(super) fn process(
                 world.environment.ledger.respired_biomass += exchange.decomposed;
                 let mature = u64::from(species.mature_mg_m2) * face_area_cm2(scale) / 10_000;
                 let cover = if patch.soil.biomass > mature / 2 { species.cover } else { B::Dirt };
+                let cover = if cover == B::SnowGrass && world.sandbox.cell_for(p, material).temperature > 0.0 { B::Grass } else { cover };
                 // Hysteresis avoids repeated remeshing around a threshold.
                 if matches!(material, B::Grass | B::Dirt | B::SnowGrass)
                     && (patch.soil.biomass > mature / 2 || patch.soil.biomass < mature / 8)

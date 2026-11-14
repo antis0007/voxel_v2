@@ -94,8 +94,13 @@ impl Asset {
     }
 
     fn matrices(&self,v:&WandView) -> [Mat4;LIMIT] {
+        self.relaxed(v,0.0)
+    }
+
+    /// Clip pose with the fingers uncurled `relax` times the authored "open" turn.
+    fn relaxed(&self,v:&WandView,relax:f32) -> [Mat4;LIMIT] {
         let p=pose(v);
-        let (name,phase)=if v.motion.interact>0.1 {("open",v.motion.interact)}
+        let (name,phase)=if v.motion.interact>0.1 || p.fingers>0.4 {("open",v.motion.interact.max(p.fingers/0.60))}
             else if v.motion.inspect>0.1 || p.fingers>0.12 {("inspect",0.5)}
             else if p.cast_left>0.76 {("windup",(1.0-p.cast_left)/0.24)}
             else if p.cast_left>0.60 {("release",(0.76-p.cast_left)/0.16)}
@@ -120,6 +125,15 @@ impl Asset {
             let weight=(p.fingers/0.16).clamp(0.0,1.0);
             for (i,n) in self.nodes.iter().enumerate() {r[i]=n.r.slerp(r[i],weight);}
         }
+        // The bind pose is a closed grip and "open" only eases it, so an empty hand scales that turn.
+        if relax>0.0 && let Some(open)=self.clips.iter().find(|c|c.name=="open") {
+            for c in &open.channels {
+                let (Values::Rotation(q),Some(n))=(&c.values,self.nodes.get(c.node)) else {continue};
+                let Some(end)=q.last() else {continue};
+                let (axis,angle)=(*end*n.r.inverse()).to_axis_angle();
+                if axis.is_finite() {r[c.node]=Quat::from_axis_angle(axis,angle*relax)*r[c.node];}
+            }
+        }
         let mut world=[Mat4::IDENTITY;LIMIT];
         for i in 0..self.nodes.len() {
             let mut matrix=Mat4::from_scale_rotation_translation(s[i],r[i],t[i]);
@@ -135,9 +149,14 @@ impl Asset {
     }
 
     fn draw(&self,m:&mut Model,v:&WandView) {
-        let p=pose(v);
+        self.draw_placed(m,v,None,0.0);
+    }
+
+    fn draw_placed(&self,m:&mut Model,v:&WandView,placement:Option<(Vec3,Quat)>,relax:f32) {
+        let mut p=pose(v);
+        if let Some((grip,rotation))=placement {p.grip=grip;p.rotation=rotation;}
         if !p.grip.is_finite() || !p.rotation.is_finite() {return;}
-        let world=self.matrices(v);
+        let world=self.relaxed(v,relax);
         // Solve in the animated wrist frame: a fixed cuff anchor separates from
         // the hand during inspection/recoil even when the rest mesh is continuous.
         let wrist=Vec3::new(0.105,-0.070,0.0);
@@ -204,10 +223,11 @@ static WAND:LazyLock<Asset>=LazyLock::new(|| {
     Asset::load(item.geometry,item.name,55.0)
 });
 static ARM:LazyLock<Asset>=LazyLock::new(|| {
-    if crate::viewmodel_review::selected().is_some() {return Asset::load(crate::viewmodel_review::HAND,"plane hand",54.0);}
     Asset::load(crate::viewmodel_review::DEFAULT_HAND,"fitted Artificer hand",54.0)
 });
-pub(super) fn draw(m:&mut Model,v:&WandView,style:crate::wand_style::WandStyle) {
+pub(super) fn draw_hand(m:&mut Model,v:&WandView,placement:Option<(Vec3,Quat)>,relax:f32) {
+    ARM.draw_placed(m,v,placement,relax);
+}pub(super) fn draw(m:&mut Model,v:&WandView,style:crate::wand_style::WandStyle) {
     if super::wand_sprite::enabled() {super::wand_sprite::draw(m,v,style);}
     else {WAND.draw(m,v);}
     ARM.draw(m,v);
@@ -247,5 +267,18 @@ mod tests {
         let open=ARM.matrices(&v);
         assert!(open.iter().zip(rest).any(|(a,b)|a.transform_point3(Vec3::X).distance(b.transform_point3(Vec3::X))>0.05));
     }
-}
 
+    #[test] fn viewmodel_item_stays_fixed_in_the_hand() {
+        // The held item sits on the placement; the hand's grip socket must not drift from it
+        // while the hand's own clips run.
+        let socket=|v:&WandView| { let w=ARM.relaxed(v,0.0); (w[ARM.socket]*ARM.inverse[ARM.socket].inverse()).transform_point3(Vec3::ZERO) };
+        let mut v=WandView { eye:Vec3::ZERO,forward:Vec3::NEG_Z,right:Vec3::X,up:Vec3::Y,
+            time:0.7,cast:0.0,spell:[0.3,0.8,0.7],boost:0.0,motion:Default::default() };
+        let rest=socket(&v);
+        for (interact,equip,time) in [(0.0,1.0,0.1),(0.0,1.0,2.4),(0.0,0.4,0.7),(0.3,1.0,0.7),(1.0,1.0,0.7)] {
+            v.motion.interact=interact; v.motion.equip=equip; v.time=time;
+            let at=socket(&v);
+            assert!(at.distance(rest)*RIG.scale<2e-3,"socket moved {} m at interact={interact} equip={equip} time={time}",at.distance(rest)*RIG.scale);
+        }
+    }
+}

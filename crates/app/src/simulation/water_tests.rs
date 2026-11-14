@@ -1,6 +1,67 @@
 use super::*;
 use crate::{fluid::VoxelScalePreset, world::WorldType};
 
+#[test]
+fn fernwake_stop_breach_moves_finite_water_without_flooding_crossing() {
+    use crate::world::{ChunkData, WorldSampleConfig};
+    use engine_worldgen::fernwake::waterworks;
+    use std::sync::Arc;
+    let cfg = WorldSampleConfig {
+    planet: None, seed: 31, generator_version: waterworks::VERSION,
+        world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter };
+    let mut w = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 31);
+    w.generator_version = waterworks::VERSION;
+    let offset = IVec3::new(-300,104,-30);
+    // Load only the four fixture chunks; no terrain jobs, saves or renderer.
+    for cx in 0..2 { for cz in 0..2 {
+        let c = IVec3::new(cx,3,cz);
+        let mut blocks = Box::new([B::Stone; 32*32*32]);
+        for y in 0..32 { for z in 0..32 { for x in 0..32 {
+            let p = c*32 + IVec3::new(x,y,z);
+            blocks[ChunkData::local_index(x,y,z)] = waterworks::sample(&cfg,
+                (p-offset).as_vec3()+Vec3::splat(0.5)).unwrap_or(B::Stone);
+        }}}
+        w.chunks.insert(c, Arc::new(ChunkData { blocks, light: Box::new([0;32*32*32]),
+            torches: HashSet::new(), modified_bounds:None, structural_bounds:None }));
+    }}
+    let cells: Vec<_> = (-2..3).flat_map(|y| (34..63).flat_map(move |z|
+        (310..333).map(move |x| IVec3::new(x,y,z)+offset))).collect();
+    let mass = |w: &World| cells.iter().map(|&p| w.water_microlitres(p)).sum::<u64>();
+    let before = mass(&w);
+    let receiver = IVec3::new(320,-2,54)+offset;
+    assert_eq!(w.water_volume(receiver),0);
+    for x in 320..322 { w.set(IVec3::new(x,-1,44)+offset,B::Air); }
+    let mut sources = Residency::default();
+    let mut blocks = HashSet::new(); let mut chunks = HashSet::new();
+    for _ in 0..1024 {
+        w.activity.tick += 1;
+        let mut visited = HashSet::new();
+        for &p in &cells {
+            if w.get(p) == B::Water && !visited.contains(&p) {
+                step(&mut sources,&mut w,p,(Vec3::ZERO,Vec3::ONE),&mut visited,&mut blocks,&mut chunks);
+            }
+        }
+    }
+    assert_eq!(mass(&w),before,"stop breach must not create or destroy water");
+    assert!(w.water_volume(receiver)>0,"water must reach the receiving basin");
+    assert!(w.water_fill(IVec3::new(317,2,37)+offset)<0.125,"service shelf remains submerged");
+    for x in 310..333 { for z in 46..51 { for y in 0..4 {
+        assert_eq!(w.water_volume(IVec3::new(x,y,z)+offset),0,"crossing flooded at {x},{y},{z}");
+    }}}
+    // Ordinary construction can close the same opening, without a puzzle flag.
+    let mut pumped = 0;
+    for x in 320..322 {
+        let p = IVec3::new(x,-1,44)+offset;
+        // A solid cannot silently delete fluid: drain this cell first, as a
+        // player pump/bucket would, before checking the rebuilt obstruction.
+        pumped += w.water_microlitres(p);
+        assert!(w.set_water_microlitres(p,0));
+        w.set(p,B::Planks);
+        assert_eq!(w.get(p),B::Planks);
+    }
+    assert_eq!(mass(&w)+pumped,before,"rebuilding must account for every withdrawn microlitre");
+}
+
 fn chamber() -> World {
     let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
     let mut cells = Vec::new();
@@ -43,10 +104,12 @@ fn last_water_quantum_drains_down_a_ledge_without_mass_loss() {
     let outlet = p + IVec3::X - IVec3::Y;
     world.set_many(&[(p + IVec3::X, B::Air), (outlet, B::Air)]);
     world.set_water_volume(p, 1);
-    assert_eq!(tick(&mut world, p), 2);
+    let before = world.water_microlitres(p);
+    assert_eq!(tick(&mut world, p), 4);
     assert_eq!(world.water_volume(p), 0);
-    assert_eq!(world.water_volume(outlet), 1);
-    assert_eq!(mass(&world), 1);
+    let lip = p + IVec3::X;
+    assert!(world.water_microlitres(outlet) > 0);
+    assert_eq!(world.water_microlitres(lip) + world.water_microlitres(outlet), before);
 }
 #[test]
 fn connected_water_pushes_up_an_outlet_below_its_head() {
@@ -65,6 +128,8 @@ fn connected_water_pushes_up_an_outlet_below_its_head() {
     // units rather than two: enough to register downstream without starving
     // the outlet between expensive searches.
     assert_eq!(world.water_volume(outlet), 4);
+    assert_eq!(world.water_volume(IVec3::new(6, 102, 8)), 8);
+    assert_eq!(world.water_volume(IVec3::new(6, 106, 8)), 4);
     assert_eq!(mass(&world), before);
 }
 #[test]
@@ -84,17 +149,16 @@ fn paired_commit_is_one_revision_and_conserves_mass() {
 }
 
 #[test]
-fn momentum_carries_equal_water_into_the_next_cell() {
+fn current_does_not_displace_water_at_equal_head() {
     let mut world = chamber();
     let p = IVec3::new(6, 108, 8);
     let q = p + IVec3::X;
     world.set_water_volume(p, 4);
     world.set_water_volume(q, 4);
     world.set_water_velocity(p, Vec2::new(1.0, 0.0));
-    assert_eq!(tick(&mut world, p), 2);
-    assert_eq!(world.water_volume(p), 3);
-    assert_eq!(world.water_volume(q), 5);
-    assert!(world.water_velocity(q).x > 0.0);
+    assert_eq!(tick(&mut world, p), 0);
+    assert_eq!(world.water_volume(p), 4);
+    assert_eq!(world.water_volume(q), 4);
 }
 
 #[test]
@@ -106,7 +170,8 @@ fn surface_uses_partial_volume_and_rejects_roofed_water() {
     let surface = world
         .water_surface_at((p.as_vec3() + Vec3::splat(0.5)) * 1.0)
         .expect("exposed partial cell has a surface");
-    assert!((surface.y - (p.y as f32 + 5.0 / 8.0)).abs() < 1e-5);
+    let rendered_height = crate::mesh::free_water_height(5.0 / 8.0);
+    assert!((surface.y - (p.y as f32 + rendered_height)).abs() < 1e-5);
     // A stone roof is not a splash surface.
     world.set(p + IVec3::Y, B::Stone);
     assert!(

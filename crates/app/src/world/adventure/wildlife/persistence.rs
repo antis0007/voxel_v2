@@ -21,8 +21,16 @@ impl State {
         let mut state = State::default();
         for _ in 0..count {
             let key = (read()? as i32, read()? as i32, read()?);
-            let kind = read()?;
-            ensure!(passive(kind) && key.2 < 2 && key.0.unsigned_abs() < 1_000_000
+            // Only wildlife records used 26 for salamanders. Combat records keep
+            // 26 as Spectator; never globally reinterpret that identity.
+            let stored_kind = read()?;
+            let kind = if stored_kind == 26 { SALAMANDER } else { stored_kind };
+            if bestiary::generated(kind) && !passive(kind) {
+                // The species row was removed after this save; forget the animal.
+                for _ in 0..8 { read()?; }
+                continue;
+            }
+            ensure!(passive(kind) && (if kind == SALAMANDER { (2..4).contains(&key.2) } else { key.2 < 2 }) && key.0.unsigned_abs() < 1_000_000
                 && key.1.unsigned_abs() < 1_000_000, "Invalid wildlife identity");
             let home = Vec3::new(f32::from_bits(read()?), f32::from_bits(read()?), f32::from_bits(read()?));
             let pos = Vec3::new(f32::from_bits(read()?), f32::from_bits(read()?), f32::from_bits(read()?));
@@ -36,5 +44,34 @@ impl State {
                 "Duplicate wildlife identity");
         }
         Ok(state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(kind: u32) -> Vec<u32> {
+        let mut state = State::default();
+        let p = Vec3::new(4.0, 81.0, 4.0);
+        state.residents.insert((0, 0, 0), Resident { kind, home: p, pos: p, health: 1.0, yaw: 0.0 });
+        let mut bytes = Vec::new();
+        state.encode(&[], &mut bytes);
+        bytes.chunks_exact(4).map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]])).collect()
+    }
+
+    fn decode(words: Vec<u32>) -> Result<State> {
+        let mut words = words.into_iter();
+        State::decode(&mut || words.next().ok_or_else(|| anyhow::anyhow!("short")))
+    }
+
+    #[test]
+    fn a_removed_generated_species_drops_its_residents_and_the_save_loads() {
+        let gone = bestiary::FIRST_GENERATED + 999;
+        assert!(bestiary::species(gone).is_none());
+        let state = decode(record(gone)).expect("the save still loads");
+        assert!(state.residents.is_empty());
+        assert!(decode(record(77)).is_err(), "an unknown authored kind is still corrupt data");
+        assert_eq!(decode(record(SHEEP)).expect("sheep").residents.len(), 1);
     }
 }

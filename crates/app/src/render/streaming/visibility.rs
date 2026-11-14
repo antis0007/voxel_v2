@@ -1,19 +1,26 @@
 //! Terrain bounds, incremental residency selection, LOD bands, and frustum culling.
 use super::columns::ColumnPlans;
 use super::{ChunkCache, ChunkKey};
-use crate::render::render_distance_settings;
+use crate::render::{RenderDistanceSettings, render_distance_settings};
 use crate::world::{CHUNK_SIZE, WorldSampleConfig, WorldSnapshot, terrain_height};
+use engine_core::coords::chunk_axis_from_world_block;
 use glam::{IVec3, Mat4, Vec3, Vec4};
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 pub(super) type ColumnRange = (i32, i32, i32);
 pub fn lod_for_chunk(center: IVec3, chunk: IVec3) -> u8 {
+    lod_for_chunk_with_settings(center, chunk, render_distance_settings())
+}
+
+pub(super) fn lod_for_chunk_with_settings(center: IVec3, chunk: IVec3, settings: RenderDistanceSettings) -> u8 {
     let dx = (chunk.x - center.x).abs();
     let dz = (chunk.z - center.z).abs();
     // A terrain column shares one detail level, including its tree crowns.
-    let d = dx.max(dz);
-    let settings = render_distance_settings();
+    lod_at_distance(dx.max(dz), settings)
+}
 
+fn lod_at_distance(d: i32, settings: RenderDistanceSettings) -> u8 {
     if settings.lod_levels <= 1 || d <= settings.lod_start_chunks {
         0
     } else if settings.lod_levels == 2 {
@@ -41,6 +48,21 @@ pub fn lod_for_chunk(center: IVec3, chunk: IVec3) -> u8 {
 /// Compute the terrain-driven Y-chunk range that should be loaded for an XZ column.
 /// Returns (min_cy, max_cy) inclusive chunk Y coords.
 pub(super) fn column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) -> ColumnRange {
+    if cfg.world_type == engine_voxel::WorldType::Manyfold {
+        let bands = manyfold_chunk_bands(cfg, cx, cz);
+        let mut min_cy = i32::MAX;
+        let mut max_cy = i32::MIN;
+        for (lo, hi) in bands {
+            if lo <= hi {
+                min_cy = min_cy.min(lo);
+                max_cy = max_cy.max(hi);
+            }
+        }
+        if min_cy > max_cy {
+            return (1, 0, 1);
+        }
+        return (min_cy, max_cy, min_cy);
+    }
     // Sample a 5x5 grid of terrain heights within this column to find the Y extent.
     let ox = cx * CHUNK_SIZE;
     let oz = cz * CHUNK_SIZE;
@@ -71,78 +93,136 @@ pub(super) fn column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) ->
     // This is terrain-driven only: do not force the player's Y chunk into every
     // XZ column, or flying high will generate a giant ring of empty air chunks.
     let cave_margin = CHUNK_SIZE * 2;
-    // V5 crowns reach 24 m, including their leafy apex. Keep the complete
-    // crown resident even when its trunk belongs to an adjacent column.
+    // Retain the legacy margin as a floor; actual overlapping crowns below
+    // provide the upper bound for taller trees and neighbouring trunks.
     let tree_margin = cfg.blocks_for_span(if cfg.generator_version >= 5 {
         26.0
     } else {
         13.0
     }) + 1;
     let water_level = cfg.water_level();
-    let effective_min = (min_h - cave_margin).min(water_level - CHUNK_SIZE);
+    let effective_min = if min_h <= water_level {
+        (min_h - cave_margin).min(water_level - CHUNK_SIZE)
+    } else {
+        min_h - cave_margin
+    };
     // Ocean surface chunks are required even when the seabed is several chunks
     // lower (especially at quarter-metre voxel scales).
     // Landmark crowns rise above the ordinary tree margin.
-    let giant_top = engine_worldgen::giant_tree_top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1));
-    let effective_max = (max_h + tree_margin).max(water_level).max(giant_top.unwrap_or(i32::MIN));
+    let giant_top = engine_worldgen::giant_tree_top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1)).max(engine_worldgen::ruins::top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1)));
+    let effective_max = (max_h + tree_margin)
+        .max(water_level)
+        .max(giant_top.unwrap_or(i32::MIN))
+        .max(crown_top_over_column(cfg, ox, oz).unwrap_or(i32::MIN));
 
     let min_cy =
-        floor_div_i32(effective_min, CHUNK_SIZE).max(floor_div_i32(cfg.min_world_y(), CHUNK_SIZE));
-    let max_cy = floor_div_i32(effective_max, CHUNK_SIZE)
-        .min(floor_div_i32(cfg.max_world_y() - 1, CHUNK_SIZE));
+        chunk_axis_from_world_block(effective_min).max(chunk_axis_from_world_block(cfg.min_world_y()));
+    let max_cy = chunk_axis_from_world_block(effective_max)
+        .min(chunk_axis_from_world_block(cfg.max_world_y() - 1));
     let surface_base = if min_h <= water_level {
         min_h.min(water_level)
     } else {
         min_h - cfg.blocks_for_span(8.0)
     };
-    (min_cy, max_cy, floor_div_i32(surface_base, CHUNK_SIZE))
+    (min_cy, max_cy, chunk_axis_from_world_block(surface_base))
 }
 
-/// Fast erosion-free estimate used while `ColumnPlans` is still evaluating
-/// a newly uncovered column on its background worker threads.
-fn preview_column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) -> ColumnRange {
-    let ox = cx * CHUNK_SIZE;
-    let oz = cz * CHUNK_SIZE;
-    let mut min_h = i32::MAX;
-    let mut max_h = i32::MIN;
-    for dz in [0, 8, 16, 24, 31] {
-        for dx in [0, 8, 16, 24, 31] {
-            let (h, _) = crate::world::landscape::preview_surface(cfg, ox + dx, oz + dz);
-            let hi = h as i32;
-            min_h = min_h.min(hi);
-            max_h = max_h.max(hi);
+struct CrownBound {
+    x: f32,
+    z: f32,
+    reach: f32,
+    top: i32,
+}
+
+thread_local! {
+    static TREE_BOUNDS: RefCell<(Option<WorldSampleConfig>, HashMap<(i32, i32), Option<CrownBound>>)> =
+        RefCell::default();
+}
+
+/// Highest voxel of any tree crown overlapping the column at `(ox, oz)`.
+/// The fixed tree margin sat below the tallest conifers (27 m trunks) and below
+/// trunks rooted on bumps the 5x5 height sample missed, so their tops were cut.
+fn crown_top_over_column(cfg: &WorldSampleConfig, ox: i32, oz: i32) -> Option<i32> {
+    let m = cfg.voxel_meters();
+    let cell = cfg.blocks_for_span(12.0);
+    // Match structure_block's two-cell search around every voxel in the column.
+    let cells = |o: i32| o.div_euclid(cell) - 2..=(o + CHUNK_SIZE - 1).div_euclid(cell) + 2;
+    // Adjacent columns search many of the same placement cells. Cache misses
+    // too, with a per-worker cap and a full reset on generator/config changes.
+    TREE_BOUNDS.with_borrow_mut(|(cached_cfg, bounds)| {
+        if *cached_cfg != Some(*cfg) || bounds.len() >= 16_384 {
+            bounds.clear();
+            *cached_cfg = Some(*cfg);
         }
-    }
-    let water_level = cfg.water_level();
-    let tree_margin = cfg.blocks_for_span(28.0) + 1;
-    let effective_min = (min_h - CHUNK_SIZE * 2).min(water_level - CHUNK_SIZE);
-    // Landmark crowns rise above the ordinary tree margin.
-    let giant_top = engine_worldgen::giant_tree_top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1));
-    let effective_max = (max_h + tree_margin).max(water_level).max(giant_top.unwrap_or(i32::MIN));
-    let min_cy =
-        floor_div_i32(effective_min, CHUNK_SIZE).max(floor_div_i32(cfg.min_world_y(), CHUNK_SIZE));
-    let max_cy = floor_div_i32(effective_max, CHUNK_SIZE)
-        .min(floor_div_i32(cfg.max_world_y() - 1, CHUNK_SIZE));
-    let surface_base = if min_h <= water_level {
-        min_h.min(water_level)
-    } else {
-        min_h - cfg.blocks_for_span(16.0)
-    };
-    (min_cy, max_cy, floor_div_i32(surface_base, CHUNK_SIZE))
+        let mut top = None;
+        for tz in cells(oz) {
+            for tx in cells(ox) {
+                let bound = bounds.entry((tx, tz)).or_insert_with(|| {
+                    let tree = crate::world::tree_visual(cfg, tx, tz)?;
+                    Some(CrownBound {
+                        x: tree.base.x / m,
+                        z: tree.base.z / m,
+                        reach: tree.radius / m,
+                        top: ((tree.base.y + tree.height + tree.crown_height) / m).ceil() as i32,
+                    })
+                });
+                let Some(bound) = bound else { continue };
+                if bound.x + bound.reach >= ox as f32
+                    && bound.x - bound.reach <= (ox + CHUNK_SIZE) as f32
+                    && bound.z + bound.reach >= oz as f32
+                    && bound.z - bound.reach <= (oz + CHUNK_SIZE) as f32
+                {
+                    top = top.max(Some(bound.top));
+                }
+            }
+        }
+        top
+    })
 }
 
 /// Surface/cave coverage plus a separate player-height band when underground.
 /// Disjoint bands avoid generating an entire vertical mountain of unseen chunks.
+fn manyfold_chunk_bands(cfg: &WorldSampleConfig, cx: i32, cz: i32) -> [(i32, i32); 2] {
+    let metres = cfg.voxel_meters();
+    let floor = chunk_axis_from_world_block(cfg.min_world_y());
+    let ceiling = chunk_axis_from_world_block(cfg.max_world_y() - 1);
+    let mut bands = [(1, 0), (1, 0)];
+    for (i, (lo_m, hi_m)) in engine_worldgen::manyfold::column_shell_bands(cfg, cx, cz)
+        .into_iter()
+        .enumerate()
+    {
+        if lo_m > hi_m {
+            continue;
+        }
+        let lo = chunk_axis_from_world_block((lo_m / metres).floor() as i32).max(floor);
+        let hi = chunk_axis_from_world_block((hi_m / metres).floor() as i32).min(ceiling);
+        if lo <= hi {
+            bands[i] = (lo, hi);
+        }
+    }
+    if bands[0].0 <= bands[0].1 && bands[1].0 <= bands[1].1 && bands[0].1 + 1 >= bands[1].0 && bands[1].1 + 1 >= bands[0].0
+    {
+        bands = [(bands[0].0.min(bands[1].0), bands[0].1.max(bands[1].1)), (1, 0)];
+    }
+    bands
+}
+
 fn column_y_bands(
     range: (i32, i32, i32),
     chebyshev: i32,
     center: IVec3,
+    cx: i32,
+    cz: i32,
     cfg: &WorldSampleConfig,
+    eye_underground: bool,
 ) -> [(i32, i32); 2] {
+    if cfg.world_type == engine_voxel::WorldType::Manyfold {
+        return manyfold_chunk_bands(cfg, cx, cz);
+    }
     let (min_y, max_y, surface_min) = range;
     // Horizontal visibility must not discard the ocean/ground when flying high.
-    let floor = floor_div_i32(cfg.min_world_y(), CHUNK_SIZE);
-    let ceiling = floor_div_i32(cfg.max_world_y() - 1, CHUNK_SIZE);
+    let floor = chunk_axis_from_world_block(cfg.min_world_y());
+    let ceiling = chunk_axis_from_world_block(cfg.max_world_y() - 1);
     let surface_floor = if chebyshev > 4 {
         surface_min.max(min_y)
     } else if chebyshev > 2 {
@@ -150,16 +230,21 @@ fn column_y_bands(
     } else {
         min_y
     };
-    let underground = if center.y <= surface_min {
-        ((center.y - 1).max(floor), (center.y + 1).min(ceiling))
+    let interior_realm = matches!(cfg.world_type, engine_voxel::WorldType::Nether) || cfg.world_type.is_interior();
+    let underground = if (chebyshev <= 2 || eye_underground || interior_realm) && center.y <= surface_min + 1 {
+        // Only a player underground needs distant cave floors and ceilings.
+        // Keep a small local band at shallow entrances and near the player.
+        let depth = render_distance_settings().view_distance_chunks.clamp(2, 8);
+        ((center.y - depth).max(floor), (center.y + depth).min(ceiling))
     } else {
         (1, 0)
     };
-    [(surface_floor.max(floor), max_y.min(ceiling)), underground]
-}
-fn floor_div_i32(a: i32, b: i32) -> i32 {
-    let d = a / b;
-    if (a ^ b) < 0 && d * b != a { d - 1 } else { d }
+    let surface = (surface_floor.max(floor), max_y.min(ceiling));
+    if underground.0 <= underground.1 && underground.1 + 1 >= surface.0 && underground.0 <= surface.1 + 1 {
+        [(surface.0.min(underground.0), surface.1.max(underground.1)), (1, 0)]
+    } else {
+        [surface, underground]
+    }
 }
 
 pub(super) fn chunk_radial_distance_sq(center: IVec3, chunk: IVec3) -> i32 {
@@ -174,7 +259,7 @@ pub(super) fn chunk_sort_key(center: IVec3, key: ChunkKey) -> (u8, i32, i32, i32
     let dz = (key.coord.z - center.z).abs();
     (
         key.lod,
-        chunk_radial_distance_sq(center, key.coord),
+        dx * dx + dz * dz,
         dy,
         dx.max(dy).max(dz),
         dx + dy + dz,
@@ -189,8 +274,9 @@ pub(super) fn pending_priority(
     let dx = (key.coord.x - center.x).abs();
     let dy = (key.coord.y - center.y).abs();
     let dz = (key.coord.z - center.z).abs();
+    let radial = dx * dx + dz * dz;
     Reverse((
-        if urgent { i32::MIN.saturating_add(chunk_radial_distance_sq(center, key.coord)) } else { chunk_radial_distance_sq(center, key.coord) },
+        if urgent { i32::MIN.saturating_add(radial) } else { radial },
         dy,
         key.lod as i32,
         dx.max(dy).max(dz),
@@ -242,36 +328,20 @@ pub(super) fn desired_chunk_keys_with_snapshot_cached(
         render_distance_settings().view_distance_chunks + 2,
     );
     y_cache.begin(snapshot.cfg);
+    let eye_underground = y_cache.eye_underground(center.y);
     let mut out = Vec::with_capacity((radius as usize * 2 + 1).pow(2) * 4);
     let mut seen = HashSet::new();
     let radius_sq = radius * radius;
 
-    let local_air_radius = 2;
-    let local_air_y_pad = 1;
-
     for dz in -radius..=radius {
-        for dx in -radius..=radius {
-            if dx * dx + dz * dz > radius_sq {
-                continue;
-            }
+        let extent = (radius_sq - dz * dz).isqrt();
+        for dx in -extent..=extent {
             let cx = center.x + dx;
             let cz = center.z + dz;
-            let range = y_cache
-                .range((cx, cz))
-                .unwrap_or_else(|| preview_column_y_chunk_range(cx, cz, &snapshot.cfg));
-            for key in keys_for_column(center, (cx, cz), range, &snapshot.cfg) {
+            let Some(range) = y_cache.range((cx, cz)) else { continue };
+            for key in keys_in_view(center, (cx, cz), range, &snapshot.cfg, eye_underground) {
                 if seen.insert(key.coord) {
                     out.push(key);
-                }
-            }
-
-            if dx.abs() <= local_air_radius && dz.abs() <= local_air_radius {
-                for cy in (center.y - local_air_y_pad)..=(center.y + local_air_y_pad) {
-                    let coord = IVec3::new(cx, cy, cz);
-                    if seen.insert(coord) {
-                        let lod = lod_for_chunk(center, coord);
-                        out.push(ChunkKey { coord, lod });
-                    }
                 }
             }
         }
@@ -289,22 +359,32 @@ pub(super) fn desired_chunk_keys_with_snapshot_cached(
     out
 }
 
-pub(super) fn keys_for_column(
+pub(super) fn keys_in_view(
     center: IVec3,
-    c: (i32, i32),
+    column: (i32, i32),
     range: ColumnRange,
     cfg: &WorldSampleConfig,
+    eye_underground: bool,
 ) -> Vec<ChunkKey> {
-    let (cx, cz) = c;
-    let chebyshev = (cx - center.x).abs().max((cz - center.z).abs());
+    let above_top = center.y - range.1;
+    let distance = (center.x - column.0).abs().max((center.z - column.1).abs());
+    let settings = render_distance_settings();
+    // The altitude policy sets the resident radius. A second cutoff in
+    // vertical chunks drops the ground while it is still visible below.
+    let (cx, cz) = column;
+    let lod = lod_at_distance(distance, settings);
+    let bands = column_y_bands(range, distance, center, cx, cz, cfg, eye_underground);
     let mut keys = Vec::new();
-    for (min, max) in column_y_bands(range, chebyshev, center, cfg) {
+    for (min, max) in bands {
         for y in min..=max {
-            let coord = IVec3::new(cx, y, cz);
-            keys.push(ChunkKey {
-                coord,
-                lod: lod_for_chunk(center, coord),
-            });
+            keys.push(ChunkKey { coord: IVec3::new(cx, y, cz), lod });
+        }
+    }
+    if distance <= 2 && above_top <= 2 {
+        for y in center.y - 1..=center.y + 1 {
+            if !bands.iter().any(|&(min, max)| min <= y && y <= max) {
+                keys.push(ChunkKey { coord: IVec3::new(cx, y, cz), lod });
+            }
         }
     }
     keys
@@ -324,27 +404,22 @@ pub(super) fn desired_chunk_keys_ring(
     let mut out = Vec::new();
     let min_radius_sq = min_radius * min_radius;
     let max_radius_sq = max_radius * max_radius;
+    let eye_underground = y_cache.eye_underground(center.y);
 
     for dz in -max_radius..=max_radius {
-        for dx in -max_radius..=max_radius {
-            let dist_sq = dx * dx + dz * dz;
-            if dist_sq > max_radius_sq || dist_sq <= min_radius_sq {
-                continue;
-            }
-
+        let outer = (max_radius_sq - dz * dz).isqrt();
+        let inner = min_radius_sq - dz * dz;
+        let offsets = if inner >= 0 {
+            let first = inner.isqrt() + 1;
+            [(-outer)..=(-first), first..=outer]
+        } else {
+            [(-outer)..=outer, 1..=0]
+        };
+        for dx in offsets.into_iter().flatten() {
             let cx = center.x + dx;
             let cz = center.z + dz;
-            let chebyshev = dx.abs().max(dz.abs());
-            let range = y_cache
-                .range((cx, cz))
-                .unwrap_or_else(|| preview_column_y_chunk_range(cx, cz, &snapshot.cfg));
-            for (min_y, max_y) in column_y_bands(range, chebyshev, center, &snapshot.cfg) {
-                for cy in min_y..=max_y {
-                    let coord = IVec3::new(cx, cy, cz);
-                    let lod = lod_for_chunk(center, coord);
-                    out.push(ChunkKey { coord, lod });
-                }
-            }
+            let Some(range) = y_cache.range((cx, cz)) else { continue };
+            out.extend(keys_in_view(center, (cx, cz), range, &snapshot.cfg, eye_underground));
         }
     }
 
@@ -404,56 +479,118 @@ pub fn extract_planes(view_proj: Mat4) -> [Vec4; 6] {
 }
 
 pub fn build_draw_list(cache: &ChunkCache, view_proj: Mat4) -> Vec<ChunkKey> {
-    let planes = extract_planes(view_proj);
-    let mut occlusion = super::occlusion::Occlusion::new(cache, view_proj, &planes);
-    let mut out = Vec::new();
-
     let distance = render_distance_settings().view_distance_chunks;
-    // Membership is in chunk coordinates; scale does not change this map.
     let coverage = cache.resident_coverage(Vec3::ZERO, distance, 1.0);
-    // Publish terrain columns as complete owners. Partial vertical children
-    // cannot overlap a complete horizon parent and rely on depth coincidence.
-    let mut complete = std::collections::HashMap::new();
-    for q in &cache.published_coords {
-        let ready = cache.gpu_meshes.contains_key(q);
-        complete.entry((q.x,q.z)).and_modify(|v| *v &= ready).or_insert(ready);
-    }
-    for (&coord, mesh) in &cache.gpu_meshes {
-        if !cache.published_coords.contains(&coord) {continue;}
-        if complete.get(&(coord.x,coord.z)) != Some(&true) { continue; }
-        // Includes bounded out-of-window pins. Never draw a child whose parent
-        // is not suppressed by the exact same dense/sparse ownership map.
-        if !coverage.contains_column(coord.x,coord.z) { continue; }
-        if mesh.index_count == 0 {
+    let mut out = Vec::new();
+    build_draw_list_with_coverage(cache, view_proj, super::occlusion::eye_from(view_proj), &coverage, &mut DrawScratch::default(), &mut out);
+    out
+}
+
+#[derive(Default)]
+pub struct DrawScratch {
+    occlusion: super::occlusion::Scratch,
+    depth_keys: Vec<(f32, ChunkKey)>,
+}
+
+pub fn build_draw_list_with_coverage(
+    cache: &ChunkCache,
+    view_proj: Mat4,
+    eye: Option<Vec3>,
+    coverage: &crate::render::coverage::ResidentCoverage,
+    scratch: &mut DrawScratch,
+    out: &mut Vec<ChunkKey>,
+) {
+    let now = std::time::Instant::now();
+    let planes = extract_planes(view_proj);
+    let mut occlusion = super::occlusion::Occlusion::new(cache, eye, &mut scratch.occlusion);
+    let keys = &mut scratch.depth_keys;
+    keys.clear();
+    let forward = Vec3::new(view_proj.x_axis.w, view_proj.y_axis.w, view_proj.z_axis.w);
+
+    // Coverage admits complete surface bundles or full underground/proxy
+    // bundles. The horizon and draw list use the same ownership decision.
+    for (&(x, z), members) in &cache.published_columns {
+        if !coverage.contains_column(x, z) {
             continue;
         }
-
-        let (center, radius) = chunk_bounds_sphere(coord);
-        // Skip the far plane: residency already bounds horizontal reach, and the
-        // horizon suppresses every resident column. Far-culling a resident chunk
-        // (e.g. ground more than the cull depth below a high flying camera)
-        // leaves a sky-coloured hole that neither pass fills.
-        let outside = planes[..5]
-            .iter()
-            .any(|plane| plane.truncate().dot(center) + plane.w < -radius);
-        if outside || occlusion.hides(coord, mesh.lod) {
-            continue;
+        // Members are published in height order. Reject a tall column only
+        // when every member sphere is outside the same frustum plane.
+        if let [first, _, _, .., last] = members.as_slice() {
+            let (bottom, radius) = chunk_bounds_sphere(*first);
+            let (top, _) = chunk_bounds_sphere(*last);
+            if planes[..5].iter().any(|plane| {
+                let endpoint = if plane.y >= 0.0 { top } else { bottom };
+                plane.truncate().dot(endpoint) + plane.w < -radius
+            }) {
+                continue;
+            }
         }
+        for &coord in members {
+            let Some(mesh) = cache.gpu_meshes.get(&coord) else { continue; };
+            let transitioning = (mesh.index_count == 0 || mesh.lod == 0)
+                && mesh.outgoing_lod.is_some()
+                && cache.lod_transition(coord, now).is_some();
+            if mesh.index_count == 0 && !transitioning {
+                continue;
+            }
 
-        out.push(ChunkKey {
-            coord,
-            lod: mesh.lod,
-        });
+            let (center, radius) = chunk_bounds_sphere(coord);
+            // Residency bounds horizontal reach. A far plane can otherwise
+            // cull terrain that the resident column already masks in the horizon.
+            let outside = planes[..5]
+                .iter()
+                .any(|plane| plane.truncate().dot(center) + plane.w < -radius);
+            if outside {
+                continue;
+            }
+            // The outgoing coarse mesh is still part of the visible handoff.
+            if !transitioning && occlusion.hides(coord, mesh.lod) {
+                continue;
+            }
+
+            keys.push((forward.dot(coord.as_vec3()), ChunkKey {
+                coord,
+                lod: mesh.lod,
+            }));
+        }
     }
     occlusion.publish();
+
+    // Publication waits for a complete column so the horizon can safely
+    // yield ownership. If that leaves the whole view empty, draw the nearby
+    // uploaded pieces as temporary cover without claiming horizon ownership.
+    if keys.is_empty() && cache.spawn_ready && cache.radius_cap != Some(0) {
+        for dz in -2..=2 {
+            for dx in -2..=2 {
+                let column = cache.center_chunk + IVec3::new(dx, 0, dz);
+                if coverage.contains_column(column.x, column.z) {
+                    continue;
+                }
+                for dy in -1..=1 {
+                    let coord = column + IVec3::Y * dy;
+                    let Some(mesh) = cache.gpu_meshes.get(&coord) else { continue };
+                    if mesh.index_count == 0 {
+                        continue;
+                    }
+                    let (center, radius) = chunk_bounds_sphere(coord);
+                    if planes[..5].iter().any(|plane| {
+                        plane.truncate().dot(center) + plane.w < -radius
+                    }) {
+                        continue;
+                    }
+                    keys.push((forward.dot(coord.as_vec3()), ChunkKey { coord, lod: mesh.lod }));
+                }
+            }
+        }
+    }
 
     // For a perspective camera clip W is forward depth. Submit nearer opaque
     // chunks first, rather than LOD/radial order used by the work scheduler.
     // Coordinate ties keep insertion/rehash order from changing overdraw.
-    let forward = Vec3::new(view_proj.x_axis.w, view_proj.y_axis.w, view_proj.z_axis.w);
-    out.sort_unstable_by(|a, b| forward.dot(a.coord.as_vec3()).total_cmp(&forward.dot(b.coord.as_vec3()))
+    keys.sort_unstable_by(|(da, a), (db, b)| da.total_cmp(db)
         .then_with(|| (a.coord.x, a.coord.y, a.coord.z).cmp(&(b.coord.x, b.coord.y, b.coord.z))));
-    out
+    out.clear();
+    out.extend(keys.iter().map(|&(_, key)| key));
 }
 
 #[cfg(test)]
@@ -476,15 +613,15 @@ mod crown_coverage {
                 let top_allowed = (max_cy + 1) * CHUNK_SIZE;
                 let (x0, z0) = (cx * CHUNK_SIZE, cz * CHUNK_SIZE);
                 for tz in
-                    (z0 - cell).div_euclid(cell) - 1..=(z0 + CHUNK_SIZE + cell).div_euclid(cell)
+                    z0.div_euclid(cell) - 2..=(z0 + CHUNK_SIZE - 1).div_euclid(cell) + 2
                 {
                     for tx in
-                        (x0 - cell).div_euclid(cell) - 1..=(x0 + CHUNK_SIZE + cell).div_euclid(cell)
+                        x0.div_euclid(cell) - 2..=(x0 + CHUNK_SIZE - 1).div_euclid(cell) + 2
                     {
                         let Some(tree) = crate::world::tree_visual(&cfg, tx, tz) else {
                             continue;
                         };
-                        let reach = tree.radius * 1.55 + 1.0;
+                        let reach = tree.radius;
                         let (bx, bz) = (tree.base.x / m, tree.base.z / m);
                         if bx + reach / m < x0 as f32
                             || bx - reach / m > (x0 + CHUNK_SIZE) as f32

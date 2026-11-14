@@ -1,9 +1,7 @@
-//! Factorio-style assembling machine. Set it to any grid recipe whose
-//! ingredients are all factory resources (ingots, coils, cores...) and it
-//! crafts on its own from whatever item pipes deliver. Resource products go
-//! back out through the pipes; machine kits pile up inside for collection,
-//! so one assembler line can build the parts for the next.
-use super::{CAPACITY, Factory, Kind, Node};
+//! Assembles grid recipes with factory resources and supported bulk blocks.
+//! Resources move by item pipe or adjacent chest; supported bulk blocks
+//! enter through chests. Finished items return to adjacent chests.
+use super::{CAPACITY, Factory, Kind, Node, blocks::Material};
 use crate::world::inventory::{CraftingRecipe, Item, all_recipes};
 
 /// Seconds per craft at the base drive.
@@ -11,17 +9,19 @@ pub const CRAFT_TICKS: u32 = 8;
 /// Draw while crafting: 5 kW at the base drive.
 pub const POWER: u32 = 5;
 pub const STOCK_LIMIT: u32 = 256;
+pub const SINGLE_BATCH: u32 = 1;
 
 pub fn automatable(recipe: &CraftingRecipe) -> bool {
     recipe
         .ingredients
         .iter()
-        .all(|(item, _)| matches!(item, Item::Resource(_)))
-        && match recipe.output.item {
+        .all(|&(item, _)| match item {
             Item::Resource(_) => true,
-            Item::Block(b) => Kind::from_block(b).is_some(),
+            Item::Block(block) => Material::from_block(block).is_some(),
             _ => false,
-        }
+        })
+        && matches!(recipe.output.item, Item::Resource(_) | Item::Block(_) | Item::Food(_)
+            | Item::Tool(_) | Item::Weapon(_) | Item::Armor(..) | Item::Bucket(0))
 }
 
 /// Bound for a saved `target` (recipe index + 1).
@@ -58,6 +58,13 @@ pub fn accepts(n: &Node, i: usize) -> bool {
     recipe(n).is_some_and(|r| needs(r).any(|(j, _)| j == i))
 }
 
+pub fn block_needs(recipe: &CraftingRecipe) -> impl Iterator<Item = (Material, u32)> + '_ {
+    recipe.ingredients.iter().filter_map(|&(item, count)| match item {
+        Item::Block(block) => Material::from_block(block).map(|material| (material, count)),
+        _ => None,
+    })
+}
+
 impl Factory {
     pub(super) fn run_assemblers(&mut self) {
         for n in self.nodes.values_mut() {
@@ -68,7 +75,8 @@ impl Factory {
                 n.status = "No recipe";
                 continue;
             };
-            if !needs(recipe).all(|(i, k)| n.input[i] >= k) {
+            if !needs(recipe).all(|(i, k)| n.input[i] >= k)
+                || !block_needs(recipe).all(|(material, count)| n.blocks.input[material.index()] >= count) {
                 n.progress = 0;
                 n.status = "Needs input";
                 continue;
@@ -96,23 +104,41 @@ impl Factory {
                 for (i, k) in needs(recipe) {
                     n.input[i] -= k;
                 }
+                for (material, count) in block_needs(recipe) {
+                    n.blocks.input[material.index()] -= count;
+                }
                 match out.item {
                     Item::Resource(r) => n.output[r as usize] += out.count * 64,
                     _ => n.stock += out.count,
                 }
                 n.progress = 0;
+                if n.mode == SINGLE_BATCH {
+                    n.enabled = false;
+                    n.status = "Batch Complete";
+                }
             }
         }
     }
 }
 
-/// The machine kit an assembler's stock stands for.
-pub fn stock_kind(n: &Node) -> Option<Kind> {
-    match recipe(n)?.output.item {
-        Item::Block(b) => Kind::from_block(b),
-        _ => None,
-    }
+/// The finished item held in the assembler's inventory output.
+pub fn stock_item(n: &Node) -> Option<Item> {
+    let item = recipe(n)?.output.item;
+    (!matches!(item, Item::Resource(_))).then_some(item)
 }
+
+pub(crate) mod review_fixture;
+pub(crate) mod window_review;
+#[cfg(test)]
+mod load_tests;
+#[cfg(test)]
+mod batch_tests;
+mod chests;
+pub(super) use chests::{has_output, transfer as chests};
+
+#[cfg(test)]
+#[path = "assembler/chest_tests.rs"]
+mod chest_tests;
 
 #[cfg(test)]
 mod tests {
@@ -140,6 +166,6 @@ mod tests {
         let n = &f.nodes[&p];
         assert_eq!(n.stock, 1);
         assert_eq!(n.input[6] + n.input[8], 0);
-        assert_eq!(stock_kind(n), Some(Kind::Generator));
+        assert_eq!(stock_item(n), Some(Item::Block(Kind::Generator.block())));
     }
 }

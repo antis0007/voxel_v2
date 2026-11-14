@@ -6,20 +6,22 @@ use super::bake::TileData;
 use super::tile::TileId;
 use engine_voxel::WorldSampleConfig;
 
-pub const MAGIC: &[u8; 8] = b"VXGT0002";
+pub const MAGIC: &[u8; 8] = b"VXGT0005";
 
 const SAMPLES: usize = 65 * 65;
 const HEADER: usize = 8 + 16;
-const FILE_LEN: usize = HEADER + SAMPLES * 6;
+const FILE_LEN: usize = HEADER + SAMPLES * 10;
 
 pub struct TileCache {
     root: PathBuf,
     writable: bool,
 }
 
-/// Folder name for `cfg`: every field of the config changes the baked ground.
+/// Folder name for `cfg` and the planet size: each changes the baked ground.
 pub fn folder_name(cfg: &WorldSampleConfig) -> String {
-    let name = format!("{}-g{}-{:?}-{:?}", cfg.seed, cfg.generator_version, cfg.world_type, cfg.voxel_scale);
+    let (half, radius) = (super::chart::HALF_M as u64, super::chart::RADIUS_M as u64);
+    let mut name = format!("{}-g{}-{:?}-{:?}-h{half}-r{radius}", cfg.seed, cfg.generator_version, cfg.world_type, cfg.voxel_scale);
+    if cfg.planet_settings().is_some() { name.push_str(&format!("-p{:016x}", cfg.planet_fingerprint())); }
     name.to_lowercase().replace(' ', "")
 }
 
@@ -74,6 +76,7 @@ fn encode(d: &TileData) -> Vec<u8> {
     for c in &d.climate {
         out.extend_from_slice(c);
     }
+    for n in &d.normals { out.extend_from_slice(n); }
     out
 }
 
@@ -89,8 +92,11 @@ fn decode(b: &[u8], id: TileId) -> Option<TileData> {
     let height_m = b[HEADER..h_end].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
     let material = b[h_end..h_end + SAMPLES].to_vec();
     let water = b[h_end + SAMPLES..h_end + SAMPLES * 2].to_vec();
-    let climate = b[h_end + SAMPLES * 2..].chunks_exact(2).map(|c| [c[0], c[1]]).collect();
-    Some(TileData { id, height_m, material, water, climate })
+    let appearance = h_end + SAMPLES * 2;
+    let normal_start = appearance + SAMPLES * 4;
+    let climate = b[appearance..normal_start].chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect();
+    let normals = b[normal_start..].chunks_exact(2).map(|n| [n[0], n[1]]).collect();
+    Some(TileData { id, height_m, material, water, climate, normals })
 }
 
 #[cfg(test)]
@@ -99,6 +105,7 @@ mod tests {
 
     fn cfg(seed: u32, generator_version: u32) -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: None,
             generator_version,
             seed,
             world_type: engine_voxel::WorldType::Hills,
@@ -116,7 +123,7 @@ mod tests {
             d.height_m[k] = (k as i16).wrapping_mul(7);
             d.material[k] = (k % 251) as u8;
             d.water[k] = (k % 13) as u8;
-            d.climate[k] = [(k % 17) as u8, (k % 19) as u8];
+            d.climate[k] = [(k % 17) as u8, (k % 19) as u8, 0, 255];
         }
         d
     }
@@ -170,7 +177,7 @@ mod tests {
         assert!(cache.store(&sample_data()));
         let stray = std::fs::read_dir(&cache.root).unwrap().flatten().filter(|e| e.path().to_string_lossy().ends_with(".tmp")).count();
         assert_eq!(stray, 0);
-        assert!(folder_name(&cfg(74, 53)).ends_with("-g53-hills-onemeter"), "{}", folder_name(&cfg(74, 53)));
+        assert!(folder_name(&cfg(74, 53)).contains("-g53-hills-onemeter-h"), "{}", folder_name(&cfg(74, 53)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

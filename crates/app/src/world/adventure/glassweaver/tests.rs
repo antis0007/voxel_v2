@@ -95,6 +95,7 @@ fn player_shots_break_nodes() {
         mods: wands::ShotMods { damage_mul: 4.0, ..Default::default() },
         bore_budget: 0,
         trail_timer: 0.0,
+        flight: None,
         splashed: false,
         follow: None,
     }];

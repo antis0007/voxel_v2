@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Worker count for one horizon job: the available cores, at most `cap`, or one
 /// when `VOXEL_HORIZON_SERIAL=1`.
-pub(super) fn workers(cap: usize) -> usize {
+pub(in crate::render) fn workers(cap: usize) -> usize {
     if std::env::var("VOXEL_HORIZON_SERIAL").as_deref() == Ok("1") {
         return 1;
     }
@@ -20,7 +20,7 @@ pub(super) fn workers(cap: usize) -> usize {
 }
 
 /// Reads a worker cap override such as `VOXEL_HORIZON_WORKERS`, for timing sweeps.
-pub(super) fn cap_from_env(name: &str, default: usize) -> usize {
+pub(in crate::render) fn cap_from_env(name: &str, default: usize) -> usize {
     std::env::var(name)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -34,7 +34,7 @@ pub(super) fn cap_from_env(name: &str, default: usize) -> usize {
 /// Workers claim `block` consecutive items at a time. Keep `items` spatially
 /// sorted so each block reuses the same erosion tiles. Returns `None` when
 /// `cancel` is set, a job returns `None`, or a worker panics.
-pub(super) fn map_blocks<T, R, F>(
+pub(in crate::render) fn map_blocks<T, R, F>(
     items: &[T],
     block: usize,
     workers: usize,

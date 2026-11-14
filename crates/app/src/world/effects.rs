@@ -68,8 +68,10 @@ fn admit_cells(world: &World, cells: &[IVec3]) -> Result<(), Failure> {
     let mut count = 0;
     for &p in cells {
         if world.ca_view.is_some()
-            || p.y < cfg.min_world_y()
-            || p.y >= cfg.max_world_y()
+            || super::mill::owns_water(world, p)
+            || super::orbital::cargo::security::protected(world, p)
+            || ((p.y < cfg.min_world_y() || p.y >= cfg.max_world_y())
+                && !super::orbital::habitat::allows_cell(world, p))
             || world
                 .factory
                 .nodes
@@ -112,7 +114,10 @@ pub fn replace(
     if old == replacement {
         return Err(Failure::NoChange);
     }
-    if matches!(old, BlockId::Bedrock | BlockId::TombStone) {
+    if old == BlockId::Bedrock || old.is_seal() {
+        return Err(Failure::Rejected);
+    }
+    if replacement.chest_tier().is_some() && !world.block_data.can_store_chest(p) {
         return Err(Failure::Rejected);
     }
     world.set(p, replacement);
@@ -155,6 +160,8 @@ pub fn place(
     };
     let commit = replace(world, p, expected, replacement)?;
     commit.publish(world, blocks, chunks);
+    world.stats.add(super::stats::Stat::Placed, 1);
+    world.goals.placed(replacement);
     if let Some((slot, item)) = supply {
         let consumed = world.inventory.consume_from_hotbar(slot, item);
         debug_assert!(consumed);
@@ -164,21 +171,40 @@ pub fn place(
 }
 
 mod water;
-pub use water::{WaterDirection, exchange_water};
+pub use water::{WaterDirection, exchange_water, exchange_water_ul, transfer_water};
 
 /// Bounded structural edit. Only empty space and fitting states are admitted;
 /// all residency and environmental capacity is checked before any cell changes.
 pub fn fitting_batch(world: &mut World, edits: &[(IVec3,BlockId)],
     blocks: &mut HashSet<IVec3>, chunks: &mut HashSet<IVec3>) -> Result<(),Failure> {
+    material_batch(world, edits, blocks, chunks, true)
+}
+
+/// Smeltery conversions share structural admission without discarding water.
+pub fn dry_material_batch(world: &mut World, edits: &[(IVec3,BlockId)],
+    blocks: &mut HashSet<IVec3>, chunks: &mut HashSet<IVec3>) -> Result<(),Failure> {
+    material_batch(world, edits, blocks, chunks, false)
+}
+
+fn material_batch(world: &mut World, edits: &[(IVec3,BlockId)],
+    blocks: &mut HashSet<IVec3>, chunks: &mut HashSet<IVec3>, fittings_only: bool) -> Result<(),Failure> {
     if edits.is_empty() || edits.len()>1024 { return Err(Failure::Rejected); }
     let mut affected=HashSet::new();
     let mut owners=HashSet::new();
     for &(p,b) in edits {
         admit(world,p)?;
         let old=world.get(p);
-        if (old!=BlockId::Air && engine_content::fittings::state(old).is_none())
-            || (b!=BlockId::Air && engine_content::fittings::state(b).is_none())
-            || world.water_microlitres(p)>0
+        let allowed = if fittings_only {
+            (old==BlockId::Air || engine_content::fittings::state(old).is_some())
+                && (b==BlockId::Air || engine_content::fittings::state(b).is_some())
+        } else {
+            !matches!(old, BlockId::Bedrock | BlockId::TombStone | BlockId::Water | BlockId::Ice | BlockId::Steam) && !old.is_seal()
+                && !matches!(b, BlockId::Bedrock | BlockId::TombStone | BlockId::Water | BlockId::Ice | BlockId::Steam) && !b.is_seal()
+                && engine_content::fittings::state(old).is_none()
+                && engine_content::fittings::state(b).is_none()
+                && !engine_content::environment::definition().is_some_and(|d| d.soil(old).is_some() || d.soil(b).is_some())
+        };
+        if !allowed || world.water_microlitres(p)>0
             || world.environment.sediment_at(p)>0
             || world.environment.patches.get(&environment::key(p)).is_some_and(|p|p.soil.water>0) { return Err(Failure::Rejected); }
         for d in [IVec3::ZERO,IVec3::X,IVec3::NEG_X,IVec3::Y,IVec3::NEG_Y,IVec3::Z,IVec3::NEG_Z] {

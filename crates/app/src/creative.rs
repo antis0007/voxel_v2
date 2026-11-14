@@ -8,6 +8,7 @@ use crate::world::{World, WorldSampleConfig, player_aabb};
 use std::cell::RefCell;
 
 pub const HOTBAR_SLOTS: usize = 9;
+pub mod catalogue;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolKind {
@@ -113,6 +114,10 @@ pub struct CreativeState {
     pub show_wand_atelier: bool,
     pub show_world_map: bool,
     pub show_blueprints: bool,
+    pub show_records: bool,
+    pub show_system_map: bool,
+    /// Whole-planet globe map (the map hub's Planet tab).
+    pub show_planet_map: bool,
     /// Sign, lectern or chest whose page is open.
     pub block_page: Option<IVec3>,
     /// Villager whose trade page is open.
@@ -154,6 +159,9 @@ impl Default for CreativeState {
             show_wand_atelier: false,
             show_world_map: false,
             show_blueprints: false,
+            show_records: false,
+            show_system_map: false,
+            show_planet_map: false,
             block_page: None,
             trade_page: None,
             tool: ToolKind::Hand,
@@ -179,6 +187,7 @@ mod mode_gate;
 mod preview;
 #[derive(Clone, Debug)]
 struct EditStroke {
+    creative_only: bool,
     cfg: WorldSampleConfig,
     mode: BrushMode,
     block: BlockId,
@@ -187,6 +196,10 @@ struct EditStroke {
     /// Spell craters skip the mining/harvest pipeline; the player explosive
     /// wand keeps its recoverable rubble path.
     spell_blast: bool,
+    blast_radius_m: f32,
+    blast_origin: Vec3,
+    rubble_left: u8,
+    hull_energy: f32,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreviewKey {
@@ -272,24 +285,30 @@ impl CreativeState {
         cells: Vec<IVec3>,
         preview: Option<PreviewResult>,
     ) {
-        if self.pending_cells() > 0 {
+        if self.locked || !world.rules.mode.creative_tools() || self.pending_cells() > 0 {
             return;
         }
         self.queue_edit(world, BrushMode::Erase, BlockId::Air, cells);
         if let Some(e) = &mut self.pending {
+            e.creative_only = true;
             e.explosive = true;
         }
         self.blast_preview = preview.map(|p| (p, 0.45));
     }
 
-    pub fn queue_spell_blast(&mut self, world: &World, cells: Vec<IVec3>) {
-        if self.pending_cells() > 0 {
+    pub fn queue_spell_blast(&mut self, world: &World, cells: Vec<IVec3>, point: Vec3, radius_m: f32) {
+        if self.pending_cells() > 0 || !point.is_finite() || !radius_m.is_finite() || radius_m <= 0.0 {
             return;
         }
-        self.queue_edit(world, BrushMode::Erase, BlockId::Air, cells);
+        self.enqueue_edit(world, BrushMode::Erase, BlockId::Air, cells);
         if let Some(e) = &mut self.pending {
+            e.creative_only = false;
             e.explosive = true;
             e.spell_blast = true;
+            e.blast_radius_m = radius_m;
+            e.blast_origin = point;
+            e.rubble_left = 8;
+            e.hull_energy = radius_m.powi(3) * 20.0;
         }
         self.blast_preview = None;
     }
@@ -300,14 +319,25 @@ impl CreativeState {
         block: BlockId,
         cells: Vec<IVec3>,
     ) {
+        if self.tool != ToolKind::Hand && (self.locked || !world.rules.mode.creative_tools()) {
+            return;
+        }
+        self.enqueue_edit(world, mode, block, cells);
+    }
+    fn enqueue_edit(&mut self, world: &World, mode: BrushMode, block: BlockId, cells: Vec<IVec3>) {
         if self.pending_cells() == 0 {
             self.pending = Some(EditStroke {
+                creative_only: self.tool != ToolKind::Hand,
                 cfg: world.sample_config(),
                 mode,
                 block,
                 cells: cells.into(),
                 explosive: false,
                 spell_blast: false,
+                blast_radius_m: 0.0,
+                blast_origin: Vec3::ZERO,
+                rubble_left: 0,
+                hull_energy: 0.0,
             });
         }
     }
@@ -316,6 +346,43 @@ impl CreativeState {
             self.pending = None;
         }
         self.pending.as_ref()?.cells.front().copied()
+    }
+    pub fn spell_blast_cell(&mut self, world: &mut World, cell: IVec3,
+        blocks: &mut std::collections::HashSet<IVec3>,
+        chunks: &mut std::collections::HashSet<IVec3>) -> bool {
+        use crate::world::{orbital::habitat, effects};
+        if habitat::ordinary_spell_allowed(world, cell) {
+            if let Some(stroke) = self.pending.as_mut() {
+                let point = (cell.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters();
+                let delta = point - stroke.blast_origin;
+                let r = stroke.blast_radius_m;
+                if stroke.rubble_left > 0 && delta.length_squared() >= (r * 0.55).powi(2)
+                    && crate::world::expedition::eject_terrain(world, cell,
+                        delta.normalize_or_zero() + Vec3::Y * 0.45, (3.0 + r).min(7.0))
+                {
+                    stroke.rubble_left -= 1;
+                    return true;
+                }
+                let before = world.sandbox.bodies.len();
+                let changed = crate::world::expedition::spell_blast(world, cell, blocks, chunks);
+                // A trunk captured by this edit did not exist when the projectile hit.
+                let scale = world.voxel_scale.meters();
+                for body in world.sandbox.bodies.iter_mut().skip(before).filter(|b| b.felled_tree) {
+                    body.velocity += (delta.normalize_or_zero() + Vec3::Y * 0.35).normalize_or_zero()
+                        * ((2.0 + r).min(6.0) / scale);
+                }
+                return changed;
+            }
+            return crate::world::expedition::spell_blast(world, cell, blocks, chunks);
+        }
+        let Some(stroke) = self.pending.as_mut() else { return false };
+        let cost = habitat::config().hull_cost_per_m3 * world.voxel_scale.meters().powi(3);
+        if stroke.blast_radius_m < habitat::config().minimum_breach_radius_m
+            || !stroke.hull_energy.is_finite() || stroke.hull_energy < cost { return false; }
+        let Ok(commit) = effects::replace(world, cell, world.get(cell), BlockId::Air) else { return false };
+        commit.publish(world, blocks, chunks);
+        stroke.hull_energy -= cost;
+        true
     }
     pub fn next_edit(&mut self, cfg: WorldSampleConfig) -> Option<(BrushMode, IVec3, BlockId)> {
         let edit = self.pending.as_mut()?;
@@ -339,6 +406,9 @@ impl CreativeState {
         self.show_wand_atelier = false;
         self.show_world_map = false;
         self.show_blueprints = false;
+        self.show_records = false;
+        self.show_system_map = false;
+        self.show_planet_map = false;
         self.block_page = None;
         self.trade_page = None;
     }
@@ -408,6 +478,9 @@ impl CreativeState {
             || self.show_wand_atelier
             || self.show_world_map
             || self.show_blueprints
+            || self.show_records
+            || self.show_system_map
+            || self.show_planet_map
             || self.block_page.is_some()
             || self.trade_page.is_some()
     }
@@ -536,7 +609,7 @@ impl From<Option<(IVec3, IVec3)>> for RaycastTarget {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PreviewResult {
     pub blocks: Vec<IVec3>,
     pub segments: Vec<[Vec3; 2]>,
@@ -842,7 +915,9 @@ pub fn edit_blocks(
     break_pressed: bool,
     preview_pressed: bool,
 ) -> Option<(BrushMode, Vec<IVec3>)> {
-    if creative.pending_cells() > 0 {
+    if creative.pending_cells() > 0
+        || (creative.tool != ToolKind::Hand
+            && (creative.locked || !world.rules.mode.creative_tools())) {
         return None;
     }
     let mode = match creative.tool {
@@ -871,9 +946,8 @@ pub fn edit_blocks(
             let b = world.get(cell);
             b.is_empty() || b.is_liquid()
         });
-        let (player_min, player_max) =
-            player_aabb(player.pos, world.voxel_scale, player.scale, player.crouch_t);
-        targets.retain(|cell| !block_overlaps_aabb(*cell, player_min, player_max));
+        // Body overlap is checked per block in `placement_traps_body` at commit,
+        // where the block kind is known (torches may sit inside the body).
     }
     Some((mode, targets))
 }
@@ -985,6 +1059,41 @@ fn preview_wand_blocks(
     out
 }
 
+/// True when `block` placed at `cell` would trap the body in `min..max`.
+/// Torches and ladder-like thin blocks have no collision, so they never trap.
+pub(crate) fn placement_traps_body(block: BlockId, cell: IVec3, min: Vec3, max: Vec3) -> bool {
+    !(block.is_torch() || engine_content::thin::is_climbable(block))
+        && block_overlaps_aabb(cell, min, max)
+}
+
+/// Lift that seats the body on top of `cell` when the block only fills its feet.
+///
+/// Pillaring places a block under a jumping body; requiring the feet to clear
+/// the whole cell first left a window of a few frames at the jump apex. A lift
+/// of at most one cell into free space is a step up, not a trap.
+pub(crate) fn pillar_lift(world: &World, player: &Player, cell: IVec3) -> Option<f32> {
+    if player.up_dir().y < 0.999 {
+        return None;
+    }
+    let (min, max) = player.bounds(world.voxel_scale);
+    let lift = (cell.y + 1) as f32 - min.y;
+    let column = min.x < (cell.x + 1) as f32 && max.x > cell.x as f32
+        && min.z < (cell.z + 1) as f32 && max.z > cell.z as f32;
+    if !column || lift <= 0.0 || lift > 1.0 {
+        return None;
+    }
+    let (lo, hi) = player_aabb(player.pos + Vec3::Y * lift, world.voxel_scale, player.scale, player.crouch_t);
+    (!crate::world::collides_world(world, lo, hi)).then_some(lift)
+}
+
+/// Moves the body up by `lift` cells without a camera jump.
+pub(crate) fn apply_pillar_lift(player: &mut Player, lift: f32, voxel_meters: f32) {
+    player.pos.y += lift;
+    player.precise_pos.y += lift as f64;
+    player.vel.y = player.vel.y.max(0.0);
+    player.step_camera_offset -= lift * voxel_meters;
+}
+
 pub(crate) fn block_overlaps_aabb(block: IVec3, min: Vec3, max: Vec3) -> bool {
     let block_min = block.as_vec3();
     let block_max = block_min + Vec3::ONE;
@@ -999,6 +1108,24 @@ pub(crate) fn block_overlaps_aabb(block: IVec3, min: Vec3, max: Vec3) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pillar_place_lifts_body_only_with_headroom() {
+        let mut world = World::new(
+            crate::world::WorldType::Superflat,
+            crate::fluid::VoxelScalePreset::OneMeter,
+        );
+        let mut player = Player::new();
+        player.pos = Vec3::new(0.5, 300.4, 0.5);
+        player.precise_pos = player.pos.as_dvec3();
+        let feet = IVec3::new(0, 300, 0);
+        let lift = pillar_lift(&world, &player, feet).expect("free headroom lifts");
+        assert!((lift - 0.6).abs() < 1e-4);
+        assert_eq!(pillar_lift(&world, &player, IVec3::new(0, 301, 0)), None);
+        assert_eq!(pillar_lift(&world, &player, IVec3::new(1, 300, 0)), None);
+        world.set(IVec3::new(0, 302, 0), BlockId::Stone);
+        assert_eq!(pillar_lift(&world, &player, feet), None);
+    }
 
     #[test]
     fn hand_targets_single_place_block() {
@@ -1020,6 +1147,51 @@ mod tests {
             false,
         );
         assert_eq!(preview.blocks, vec![IVec3::new(4, 6, 6)]);
+    }
+
+    /// The click path end to end: preview target, queued stroke, drained
+    /// stroke, harvest. A stuck queue front used to refuse every later click.
+    #[test]
+    fn queued_break_reaches_the_world_and_frees_the_queue() {
+        let mut world = World::with_seed(
+            crate::world::WorldType::Hills,
+            crate::fluid::VoxelScalePreset::OneMeter,
+            7,
+        );
+        let cfg = world.sample_config();
+        let spawn = crate::world::suggested_spawn(&cfg).expect("hills spawn");
+        let column = IVec3::new(
+            (spawn.x + 20.0).floor() as i32,
+            (spawn.y - 1.0).floor() as i32,
+            (spawn.z + 20.0).floor() as i32,
+        );
+        let cell = (0..=8)
+            .map(|dy| column - IVec3::Y * dy)
+            .find(|&p| world.get(p) != BlockId::Air)
+            .expect("ground under the probe column");
+        assert!(!world.get(cell).is_liquid());
+
+        let mut creative = CreativeState::default();
+        let player = Player::new();
+        let ray = RaycastTarget { hit: Some(cell), place: Some(cell + IVec3::Y) };
+        let (mode, targets) = edit_blocks(&creative, &world, &player, ray, false, true, false)
+            .expect("hand erase targets");
+        assert_eq!(mode, BrushMode::Erase);
+        assert!(targets.contains(&cell), "preview misses the aimed block: {targets:?}");
+
+        // What `WorldSimulation::prepare_tool_edit` does before the drain: the
+        // edited chunk must be resident or `harvest` refuses the write.
+        assert!(world.admit_edit_chunk(crate::world::chunk_coord_from_world_block(cell)));
+
+        creative.queue_edit(&world, mode, BlockId::Air, targets);
+        let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+        while let Some((mode, p, _)) = creative.next_edit(cfg) {
+            if mode == BrushMode::Erase {
+                crate::world::expedition::harvest(&mut world, p, &mut blocks, &mut chunks);
+            }
+        }
+        assert_eq!(world.get(cell), BlockId::Air);
+        assert_eq!(creative.pending_cells(), 0, "the stroke queue must drain");
     }
 
     #[test]

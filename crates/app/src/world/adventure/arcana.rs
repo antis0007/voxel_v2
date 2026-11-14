@@ -65,9 +65,12 @@ pub(super) fn life_cap(spell: u32) -> f32 {
     }
 }
 
+/// Cone the fixed pellet pattern was authored for, in radians.
+pub(super) const SCATTER_BASE_SPREAD: f32 = 0.2;
+
 /// Directions the cast leaves in: a five-pellet cone for Scatter shot, the
-/// aim itself for everything else.
-pub(super) fn scatter_dirs(spell: u32, dir: Vec3) -> Vec<Vec3> {
+/// aim itself for everything else. The cone widens or narrows with `spread_rad`.
+pub(super) fn scatter_dirs(spell: u32, dir: Vec3, spread_rad: f32) -> Vec<Vec3> {
     if spell != SCATTER_SHOT {
         return vec![dir];
     }
@@ -77,9 +80,10 @@ pub(super) fn scatter_dirs(spell: u32, dir: Vec3) -> Vec<Vec3> {
     // A fixed pattern, so the same cast always spreads the same way.
     const PATTERN: [(f32, f32); SCATTER_PELLETS] =
         [(0.0, 0.0), (0.09, 0.03), (-0.09, 0.03), (0.04, -0.08), (-0.05, 0.08)];
+    let scale = ((spread_rad * 0.5).tan() / (SCATTER_BASE_SPREAD * 0.5).tan()).clamp(0.25, 4.0);
     PATTERN
         .iter()
-        .map(|(x, y)| (dir + side * *x + up * *y).normalize_or_zero())
+        .map(|(x, y)| (dir + (side * *x + up * *y) * scale).normalize_or_zero())
         .collect()
 }
 
@@ -187,7 +191,8 @@ impl Adventure {
                         e.flash = 0.12;
                     }
                 }
-                self.spawn_voxel_burst(at, spell_color(ACID_GLOB), 14, 2.2, 0.04);
+                let rebound = -shot.velocity.normalize_or_zero() * 1.4;
+                self.splash_droplets(at, 0.9, super::spells::Spray::Acid, rebound);
             }
             LODESTONE => self.implode(at, 4.0, 4.0),
             _ => {}

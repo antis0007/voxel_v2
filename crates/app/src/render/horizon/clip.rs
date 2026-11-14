@@ -31,6 +31,7 @@ impl Horizon {
     pub fn test_new() -> Horizon {
         let mut horizon = Horizon::default();
         horizon.config = Some(crate::world::WorldSampleConfig {
+            planet: None,
             generator_version: 18,
             seed: 74,
             world_type: crate::world::WorldType::Hills,

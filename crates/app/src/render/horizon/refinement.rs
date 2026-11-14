@@ -1,5 +1,20 @@
 //! Bounded source-error scouting; original ring edges remain authoritative.
 use super::*;
+use std::collections::HashSet;
+
+/// Projected error in pixels that adds a refinement midpoint.
+pub(super) const REFINE_PIXELS: f32 = 0.35;
+/// Lower bar that keeps a midpoint the previous base meshed. Without the gap,
+/// every eye-height or projection rebuild flips cells near the bar and far
+/// silhouettes pop while the camera only turns or climbs.
+pub(super) const RETIRE_PIXELS: f32 = 0.2;
+/// Budget preference for held midpoints, so a full budget drops new ones first.
+const HELD_PRIORITY: f32 = 1.5;
+
+/// Error bar for one midpoint, given whether the previous base meshed it.
+pub(super) fn bar(held: bool) -> f32 {
+    if held { RETIRE_PIXELS } else { REFINE_PIXELS }
+}
 
 struct Cell {
     index: usize,
@@ -10,6 +25,7 @@ struct Cell {
     high: f32,
     materials: [crate::world::BlockId; 4],
     priority: f32,
+    held: bool,
 }
 
 fn strictly_inside(first: f32, last: f32, middle: i32) -> bool {
@@ -19,8 +35,8 @@ fn strictly_inside(first: f32, last: f32, middle: i32) -> bool {
 
 pub(super) fn sample(
     cfg: WorldSampleConfig, center: (i32, i32), focus: Vec3, pixels: f32, reach: f32,
-    cancel: &AtomicBool, samples: &mut Samples, old: &mut Samples,
-) -> Option<HashMap<usize, (i32, i32)>> {
+    cancel: &AtomicBool, samples: &mut Samples, old: &mut Samples, held: &HashSet<(i32, i32)>,
+) -> Option<HashMap<usize, ((i32, i32), bool)>> {
     let mut chosen = HashMap::new();
     if !canonical_source() || cfg.world_type == crate::world::WorldType::Superflat {
         return Some(chosen);
@@ -59,7 +75,8 @@ pub(super) fn sample(
                     || !strictly_inside(za[z].0,za[z+1].0,key.1) {continue;}
                 let parent=if diagonal_a_to_d(a.0,b.0,c.0,d.0) {(a.0+d.0)*0.5}else{(b.0+c.0)*0.5};
                 cells.push(Cell{index:level*SIDE*SIDE+z*SIDE+x,key,detail:sample_detail(level),step,
-                    parent,high:a.0.max(b.0).max(c.0).max(d.0),materials:[a.1,b.1,c.1,d.1],priority:0.0});
+                    parent,high:a.0.max(b.0).max(c.0).max(d.0),materials:[a.1,b.1,c.1,d.1],priority:0.0,
+                    held:held.contains(&key)});
                 // ALWAYS scout with the same fixed point policy, regardless of
                 // retained exact samples. Cache warmth cannot change selection.
                 work.push((key,1,8.0));
@@ -83,8 +100,9 @@ pub(super) fn sample(
         cell.priority=error.max(distribution)+peak*2.0;
     }
     drop(scouts);
-    cells.retain(|cell|cell.priority.is_finite() && cell.priority>=0.35);
-    cells.sort_unstable_by(|a,b|b.priority.total_cmp(&a.priority).then(a.index.cmp(&b.index)));
+    cells.retain(|cell|cell.priority.is_finite() && cell.priority>=bar(cell.held));
+    let rank=|cell:&Cell|if cell.held {cell.priority*HELD_PRIORITY} else {cell.priority};
+    cells.sort_unstable_by(|a,b|rank(b).total_cmp(&rank(a)).then(a.index.cmp(&b.index)));
     let mut work=Vec::new();
     // Exact (policy 0) samples cost milliseconds each and keep the original
     // budget. Far rings use the cheap fixed evaluator (microseconds), so they
@@ -103,11 +121,12 @@ pub(super) fn sample(
         } else if let Some(value)=old.remove(&cell.key).filter(|v|v.2==cell.detail) {
             samples.insert(cell.key,value);
         } else {work.push((cell.key,cell.detail,cell.step));}
-        chosen.insert(cell.index,cell.key);
+        chosen.insert(cell.index,(cell.key,cell.held));
     }
     drop(cells);
     evaluate_samples(cfg,cancel,work,samples)?;
-    println!("[horizon-refinement] scouted={scout_count} selected={} limit={MAX_REFINEMENT_SAMPLES} far_limit={MAX_FAR_REFINEMENT_SAMPLES} focus_m={focus:?} focal_pixels={pixels:.1}",chosen.len());
+    let kept=chosen.values().filter(|(_,held)|*held).count();
+    println!("[horizon-refinement] scouted={scout_count} selected={} held_in={} kept={kept} limit={MAX_REFINEMENT_SAMPLES} far_limit={MAX_FAR_REFINEMENT_SAMPLES} focus_m={focus:?} focal_pixels={pixels:.1}",chosen.len(),held.len());
     Some(chosen)
 }
 
@@ -120,5 +139,14 @@ mod tests {
         assert_eq!(33_554_434i32 as f32,33_554_432.0);
         assert!(!strictly_inside(33_554_432.0,33_554_436.0,33_554_434));
         assert!(cell_in_domain(HALF,HALF,ring_step(0),domain_reach(FAR_PLANE as u32)),"coarse coverage is independent of refinement eligibility");
+    }
+
+    #[test]
+    fn a_held_midpoint_survives_a_small_error_drop() {
+        // A midpoint at 0.3 px is not added but stays if the last base meshed it.
+        let error = 0.3;
+        assert!(error < bar(false));
+        assert!(error >= bar(true));
+        assert!(RETIRE_PIXELS > 0.0 && RETIRE_PIXELS < REFINE_PIXELS);
     }
 }

@@ -12,6 +12,18 @@ pub struct Food {
     pub saturation: f32,
     #[serde(default)]
     pub effects: Vec<crate::world::progression::effects::Grant>,
+    /// Explicit item-sheet slot; absent on legacy food definitions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<u16>,
+}
+
+impl Food {
+    pub fn icon_id(&self) -> usize {
+        self.icon.map_or_else(
+            || if (self.kind as u8) < 10 { 10 + self.kind as usize } else { 50 + self.kind as usize },
+            usize::from,
+        )
+    }
 }
 
 const FOODS_RON: &str = include_str!("../../../../../assets/foods.ron");
@@ -31,6 +43,22 @@ pub fn get(kind: FoodKind) -> Option<&'static Food> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_food_icon_preserves_legacy_slots() {
+        for kind in FoodKind::ALL {
+            let mut row = get(kind).expect("food row").clone();
+            row.icon = None;
+            let id = kind as usize;
+            assert_eq!(row.icon_id(), if id < 10 { 10 + id } else { 50 + id });
+            row.icon = Some(78);
+            assert_eq!(row.icon_id(), 78);
+        }
+        let source = r#"(kind: Bread, name: "Test", hunger: 1.0, health: 0.0, icon: Some(78))"#;
+        let row: Food = ron::from_str(source).expect("explicit food icon");
+        assert_eq!(row.icon_id(), 78);
+        assert_eq!(ron::from_str::<Food>(&ron::to_string(&row).unwrap()).unwrap(), row);
+    }
 
     #[test]
     fn foods_ron_round_trips() {
@@ -57,6 +85,26 @@ mod tests {
         let recipe = super::super::hand_recipes().iter().find(|r| r.output.item == cooked).expect("cooking recipe");
         assert!(recipe.ingredients.contains(&(super::super::Item::Food(FoodKind::RawMutton), 1)), "{recipe:?}");
         assert!(recipe.ingredients.contains(&(super::super::Item::Resource(3), 1)), "coal: {recipe:?}");
+    }
+
+    #[test]
+    fn crop_foods_are_crafted_from_crops_and_raise_hunger_above_their_parts() {
+        use super::super::Item;
+        use crate::world::BlockId as B;
+        let recipe = |kind| super::super::all_recipes().iter().find(|r| r.output.item == Item::Food(kind)).expect("recipe");
+        assert!(recipe(FoodKind::Bread).ingredients.contains(&(Item::Block(B::WheatCrop), 3)));
+        assert!(recipe(FoodKind::RootStew).ingredients.contains(&(Item::Block(B::CarrotCrop), 2)));
+        assert!(recipe(FoodKind::RootStew).ingredients.contains(&(Item::Block(B::BeetCrop), 2)));
+        let cake = recipe(FoodKind::HarvestCake);
+        for crop in [B::WheatCrop, B::CarrotCrop, B::BeetCrop] {
+            assert!(cake.ingredients.iter().any(|(i, _)| *i == Item::Block(crop)), "{crop:?}");
+        }
+        let fish = recipe(FoodKind::CookedFish);
+        assert!(fish.ingredients.contains(&(Item::Food(FoodKind::RawFish), 1)));
+        let hunger = |k| get(k).map_or(0.0, |f| f.hunger);
+        assert!(hunger(FoodKind::RawFish) < hunger(FoodKind::CookedFish), "cooking adds hunger");
+        assert!(hunger(FoodKind::Bread) > hunger(FoodKind::CookedMutton));
+        assert!(!FoodKind::Bread.is_potion());
     }
 
     #[test]

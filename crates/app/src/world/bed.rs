@@ -20,23 +20,26 @@ pub fn is_night(time_of_day: f32) -> bool {
     !(DAWN..DUSK).contains(&t)
 }
 
-/// Sleep until dawn at `bed_feet`. Returns whether the calendar day advanced.
+/// Sleep until local dawn at `bed_feet`. Returns whether the calendar day advanced.
+/// `local` is the time of day at the bed; on planets it differs from the calendar.
 /// The respawn point changes only when sleep succeeds.
 pub fn sleep(
     cycle: &mut DayNightCycle,
     respawn: &mut Option<Vec3>,
     bed_feet: Vec3,
+    local: f32,
 ) -> Result<bool, SleepError> {
-    let t = cycle.time_of_day();
-    if !is_night(t) {
+    if !is_night(local) {
         return Err(SleepError::Daytime);
     }
-    let next_day = t >= DUSK;
+    // Skip forward by the local wait so the sleeper wakes at their own dawn.
+    let woke = cycle.time_of_day() + (DAWN - local).rem_euclid(1.0);
+    let next_day = woke >= 1.0;
     if next_day {
         // Field access: child module of `world`, and no getter exists at HEAD.
         cycle.set_day_index(cycle.day_index + 1);
     }
-    cycle.set_time_of_day(DAWN);
+    cycle.set_time_of_day(woke.rem_euclid(1.0));
     *respawn = Some(bed_feet);
     Ok(next_day)
 }
@@ -61,7 +64,8 @@ mod tests {
         let mut cycle = DayNightCycle::new(0.5, 480.0);
         let mut respawn = Some(Vec3::new(1.0, 2.0, 3.0));
         let before = respawn;
-        assert_eq!(sleep(&mut cycle, &mut respawn, Vec3::ZERO), Err(SleepError::Daytime));
+        let now = cycle.time_of_day();
+        assert_eq!(sleep(&mut cycle, &mut respawn, Vec3::ZERO, now), Err(SleepError::Daytime));
         assert_eq!(respawn, before);
         assert!((cycle.time_of_day() - 0.5).abs() < 1e-6);
         assert_eq!(cycle.day_index,0);
@@ -73,7 +77,8 @@ mod tests {
         cycle.set_day_index(4);
         let mut respawn = None;
         let bed = Vec3::new(10.0, 80.0, -6.0);
-        assert_eq!(sleep(&mut cycle, &mut respawn, bed), Ok(true));
+        let now = cycle.time_of_day();
+        assert_eq!(sleep(&mut cycle, &mut respawn, bed, now), Ok(true));
         assert_eq!(cycle.day_index,5);
         assert!((cycle.time_of_day() - DAWN).abs() < 1e-6);
         assert_eq!(respawn, Some(bed));
@@ -84,8 +89,30 @@ mod tests {
         let mut cycle = DayNightCycle::new(0.1, 480.0);
         cycle.set_day_index(4);
         let mut respawn = None;
-        assert_eq!(sleep(&mut cycle, &mut respawn, Vec3::ZERO), Ok(false));
+        let now = cycle.time_of_day();
+        assert_eq!(sleep(&mut cycle, &mut respawn, Vec3::ZERO, now), Ok(false));
         assert_eq!(cycle.day_index,4);
         assert!((cycle.time_of_day() - DAWN).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod local_tests {
+    use super::*;
+
+    #[test]
+    fn a_sleeper_wakes_at_their_own_dawn_off_the_calendar_meridian() {
+        // Calendar at noon while the bed's local time is two hours past dusk.
+        let mut cycle = DayNightCycle::new(0.5, 480.0);
+        cycle.set_day_index(2);
+        let mut respawn = None;
+        let local = DUSK + 0.08;
+        assert_eq!(sleep(&mut cycle, &mut respawn, Vec3::ZERO, local), Ok(true));
+        let waited = 1.0 - local + DAWN;
+        assert!((cycle.time_of_day() - (0.5 + waited - 1.0)).abs() < 1e-5);
+        assert_eq!(cycle.day_index, 3);
+        // Local noon refuses even when the calendar says midnight.
+        let mut midnight = DayNightCycle::new(0.0, 480.0);
+        assert_eq!(sleep(&mut midnight, &mut respawn, Vec3::ZERO, 0.5), Err(SleepError::Daytime));
     }
 }

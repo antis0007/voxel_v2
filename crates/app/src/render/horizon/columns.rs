@@ -746,6 +746,7 @@ mod tests {
     fn built_band_is_finite_and_its_seams_close() {
         use crate::{fluid::VoxelScalePreset, world::WorldType};
         let cfg = WorldSampleConfig {
+            planet: None,
             seed: 2_738_958_700,
             generator_version: 25,
             world_type: WorldType::Hills,

@@ -13,6 +13,7 @@ pub const SPEED: f32 = 4.0;
 pub const MAX_PACKETS: usize = 768;
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Packet {
     pub item: usize,
     pub amount: u32,
@@ -60,17 +61,25 @@ pub(super) fn find_path(
     via: Option<IVec3>,
 ) -> Option<Vec<IVec3>> {
     let pipes = &network.pipes;
-    let touches = |cell: IVec3, machine: IVec3| {
-        DIRS.iter().any(|d| cell + *d * size == machine) && !network.closed.contains(&(cell, machine))
+    // `leaving` is the machine face the packet exits. Entry uses the other set,
+    // so an In face can accept and an Out face can supply on the same machine.
+    let open = |cell: IVec3, machine: IVec3, leaving: bool| {
+        let linked = DIRS.iter().any(|d| cell + *d * size == machine)
+            && !network.closed.contains(&(cell, machine));
+        if !linked {
+            return false;
+        }
+        let blocked = if leaving { &network.no_extract } else { &network.no_insert };
+        !blocked.contains(&(cell, machine))
     };
     let starts: Vec<IVec3> = match via {
-        Some(v) if pipes.contains(&v) && touches(v, from) => vec![v],
+        Some(v) if pipes.contains(&v) && open(v, from, true) => vec![v],
         Some(_) => return None,
         None => {
             let mut s: Vec<_> = pipes
                 .iter()
                 .copied()
-                .filter(|c| touches(*c, from))
+                .filter(|c| open(*c, from, true))
                 .collect();
             s.sort_by_key(|p| (p.x, p.y, p.z));
             s
@@ -80,7 +89,7 @@ pub(super) fn find_path(
     let mut seen: HashSet<IVec3> = starts.iter().copied().collect();
     let mut queue: VecDeque<IVec3> = starts.into_iter().collect();
     while let Some(c) = queue.pop_front() {
-        if touches(c, to) {
+        if open(c, to, false) {
             let mut route = vec![c];
             let mut cur = c;
             while let Some(&p) = parent.get(&cur) {

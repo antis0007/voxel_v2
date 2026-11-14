@@ -179,7 +179,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {{
             .unwrap()
             .unwrap();
         {
-            let mapped = readback.slice(..).get_mapped_range();
+            let mapped = readback.slice(..).get_mapped_range().expect("GPU readback range");
             let actual: &[[f32; 4]] = bytemuck::cast_slice(&mapped);
             for (i, &(block, parent, ao)) in cases.iter().enumerate() {
                 let s = block.surface();

@@ -1,5 +1,7 @@
 use super::UiAction;
+use crate::world::{BlockId, factory::Kind, inventory::Item};
 use crate::world::orbital::{Channel, View, receiver::Action};
+use crate::world::orbital::cargo::SALVAGE_MANIFEST;
 use crate::world::orbital::radio::{self, Action as RadioAction};
 
 pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
@@ -7,6 +9,11 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
         .id_salt("orbital_service_ledger")
         .max_height((ui.ctx().content_rect().height() - 100.0).max(120.0))
         .show(ui, |ui| {
+            if view.navigation { super::nav_console::menu(ui, action); }
+            if view.receiver.can_board {
+                salvage_manifest(ui);
+            }
+            cargo_section(ui, view, action);
             radio_section(ui, view, action);
             pass_forecasts(ui,view);
             ui.separator();
@@ -15,6 +22,73 @@ pub(super) fn draw(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
             receiver_section(ui, view, action);
             ephemeris(ui, view);
         });
+}
+
+pub(super) fn salvage_manifest(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Station Salvage Manifest").default_open(true).show(ui, |ui| {
+        ui.weak("Original Locker Contents");
+        for (item, count) in SALVAGE_MANIFEST {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("{} ×{count}", item.name()));
+                let example = match item {
+                    Item::Resource(15) => Some(Kind::MiningDrill.block()),
+                    Item::Resource(12) => Some(Kind::Fabricator.block()),
+                    Item::Resource(5) => Some(BlockId::ManaFlower),
+                    _ => None,
+                };
+                if let Some(block) = example {
+                    let build = Item::Block(block);
+                    if ui.link(format!("→ {}", build.name())).clicked() {
+                        super::recipe_book::request(ui.ctx(), build, false);
+                    }
+                } else {
+                    ui.weak("Melee Equipment");
+                }
+            });
+        }
+        ui.weak("Freight Loading · Defense Robots");
+    });
+}
+
+fn cargo_section(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
+    let v = &view.cargo;
+    if v.can_collect && ui.button("Collect Cargo").clicked() {
+        *action = UiAction::OrbitalReceiver(Action::CollectLoot);
+    }
+    if !v.at_station { return; }
+    ui.heading("Station Freight");
+    ui.label(v.status);
+    if v.seconds > 0 { ui.label(format!("{} s", v.seconds)); }
+    ui.label(format!("Security: {} / {}", v.guards, crate::world::orbital::cargo::MAX_GUARDS));
+    if v.paused_seconds > 0 { ui.label(format!("Constructors: Paused · {} s", v.paused_seconds)); }
+    let id = egui::Id::new("station_cargo_receiver");
+    let mut receiver = ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    if !v.receiver_available { receiver = false; }
+    egui::ComboBox::from_label("Destination")
+        .selected_text(if receiver { "Ground Receiver" } else { "Elevator Base" })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut receiver, false, "Elevator Base");
+            if v.receiver_available { ui.selectable_value(&mut receiver, true, "Ground Receiver"); }
+        });
+    ui.ctx().data_mut(|d| d.insert_temp(id, receiver));
+    ui.strong("Salvage Freight");
+    for stack in &v.items { ui.label(format!("{} × {}", stack.item.name(), stack.count)); }
+    if ui.add_enabled(v.can_dispatch, egui::Button::new("Ship Locker Salvage")).clicked() {
+        *action = UiAction::OrbitalReceiver(Action::DispatchCargo { receiver });
+    }
+    ui.strong("Mithril Cell Order");
+    ui.horizontal_wrapped(|ui| {
+        for (supply, enabled) in crate::world::orbital::cargo::Supply::ALL.into_iter().zip(v.can_order_cell) {
+            let cost = supply.cost();
+            if ui.add_enabled(enabled, egui::Button::new(format!("Trade {} ×{}", cost.item.name(), cost.count)))
+                .on_hover_text("Mithril Cell ×1 · Ground Pickup").clicked()
+            {
+                *action = UiAction::OrbitalReceiver(Action::OrderCell { supply, receiver });
+            }
+        }
+    });
+    ui.weak("Ground Pickup → Bronze or Resonant Battery Bank");
+    ui.separator();
 }
 
 /// Radio level, what it can do now, and the actions available right now.
@@ -114,12 +188,30 @@ fn receiver_section(ui: &mut egui::Ui, view: &View, action: &mut UiAction) {
             (receiver.can_collect, "Collect cargo", Action::Collect),
             (receiver.can_restore, "Restore console · 2 iron", Action::Restore),
             (receiver.can_recover, "Survey relay & order recovery", Action::RecoverRelay),
+            (receiver.can_board, "Board express lift", Action::Board),
         ] {
             if enabled && ui.button(label).clicked() {
                 *action = UiAction::OrbitalReceiver(request);
             }
         }
     });
+    if receiver.freight_unlocked {
+        ui.collapsing("Talon Freight",|ui| {
+            ui.label(receiver.freight_status);
+            ui.label(format!("Orbit {} iron · Ground {} iron",receiver.orbital_iron,receiver.delivered_iron));
+            ui.small(format!("Lift Capacity {:.0} kg · Strain {:.2}%",receiver.capacity_kg,receiver.strain*100.0));
+            ui.small(format!("Lifted {} kg · Lowered {} kg",receiver.lifted_kg,receiver.lowered_kg));
+            ui.horizontal_wrapped(|ui| {
+                for (enabled,label,request) in [
+                    (receiver.can_lift,format!("Lift Iron · {}",crate::world::orbital::dynamics::IRON_PER_CRATE),Action::LiftIron),
+                    (receiver.can_lower,format!("Lower Iron · {}",crate::world::orbital::dynamics::IRON_PER_CRATE),Action::LowerIron),
+                    (receiver.can_collect_iron,"Collect Iron".into(),Action::CollectIron),
+                ] {
+                    if ui.add_enabled(enabled,egui::Button::new(label)).clicked() {*action=UiAction::OrbitalReceiver(request);}
+                }
+            });
+        });
+    }
 }
 
 fn pass_forecasts(ui:&mut egui::Ui,view:&View) {

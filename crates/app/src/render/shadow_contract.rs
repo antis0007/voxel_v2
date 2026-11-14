@@ -9,9 +9,9 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
         label: Some("shadow ownership contract"),
         source: wgpu::ShaderSource::Wgsl(crate::shader_sources::SHADOW_SHADER.into()),
     });
-    let mut renderer = ShadowRenderer::new(&device, &shader);
-    let matrix = Mat4::orthographic_rh(-16.0, 16.0, -16.0, 16.0, 0.1, 40.0)
-        * Mat4::look_to_rh(Vec3::new(16.0, 20.0, 16.0), -Vec3::Y, Vec3::Z);
+    let mut renderer = ShadowRenderer::new(&device, &shader, None);
+    let matrix = glam::camera::rh::proj::directx::orthographic(-16.0, 16.0, -16.0, 16.0, 0.1, 40.0)
+        * glam::camera::rh::view::look_to_mat4(Vec3::new(16.0, 20.0, 16.0), -Vec3::Y, Vec3::Z);
     let mut vertices = [
         [0.0, 0.0, 0.0],
         [0.0, 0.0, 32.0],
@@ -121,6 +121,7 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
         let mut encoder = device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some(name),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -178,7 +179,7 @@ fn gpu_far_shadow_gpu_ownership_and_invalidation() {
             .recv_timeout(std::time::Duration::from_secs(1))
             .unwrap()
             .unwrap();
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback.slice(..).get_mapped_range().expect("GPU readback range");
         let center = 4 * 256 + 4 * 4;
         let depth = f32::from_ne_bytes(mapped[center..center + 4].try_into().unwrap());
         drop(mapped);
@@ -417,7 +418,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 .unwrap()
                 .unwrap();
             {
-                let mapped = readback.slice(..).get_mapped_range();
+                let mapped = readback.slice(..).get_mapped_range().expect("GPU readback range");
                 let actual: &[u32] = bytemuck::cast_slice(&mapped);
                 assert_eq!(
                     actual,

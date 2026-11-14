@@ -63,15 +63,28 @@ fn view_haze_gain() -> f32 {
     return 1.0 + params.sun_color_cloud_cover.w * 0.8;
 }
 
-fn ray_intersect_sphere(ro: vec3<f32>, rd: vec3<f32>, radius: f32) -> vec2<f32> {
-    let b = dot(ro, rd);
-    // Difference of squared planetary radii loses ground-height precision in f32.
-    let h = length(ro) - radius;
-    let c = h * (2.0 * radius + h);
+// Keep altitude separate from the planetary radius: adding it first rounds
+// camera motion to half-metre steps before the horizon intersection is solved.
+fn ray_intersect_sphere(altitude: f32, rd: vec3<f32>, shell_height: f32) -> vec2<f32> {
+    let b = (params.planet.x + altitude) * rd.y;
+    let c = (altitude - shell_height) * (2.0 * params.planet.x + altitude + shell_height);
     let d = b * b - c;
     if (d < 0.0) { return vec2<f32>(-1.0, -1.0); }
     let sq = sqrt(d);
-    return vec2<f32>(-b - sq, -b + sq);
+    // Compute the large root directly and the small one via their product.
+    // -b +/- sqrt(d) cancels for nearby ground and steep sky rays.
+    let q = -b - select(-sq, sq, b >= 0.0);
+    if abs(q) < 1e-6 { return vec2<f32>(-b); }
+    let other = c / q;
+    return vec2<f32>(min(q, other), max(q, other));
+}
+
+fn ray_altitude(altitude: f32, rd: vec3<f32>, t: f32) -> f32 {
+    let radius = params.planet.x;
+    let delta = altitude * (2.0 * radius + altitude)
+        + t * (2.0 * (radius + altitude) * rd.y + t);
+    // Rationalized length(p) - radius, without subtracting two 6,360 km values.
+    return max(delta / (sqrt(max(radius * radius + delta, 0.0)) + radius), 0.0);
 }
 
 fn integrate_sun_transmittance(altitude_m: f32, sun_dir_y: f32) -> vec3<f32> {
@@ -84,15 +97,14 @@ fn integrate_sun_transmittance(altitude_m: f32, sun_dir_y: f32) -> vec3<f32> {
     let mu = clamp(max(sun_dir_y, horizon + 0.00001), -1.0, 1.0);
     let ro = vec3<f32>(0.0, radius, 0.0);
     let rd = vec3<f32>(sqrt(max(1.0 - mu * mu, 0.0)), mu, 0.0);
-    let distance = max(ray_intersect_sphere(ro, rd, (params.planet.x + params.planet.y)).y, 0.0);
+    let distance = max(ray_intersect_sphere(h, rd, params.planet.y).y, 0.0);
     var tau = vec3<f32>(0.0);
     // Quadratic quadrature concentrates samples in the dense lower atmosphere.
     for (var i = 0u; i < 32u; i += 1u) {
         let u0 = f32(i) / 32.0;
         let u1 = f32(i + 1u) / 32.0;
         let dt = (u1 * u1 - u0 * u0) * distance;
-        let p = ro + rd * ((u1 * u1 + u0 * u0) * 0.5 * distance);
-        let sample_h = max(length(p) - params.planet.x, 0.0);
+        let sample_h = ray_altitude(h, rd, (u1 * u1 + u0 * u0) * 0.5 * distance);
         tau += (params.beta_r_g.xyz * exp(-sample_h / params.planet.z)
             + params.beta_m_width.xyz * exp(-sample_h / params.planet.w)
             + params.beta_o_center.xyz * ozone_density(sample_h) + vec3<f32>(haze_extinction(sample_h))
@@ -186,7 +198,10 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
     let world_azimuth = sun_angle + relative_azimuth;
 
     // Signed quadratic elevation concentrates samples around the horizon.
-    let elevation_v = uv.y;  // 0=down, 0.5=horizon, 1=up
+    // Rows are pole-inclusive: the first and last rows are the nadir and zenith
+    // themselves, so every texel of those rows holds the same direction and the
+    // runtime lookup has no azimuth pinwheel at the zenith.
+    let elevation_v = f32(id.y) / max(dims.y - 1.0, 1.0);  // 0=down, 0.5=horizon, 1=up
     let signed_elev = elevation_v * 2.0 - 1.0;
     let sin_elev = signed_elev * abs(signed_elev);
     let cos_elev = sqrt(max(1.0 - sin_elev * sin_elev, 0.0));
@@ -195,8 +210,8 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
     let cam_alt = max(camera.camera_pos.y, 1.0);
     let ro = vec3<f32>(0.0, params.planet.x + cam_alt, 0.0);
     
-    let hit_ground = ray_intersect_sphere(ro, dir, params.planet.x);
-    let hit_atmos  = ray_intersect_sphere(ro, dir, (params.planet.x + params.planet.y));
+    let hit_ground = ray_intersect_sphere(cam_alt, dir, 0.0);
+    let hit_atmos  = ray_intersect_sphere(cam_alt, dir, params.planet.y);
     
     var max_dist = hit_atmos.y;
     if (hit_ground.y > 0.0) {
@@ -218,7 +233,7 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
         let dt = (u1 * u1 - u0 * u0) * max_dist;
         let t = (u1 * u1 + u0 * u0) * 0.5 * max_dist;
         let p = ro + dir * t;
-        let h = max(length(p) - params.planet.x, 0.0);
+        let h = ray_altitude(cam_alt, dir, t);
         
         let rho_r = exp(-h / params.planet.z);
         let rho_m = exp(-h / params.planet.w);
@@ -264,7 +279,7 @@ fn generate_sky_view_lut(@builtin(global_invocation_id) id: vec3<u32>) {
     // takes the day's zenith hue only: the CPU horizon colour carries the
     // sunset palette, and as this floor rises after sunset it dyed the whole
     // blue-hour dome maroon over the physical violet-blue twilight.
-    let night_sky = params.sky_top_reserved.rgb * mix(1.15, 1.0, max(dir.y, 0.0)) * (1.0 - daylight) * 0.35;
+    let night_sky = params.sky_top_reserved.rgb * mix(1.15, 1.0, max(dir.y, 0.0)) * (1.0 - daylight) * 0.65;
     textureStore(out_tex, id.xy, vec4<f32>(in_scatter * 8.0 + ground + night_sky, 1.0));
 }
 
@@ -290,16 +305,17 @@ fn generate_multiscatter_lut(@builtin(global_invocation_id) id: vec3<u32>) {
         let angle = f32(ray) * 2.39996323;
         let r = sqrt(max(1.0 - y * y, 0.0));
         let dir = vec3<f32>(r * cos(angle), y, r * sin(angle));
-        let ground_hit = ray_intersect_sphere(ro, dir, params.planet.x);
-        var distance = max(ray_intersect_sphere(ro, dir, (params.planet.x + params.planet.y)).y, 0.0);
+        let ground_hit = ray_intersect_sphere(h, dir, 0.0);
+        var distance = max(ray_intersect_sphere(h, dir, params.planet.y).y, 0.0);
         if ground_hit.x > 0.0 { distance = min(distance, ground_hit.x); }
         var trans = vec3<f32>(1.0);
         for (var step = 0u; step < 20u; step += 1u) {
             let u0 = f32(step) / 20.0;
             let u1 = f32(step + 1u) / 20.0;
             let dt = (u1 * u1 - u0 * u0) * distance;
-            let p = ro + dir * ((u0 * u0 + u1 * u1) * 0.5 * distance);
-            let altitude = max(length(p) - params.planet.x, 0.0);
+            let t = (u0 * u0 + u1 * u1) * 0.5 * distance;
+            let p = ro + dir * t;
+            let altitude = ray_altitude(h, dir, t);
             let haze = haze_extinction(altitude);
             let scattering = params.beta_r_g.xyz * exp(-altitude / params.planet.z)
                 + params.beta_m_width.xyz * exp(-altitude / params.planet.w) + vec3<f32>(haze * HAZE_ALBEDO);
@@ -355,7 +371,7 @@ fn generate_aerial_perspective(@builtin(global_invocation_id) id: vec3<u32>) {
     let cam_alt = max(camera.camera_pos.y, 1.0);
     let ro = vec3<f32>(0.0, params.planet.x + cam_alt, 0.0);
     
-    let hit_atmos  = ray_intersect_sphere(ro, dir, (params.planet.x + params.planet.y));
+    let hit_atmos  = ray_intersect_sphere(cam_alt, dir, params.planet.y);
     
     // Do NOT clamp d_max to hit_ground.x (the sea-level planet sphere):
     // mountains and valleys sit above or below dir.y = 0, and truncating the
@@ -384,7 +400,7 @@ fn generate_aerial_perspective(@builtin(global_invocation_id) id: vec3<u32>) {
 
     for (var i = 0u; i < 16u; i = i + 1u) {
         let p = ro + dir * t;
-        let h = max(length(p) - params.planet.x, 0.0);
+        let h = ray_altitude(cam_alt, dir, t);
         
         let rho_r = exp(-h / params.planet.z);
         let rho_m = exp(-h / params.planet.w);

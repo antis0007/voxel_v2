@@ -34,6 +34,7 @@ impl SkyProbe {
         camera_layout: &wgpu::BindGroupLayout,
         lighting_layout: &wgpu::BindGroupLayout,
         atmosphere_layout: &wgpu::BindGroupLayout,
+        pipeline_cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         let output = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sky probe output"),
@@ -64,8 +65,8 @@ impl SkyProbe {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sky probe pipeline layout"),
-            bind_group_layouts: &[camera_layout, lighting_layout, atmosphere_layout, &output_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(camera_layout), Some(lighting_layout), Some(atmosphere_layout), Some(&output_layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("sky probe shader"),
@@ -79,7 +80,7 @@ impl SkyProbe {
             module: &module,
             entry_point: Some("cs_sky_probe"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
+            cache: pipeline_cache,
         });
         Self { output, output_bind_group, pipeline }
     }
@@ -93,11 +94,12 @@ impl SkyProbe {
         lighting: &wgpu::BindGroup,
         atmosphere: &wgpu::BindGroup,
         uniform: &wgpu::Buffer,
+        timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("sky probe pass"),
-                timestamp_writes: None,
+                timestamp_writes: timestamps,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, camera, &[]);

@@ -36,15 +36,18 @@ pub(super) fn supported(device: &wgpu::Device, mesh: &ChunkMesh) -> Result<(), S
 ///
 /// Mesh positions lie within a chunk of `chunk * CHUNK_SIZE`, so the f32
 /// subtraction is exact and the GPU never stores an absolute coordinate.
-pub(super) fn localize_into(dst: &mut [u8], vertices: &[Vertex3], chunk: IVec3) {
+pub(super) fn localize_into(mut dst: wgpu::WriteOnly<'_, [u8]>, vertices: &[Vertex3], chunk: IVec3) {
     debug_assert_eq!(dst.len(), std::mem::size_of_val(vertices));
     let base = (chunk * CHUNK_SIZE).as_vec3();
-    for (out, vertex) in dst.chunks_exact_mut(std::mem::size_of::<Vertex3>()).zip(vertices) {
-        let local = Vertex3 {
+    let (now, frame) = crate::mesh::water_motion::upload_clock();
+    let stride = std::mem::size_of::<Vertex3>();
+    for (index, vertex) in vertices.iter().enumerate() {
+        let mut local = Vertex3 {
             pos: [vertex.pos[0] - base.x, vertex.pos[1] - base.y, vertex.pos[2] - base.z],
             ..*vertex
         };
-        out.copy_from_slice(bytemuck::bytes_of(&local));
+        crate::mesh::water_motion::stamp(&mut local, now, frame);
+        dst.slice(index * stride..(index + 1) * stride).copy_from_slice(bytemuck::bytes_of(&local));
     }
 }
 pub(super) fn start(
@@ -61,13 +64,13 @@ pub(super) fn start(
     static TRACE: OnceLock<bool> = OnceLock::new();
     let trace = *TRACE.get_or_init(|| std::env::var("VOXEL_RENDER_TIMING").as_deref() == Ok("1"));
     let started = trace.then(Instant::now);
-    device.push_error_scope(wgpu::ErrorFilter::Internal);
-    device.push_error_scope(wgpu::ErrorFilter::Validation);
-    device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal_scope = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let push_ms = started.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
     let mut phases = [[0.0f64; 4]; 2];
     let mut write = |slot: usize, label: &str, buffer: &wgpu::Buffer, offset: u64, len: usize,
-                     fill: &mut dyn FnMut(&mut [u8])|
+                     fill: &mut dyn FnMut(wgpu::WriteOnly<'_, [u8]>)|
      -> Result<(), String> {
         let Some(size) = wgpu::BufferSize::new(len as u64) else {
             return Ok(());
@@ -83,7 +86,7 @@ pub(super) fn start(
         };
         let phase = trace.then(Instant::now);
         // Fill the staging view in place: no intermediate copy of the mesh.
-        fill(&mut staging[..]);
+        fill(staging.slice(..));
         if let Some(t) = phase { phases[slot][2] += t.elapsed().as_secs_f64() * 1000.0; }
         let phase = trace.then(Instant::now);
         drop(staging);
@@ -102,17 +105,22 @@ pub(super) fn start(
                     &mut |dst| localize_into(dst, &mesh.vertices, key.coord))?;
                 write(1, "chunk index upload", indices, range.index_offset,
                     std::mem::size_of_val(mesh.indices.as_slice()),
-                    &mut |dst| dst.copy_from_slice(bytemuck::cast_slice(&mesh.indices)))?;
+                    &mut |mut dst| dst.copy_from_slice(bytemuck::cast_slice(&mesh.indices)))?;
             }
             // A published mesh with indices but no storage would draw nothing: a hole.
             None if !mesh.indices.is_empty() => return Err("Chunk mesh has no arena range".into()),
             None => {}
         }
         Ok(ChunkGpuMesh { boundary_profile:None,
+            observation_source: Default::default(),
             alloc,
             index_count: mesh.indices.len() as u32,
+            // shadow_shader.wgsl decodes the family the same way.
+            sways: mesh.vertices.iter().any(|v| v.surface[2].max(0.0).round() as u32 % 64 == 34),
+            source_revision: 0,
             lod: key.lod,
             lod_invariant,
+            outgoing_lod: None,
             bytes: std::mem::size_of_val(mesh.vertices.as_slice())
                 + std::mem::size_of_val(mesh.indices.as_slice()),
             connectivity: None,
@@ -121,9 +129,9 @@ pub(super) fn start(
     // Pop immediately, on the creating thread. Only polling the returned
     // futures is deferred; error scopes never leak across render passes.
     let phase = trace.then(Instant::now);
-    let memory = device.pop_error_scope();
-    let validation = device.pop_error_scope();
-    let internal = device.pop_error_scope();
+    let memory = memory_scope.pop();
+    let validation = validation_scope.pop();
+    let internal = internal_scope.pop();
     let pop_ms = phase.map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
     let check = Box::pin(async move {
         let errors = [memory.await, validation.await, internal.await];
@@ -156,7 +164,7 @@ mod tests {
         let v = |p: [f32; 3]| Vertex3 { pos: p, color: [0.1; 3], normal: [0.0, 1.0, 0.0], surface: [1.0, 2.0, 3.0, 4.0], ao_strength: 0.5 };
         let src = [v([-96.0, 0.5, 1_000_032.0]), v([-64.0, 33.0, 1_000_000.25])];
         let mut dst = vec![0u8; std::mem::size_of_val(&src)];
-        localize_into(&mut dst, &src, IVec3::new(-3, 0, 31_250));
+        localize_into(wgpu::WriteOnly::from_mut(dst.as_mut_slice()), &src, IVec3::new(-3, 0, 31_250));
         let out: &[Vertex3] = bytemuck::cast_slice(&dst);
         assert_eq!(out[0].pos, [0.0, 0.5, 32.0]);
         assert_eq!(out[1].pos, [32.0, 33.0, 0.25]);

@@ -1,6 +1,6 @@
 use super::*;
 #[derive(Default)]
-pub(super) struct Checkpoint { requested: bool, inventory: Vec<u8>, resources: Vec<u32>, position: Vec3, pub reloaded: bool }
+pub(super) struct Checkpoint { requested: bool, inventory: Vec<u8>, resources: Vec<u32>, position: Vec3, pub reloaded: bool, pub passed: bool }
 impl Checkpoint {
     pub fn tick(&mut self, w: &mut World, p: &mut Player, day: &mut world::DayNightCycle,
         saves: &mut world::storage::SaveService, mined: &[IVec3], distance: f32,
@@ -39,6 +39,7 @@ impl Checkpoint {
                 let passed = inventory_equal && resources_equal && records_equal && wand_equal && terrain_equal
                     && position_equal && returned && no_penetration && cast_seen && grounded > 120 && airborne > 0 && distance > 100.0;
                 println!("[workshop-loop] {} inventory_equal={inventory_equal} resources_equal={resources_equal} records_equal={records_equal} wand_equal={wand_equal} terrain_equal={terrain_equal} position_equal={position_equal} returned={returned} no_penetration={no_penetration} cast_seen={cast_seen} distance_m={distance:.2} grounded_ticks={grounded} airborne_ticks={airborne} blocked_step_jump={collision}", if passed {"PASS"} else {"FAIL"});
+                self.passed = passed;
                 *w = loaded.world;
                 *p = loaded.player;
                 *day = loaded.day_night;

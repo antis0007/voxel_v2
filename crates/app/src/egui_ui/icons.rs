@@ -1,17 +1,23 @@
 //! Small original pixel illustrations. Solid mesh pixels have no AA seams.
 //! The shared six-role palette lives in `pixel_art`; icons only supply an
 //! accent colour plus native-pixel glyphs.
+mod materials;
+pub(crate) mod sprites16;
+pub(crate) mod tools;
+
 use super::pixel_art::{self, GOLD as PALETTE_GOLD, PAPER as PALETTE_PAPER, TEAL as PALETTE_TEAL};
 use crate::world::factory::Kind;
 use egui::{Color32 as C, Rect, Vec2, vec2};
-
-pub(crate) mod sprites16;
 pub const GOLD: C = PALETTE_GOLD;
 pub const PAPER: C = PALETTE_PAPER;
 pub const TEAL: C = PALETTE_TEAL;
 
 #[derive(Clone, Copy)]
 pub enum Icon {
+    BuiltTool(u16, [u8;8], u8),
+    ToolPart(u8,u8),
+    ToolCast(u8),
+    Bucket(bool),
     Resource(usize),
     Machine(Kind),
     Spell(u32),
@@ -21,12 +27,21 @@ pub enum Icon {
     Vines,
     Sapling,
     Bore,
+    Pickaxe(u8),
+    Axe(u8),
+    Shovel(u8),
+    Hoe,
     Sword(u32),
     Armor(u8, u8),
     Food(u8),
     Boat,
     Rod,
+    Shears,
     Pan,
+    Sling,
+    ClaimStake,
+    Clock,
+    Map,
 }
 /// Glyph rows and accent colour of an icon.
 pub(super) fn rows(icon: Icon) -> (&'static [&'static str], C) {
@@ -34,17 +49,23 @@ pub(super) fn rows(icon: Icon) -> (&'static [&'static str], C) {
 }
 
 fn art(icon: Icon) -> (&'static [&'static str], C) {
-    let gem = &[
-        "      33      ",
-        "     3223     ",
-        "    322113    ",
-        "   32211113   ",
-        "   32211113   ",
-        "    321113    ",
-        "     3113     ",
-        "      33      ",
-    ][..];
     match icon {
+        Icon::Clock => (&[
+            "    333333    ", "  33AAAAAA33  ", " 3A22222222A3 ",
+            "3A2223322222A3", "3A2223322222A3", "3A2223333322A3",
+            "3A2222222222A3", " 3A22222222A3 ", "  33AAAAAA33  ", "    333333    ",
+        ], GOLD),
+        Icon::Map => (&[
+            " 3333    3333 ", "3AAAA3333AAA3 ", "3A222AA2222A3 ",
+            "3A255A22552A3 ", "3A255A22522A3 ", "3A222A25222A3 ",
+            "3A225A22552A3 ", "3AAAA3333AAA3 ", " 3333    3333 ",
+        ], C::from_rgb(171, 166, 106)),
+        Icon::BuiltTool(..) | Icon::ToolPart(..) | Icon::ToolCast(..) | Icon::ClaimStake => (&[" "], PAPER),
+        Icon::Bucket(full) => (&[
+            "    3333    ", "   31  13   ", "  31    13  ",
+            "  33333333  ", "  32222223  ", "  31222213  ",
+            "   122221   ", "   311113   ", "    3333    ",
+        ], if full { C::from_rgb(70, 155, 220) } else { C::from_rgb(145, 155, 163) }),
         Icon::Wand(tier) => (
             &[
                 "          33  ",
@@ -113,6 +134,21 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             ][..],
             C::from_rgb(150, 109, 73),
         ),
+        Icon::Rod => (
+            &[
+                "         33 ",
+                "        323 ",
+                "       323 4",
+                "      323  4",
+                "     323   4",
+                "    323    4",
+                "   323     4",
+                "  323      4",
+                " 323      44",
+                " 33         ",
+            ][..],
+            C::from_rgb(150, 109, 73),
+        ),
         Icon::Pan => (
             &[
                 "            ",
@@ -128,20 +164,20 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             ][..],
             C::from_rgb(140, 132, 124),
         ),
-        Icon::Rod => (
+        Icon::Shears => (
             &[
-                "         33 ",
-                "        323 ",
-                "       323 4",
-                "      323  4",
-                "     323   4",
-                "    323    4",
-                "   323     4",
-                "  323      4",
-                " 323      44",
-                " 33         ",
+                "  33    33  ",
+                "  323  323  ",
+                "   323323   ",
+                "    3223    ",
+                "    3113    ",
+                "   33  33   ",
+                "  3223 3223 ",
+                " 32  3 3  23",
+                " 32  3 3  23",
+                "  3223 3223 ",
             ][..],
-            C::from_rgb(150, 109, 73),
+            C::from_rgb(170, 176, 184),
         ),
         Icon::Vines => (
             &[
@@ -172,17 +208,80 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             ][..],
             C::from_rgb(86, 150, 60),
         ),
+        Icon::Pickaxe(tier) => (
+            &[
+                "   33333333     ",
+                "  3AAAA222233   ",
+                " 3242222111223  ",
+                " 33333355331223 ",
+                "       563 3123 ",
+                "      3563  313 ",
+                "     3563    33 ",
+                "    3563        ",
+                "   3563         ",
+                "  3563          ",
+                " 3563           ",
+                " 363            ",
+                "  3             ",
+            ],
+            match tier { 6 => C::from_rgb(154, 108, 62), 7 => C::from_rgb(138, 145, 150), _ => C::from_rgb(215, 220, 224) },
+        ),
+        Icon::Axe(tier) => (
+            &[
+                "33333           ",
+                "3AAA23          ",
+                "3222223         ",
+                " 33333          ",
+                "   3563         ",
+                "    3563        ",
+                "     3563       ",
+                "      3563      ",
+                "       3563     ",
+                "        363     ",
+                "         3      ",
+            ],
+            match tier {
+                12 => C::from_rgb(154, 108, 62),
+                13 => C::from_rgb(138, 145, 150),
+                _ => C::from_rgb(215, 220, 224),
+            },
+        ),
+        Icon::Hoe => (&[], C::WHITE),
+        Icon::Shovel(tier) => (
+            &[
+                "   333333   ",
+                "  3AAAA223  ",
+                "  32222223  ",
+                "   333333   ",
+                "    3563    ",
+                "    3563    ",
+                "    3563    ",
+                "    3563    ",
+                "    3563    ",
+                "    363     ",
+                "     3      ",
+            ],
+            match tier {
+                15 => C::from_rgb(154, 108, 62),
+                16 => C::from_rgb(138, 145, 150),
+                _ => C::from_rgb(215, 220, 224),
+            },
+        ),
         Icon::Bore => (
             &[
-                "   3333333   ",
-                "  322222223  ",
-                "  331111133  ",
-                "    313     ",
-                "   32223    ",
-                "    313     ",
-                "   32223    ",
-                "    313     ",
-                "     3      ",
+                "     333333     ",
+                "    3AA22223    ",
+                " 3333255512333  ",
+                "322233555332223 ",
+                "311133222331113 ",
+                " 3333355333333  ",
+                "     3A23       ",
+                "    3AA223      ",
+                "     3113       ",
+                "    3AA223      ",
+                "     3113       ",
+                "     3A23       ",
+                "      33        ",
             ],
             GOLD,
         ),
@@ -516,19 +615,32 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
         }
         Icon::Sword(tier) => {
             let shape = &[
-                "            333",
-                "           32223",
-                "          3211223",
-                "         3211223 ",
-                "        3211223  ",
-                "       3211223   ",
-                "      3211223    ",
-                "     3211223     ",
-                "    3211223      ",
-                "   3211223       ",
-                "333321223        ",
-                " 333223          ",
-                "  333            ",
+                "........A.......",
+                ".......A2.......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                ".......A21......",
+                "....5..A21.5....",
+                "....15555551....",
+                ".......55.......",
+                ".......66.......",
+                ".......65.......",
+                ".......66.......",
+                ".......65.......",
+                "......1551......",
             ][..];
             let color = match tier {
                 3 => C::from_rgb(246, 129, 57),
@@ -539,103 +651,7 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             };
             (shape, color)
         }
-        Icon::Resource(i) => {
-            let color = match i {
-                0 | 6 | 9 => C::from_rgb(205, 125, 73),
-                1 | 7 | 10 => C::from_rgb(148, 192, 201),
-                2 | 8 | 11 | 15 => C::from_rgb(174, 181, 180),
-                3 => C::from_rgb(88, 94, 111),
-                4 | 13 => C::from_rgb(137, 194, 104),
-                5 => C::from_rgb(130, 189, 235),
-                14 => GOLD,
-                16 => C::from_rgb(220, 139, 76),
-                19 => C::from_rgb(120, 118, 124),
-                20 => C::from_rgb(150, 92, 44),
-                21 => C::from_rgb(156, 210, 118),
-                _ => C::from_rgb(172, 126, 226),
-            };
-            let shape = match i {
-                6..=8 | 14 | 15 => &[
-                    "   33333333  ",
-                    "  3222222223 ",
-                    " 32222222223 ",
-                    "333333333333 ",
-                    "311111111113 ",
-                    " 33333333333 ",
-                ][..],
-                9..=11 => &[
-                    "      3      ",
-                    "     323     ",
-                    "   333233    ",
-                    "  32232233   ",
-                    " 3222232223  ",
-                    "333333333333 ",
-                ][..],
-                12 => &[
-                    "  333333333  ",
-                    " 32232232223 ",
-                    " 32333333223 ",
-                    " 32322223223 ",
-                    " 32322223223 ",
-                    " 32333333223 ",
-                    " 32232232223 ",
-                    "  333333333  ",
-                ][..],
-                16 => &[
-                    "   3333333   ",
-                    "  322222223  ",
-                    " 32333333223 ",
-                    " 323    3223 ",
-                    " 323    3223 ",
-                    " 32333333223 ",
-                    "  322222223  ",
-                    "   3333333   ",
-                ][..],
-                4 | 13 => &[
-                    "    33333    ",
-                    "  332222233  ",
-                    " 32212212223 ",
-                    "3333333333333",
-                    "    3113     ",
-                    "    3223     ",
-                    "   333333    ",
-                ][..],
-                5 | 17 | 18 => gem,
-                // Coke: a porous, glassy-grey lump.
-                19 => &[
-                    "    3333     ",
-                    "  33212333   ",
-                    " 3212221123  ",
-                    " 3221312223  ",
-                    "32122221213  ",
-                    " 3213122123  ",
-                    "  333221233  ",
-                    "     3333    ",
-                ][..],
-                // Liquids come in a stoppered flask.
-                20 | 21 => &[
-                    "    3333    ",
-                    "    3113    ",
-                    "     33     ",
-                    "    3223    ",
-                    "   322223   ",
-                    "  32222223  ",
-                    "  32211223  ",
-                    "  32222223  ",
-                    "   333333   ",
-                ][..],
-                _ => &[
-                    "    333333   ",
-                    "  333212233  ",
-                    " 32232211223 ",
-                    " 32113312223 ",
-                    " 32211233213 ",
-                    "  311121133  ",
-                    "   3333333   ",
-                ][..],
-            };
-            (shape, color)
-        }
+        Icon::Resource(i) => materials::art(i),
         Icon::Machine(k) => {
             let c = if k == Kind::CokeBrick || k == Kind::CokeOven {
                 C::from_rgb(178, 98, 62)
@@ -836,10 +852,31 @@ fn art(icon: Icon) -> (&'static [&'static str], C) {
             };
             (shape, c)
         }
+        Icon::Sling => (&[
+            "33        33", "323      323", " 3236666323 ", "  33366333  ",
+            "    3663    ", "    3223    ", "    3223    ", "    3333    ",
+        ], C::from_rgb(117, 192, 73)),
+        Icon::Armor(_, 11) => (&[
+            "            ", "  333  333  ", " 3222332223 ", "321123321123",
+            "321123321123", " 3223  3223 ", "  33    33  ", "            ",
+        ], C::from_rgb(172, 122, 238)),
+        Icon::Armor(_, 9) => (&[
+            "     33     ", "    3223    ", "   322223   ", "  32233223  ",
+            " 3223  3223 ", "333333333333", "    3  3    ", "     33     ",
+        ], C::from_rgb(209, 184, 115)),
+        Icon::Armor(_, 5) => (&[
+            "33   33   33", " 33 3223 33 ", "  33333333  ", "333322223333",
+            "  33222233  ", " 33 3333 33 ", "33 33  33 33", "  33    33  ",
+        ], C::from_rgb(175, 122, 69)),
+        Icon::Armor(_, tier @ (6 | 7)) => (&[
+            " 3333  3333 ", "322233332223", "322231132223", "322233332223",
+            "322231132223", " 3333  3333 ", "  66    66  ", "  55    55  ",
+        ], if tier == 6 { C::from_rgb(210, 117, 58) } else { C::from_rgb(69, 188, 214) }),
         Icon::Armor(slot, tier) => {
             let color = match tier {
                 1 => C::from_rgb(209, 128, 72),
                 2 => C::from_rgb(168, 189, 206),
+                8 => C::from_rgb(117, 192, 73),
                 _ => C::from_rgb(112, 214, 186),
             };
             let shape: &[&str] = match slot {
@@ -967,12 +1004,10 @@ pub(super) fn paint_with_effect(p: &egui::Painter, r: Rect, icon: Icon, effect: 
 pub(super) fn paint_rows(p: &egui::Painter, r: Rect, rows: &[&str], color: C) -> Rect {
     let width = rows.iter().map(|row| row.len()).max().unwrap_or(1) as f32;
     let extent = width.max(rows.len() as f32);
-    let unit = (r.width().min(r.height()) / extent).floor().max(1.0);
-    let raw_origin = r.center() - vec2(width, rows.len() as f32) * unit * 0.5;
-    let origin = egui::pos2(
-        raw_origin.x.round(),
-        raw_origin.y.round(),
-    );
+    let ppp = p.ctx().pixels_per_point();
+    let unit = ((r.width().min(r.height()) * ppp / extent).floor().max(1.0)) / ppp;
+    let origin = ((r.center() - vec2(width, rows.len() as f32) * unit * 0.5) * ppp).round() / ppp;
+    let edge = unit.min(1.0);
     let mut mesh = egui::Mesh::default();
     for (y, row) in rows.iter().enumerate() {
         for (x, ch) in row.bytes().enumerate() {
@@ -1002,7 +1037,7 @@ pub(super) fn paint_rows(p: &egui::Painter, r: Rect, rows: &[&str], color: C) ->
                 rows[y - 1].as_bytes().get(x).copied().unwrap_or(b' ')
             };
             if ch == b'2' && above != b'2' && above != b'1' {
-                let h = Rect::from_min_size(q.min, vec2(unit, 1.0));
+                let h = Rect::from_min_size(q.min, vec2(unit, edge));
                 mesh.add_colored_rect(h, pixel_art::top_light(color));
             }
             let below = rows
@@ -1012,8 +1047,8 @@ pub(super) fn paint_rows(p: &egui::Painter, r: Rect, rows: &[&str], color: C) ->
                 .unwrap_or(b' ');
             if ch == b'2' && below != b'2' && below != b'1' {
                 let h = Rect::from_min_size(
-                    egui::pos2(q.left(), q.bottom() - 1.0),
-                    vec2(unit, 1.0),
+                    egui::pos2(q.left(), q.bottom() - edge),
+                    vec2(unit, edge),
                 );
                 mesh.add_colored_rect(h, pixel_art::bottom_shadow(color));
             }
@@ -1024,6 +1059,33 @@ pub(super) fn paint_rows(p: &egui::Painter, r: Rect, rows: &[&str], color: C) ->
 }
 
 fn paint_styled(p: &egui::Painter, r: Rect, icon: Icon, accent: Option<C>, override_fx: Option<super::magic_fx::Effect>) {
+    if let Some((w,h,texels)) = tools::texels(icon) {
+        let ppp=p.ctx().pixels_per_point();
+        let unit=((r.width().min(r.height())*ppp/w.max(h) as f32).floor().max(1.0))/ppp;
+        let origin=((r.center()-vec2(w as f32,h as f32)*unit*0.5)*ppp).round()/ppp;
+        let mut mesh=egui::Mesh::default();
+        for (i,pixel) in texels.into_iter().enumerate() {
+            if let Some((_,rgb))=pixel {
+                mesh.add_colored_rect(Rect::from_min_size(origin+vec2((i%w) as f32,(i/w) as f32)*unit,vec2(unit,unit)),C::from_rgb(rgb[0],rgb[1],rgb[2]));
+            }
+        }
+        p.add(egui::Shape::mesh(mesh));
+        return;
+    }
+    if let Icon::Sword(tier) = icon {
+        let id=egui::Id::new(("painted-sword",tier));
+        let cached=p.ctx().data(|d|d.get_temp::<egui::TextureHandle>(id));
+        let texture=cached.unwrap_or_else(|| {
+            let (size,rgba)=crate::mesh::models::sword_art::icon(tier as u8);
+            let texture=p.ctx().load_texture("painted-sword",egui::ColorImage::from_rgba_unmultiplied(size,&rgba),egui::TextureOptions::NEAREST);
+            p.ctx().data_mut(|d|d.insert_temp(id,texture.clone()));texture
+        });
+        let [w,h]=texture.size();
+        let height=r.height().min(r.width())*0.94;
+        let target=Rect::from_center_size(r.center(),vec2(height*w as f32/h as f32,height));
+        p.image(texture.id(),target,Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.0,1.0)),C::WHITE);
+        return;
+    }
     if accent.is_none() && override_fx.is_none() && sprites16::paint(p, r, icon) {
         return;
     }

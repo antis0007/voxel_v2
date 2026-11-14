@@ -54,13 +54,28 @@ impl Default for TierState {
 
 /// Chunk radius kept resident: full below the transition, zero at the load stop.
 pub fn resident_radius_chunks(altitude_m: f64, view_distance_chunks: i32) -> i32 {
+    if altitude_m >= LOAD_STOP_M || view_distance_chunks <= 0 {
+        return 0;
+    }
     let f = 1.0 - (altitude_m - TRANSITION_M) / (LOAD_STOP_M - TRANSITION_M);
-    (f * view_distance_chunks as f64).round().clamp(0.0, view_distance_chunks as f64) as i32
+    (f * view_distance_chunks as f64).round().clamp(1.0, view_distance_chunks as f64) as i32
 }
 
 /// Height above the surface; on a planet the chart face-local y.
 pub fn altitude_m(eye_m: DVec3, planet: bool) -> f64 {
     if planet { chart::split(eye_m).1.y } else { eye_m.y }
+}
+
+/// Prepare terrain for a Creative descent while keeping the hard space cutoff.
+/// Express-lift terminal prefetch remains authoritative for cabin passengers.
+pub fn residency_altitude_m(world: &crate::world::World, player: &crate::player::Player, actual_m: f64) -> f64 {
+    let terminal = crate::world::orbital::express::residency_altitude_m(&world.orbital, actual_m);
+    if terminal != actual_m { return terminal; }
+    if planet_world(world) && world.rules.mode.creative_tools() && player.flying
+        && player.anchor.is_none() && actual_m < LOAD_STOP_M {
+        let descent_mps = (-player.vel.y * world.voxel_scale.meters()).max(0.0) as f64;
+        (actual_m - (descent_mps * 3.0).min(LOAD_STOP_M - TRANSITION_M)).max(0.0)
+    } else { actual_m }
 }
 
 #[cfg(test)]
@@ -106,7 +121,6 @@ mod tests {
 }
 
 /// Whether the world is a planet for altitude purposes.
-// Keys on the planet world type once that variant lands; flat worlds until then.
-pub fn planet_world(_world: &crate::world::World) -> bool {
-    false
+pub fn planet_world(world: &crate::world::World) -> bool {
+    world.sample_config().is_planet()
 }

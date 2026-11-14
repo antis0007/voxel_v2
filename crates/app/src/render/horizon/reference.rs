@@ -191,7 +191,7 @@ pub(super) fn apply_voxels(
             }
             for y in (low - 32).div_euclid(32)..=(high + 48).div_euclid(32) {
                 let source = crate::world::generate_padded(cfg, IVec3::new(x, y, z), cancel)?;
-                let plan = crate::mesh::MeshPlan::for_chunk(&source, cancel)?;
+                let plan = crate::mesh::MeshPlan::for_chunk(&source, cancel, 0)?;
                 let output_bytes =
                     plan.vertices * std::mem::size_of::<Vertex3>() + plan.indices * 4;
                 if super::mesh_bytes(mesh) + output_bytes > super::MAX_MESH_BYTES {

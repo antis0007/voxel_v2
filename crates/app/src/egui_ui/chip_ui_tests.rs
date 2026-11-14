@@ -29,15 +29,18 @@ impl Harness {
         h.frame(Vec::new());
         h
     }
-    fn frame(&mut self, events: Vec<Event>) -> UiAction {
+    fn frame(&mut self, mut events: Vec<Event>) -> UiAction {
         let mut action = UiAction::None;
+        events.insert(0, Event::ModifiersChanged(self.mods));
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 900.0))),
             events,
-            modifiers: self.mods,
             ..RawInput::default()
         };
-        let _ = self.ctx.run(input, |ctx| window(ctx, &self.view, &mut action));
+        self.ctx
+            .run_ui(input, |ui| window(ui.ctx(), &self.view, &mut action))
+            .textures_delta
+            .clear();
         // Apply the drafts the world would store, so generations stay in step.
         if let UiAction::Chip(Action::SaveDraft { project, design }) = &action
             && let Some(lib) = self.view.chips.as_mut()
@@ -111,7 +114,7 @@ fn designer_places_undoes_detaches_and_zooms_from_input() {
     h.mods = Modifiers::COMMAND;
     h.frame(vec![
         Event::PointerMoved(at),
-        Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, 40.0), modifiers: Modifiers::COMMAND },
+        Event::MouseWheel { phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Unknown, unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, 40.0), modifiers: Modifiers::COMMAND },
     ]);
     assert!(h.editor().zoom > before, "zoom {} -> {}", before, h.editor().zoom);
 }

@@ -46,7 +46,7 @@ pub(super) fn prepare(world: &mut World, sources: &mut Residency, p: IVec3) -> b
         let q = IVec3::new(p.x, query.next_y, p.z);
         let c = env::key(chunk(q));
         if !world.environment.sky.contains_key(&c) {
-            if built || !sources.request_for(world, chunk(q), chunk(p)) {
+            if built || !sources.request_environment(world, chunk(q), chunk(p)) {
                 break;
             }
             let Some(data) = sources.chunk_data(world, chunk(q)) else {

@@ -11,18 +11,13 @@ use anyhow::{Result, bail, ensure};
 use engine_content::ALL_BLOCK_IDS;
 use glam::IVec3;
 
-pub const MAGIC: &[u8; 8] = b"VXBLUEPR";
-pub const VERSION: u16 = 1;
+pub use engine_voxel::blueprint_format::{MAGIC, VERSION, fnv1a64};
 /// Header bytes before the palette: magic, version and size.
 pub const HEADER: usize = 8 + 2 + 6;
 /// Worst case is one two-byte run per cell plus the palette.
 pub const MAX_FILE_BYTES: usize = 2 * MAX_VOLUME + 64 * 1024;
 const MAX_PALETTE: usize = 256;
 const MAX_NAME_BYTES: usize = 64;
-
-pub fn fnv1a64(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
-}
 
 fn block_name(b: BlockId) -> String {
     format!("{b:?}")
@@ -33,50 +28,8 @@ fn block_by_name(name: &str) -> Option<BlockId> {
 }
 
 pub fn encode(bp: &Blueprint) -> Vec<u8> {
-    let mut palette: Vec<BlockId> = Vec::new();
-    let mut runs: Vec<(u8, u32)> = Vec::new();
-    for &b in bp.cells() {
-        let slot = match palette.iter().position(|p| *p == b) {
-            Some(i) => i,
-            None => {
-                palette.push(b);
-                palette.len() - 1
-            }
-        };
-        match runs.last_mut() {
-            Some((s, n)) if usize::from(*s) == slot => *n += 1,
-            // BlockId is a u8 enum, so a palette never passes 256 entries.
-            _ => runs.push((slot as u8, 1)),
-        }
-    }
-    let mut out = Vec::with_capacity(64 + runs.len() * 2);
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&VERSION.to_le_bytes());
-    for axis in bp.size().to_array() {
-        out.extend_from_slice(&(axis as u16).to_le_bytes());
-    }
-    out.extend_from_slice(&(palette.len() as u16).to_le_bytes());
-    for b in &palette {
-        let name = block_name(*b);
-        out.push(name.len() as u8);
-        out.extend_from_slice(name.as_bytes());
-    }
-    out.extend_from_slice(&(runs.len() as u32).to_le_bytes());
-    for (slot, mut n) in runs {
-        out.push(slot);
-        loop {
-            let byte = (n & 0x7f) as u8;
-            n >>= 7;
-            if n == 0 {
-                out.push(byte);
-                break;
-            }
-            out.push(byte | 0x80);
-        }
-    }
-    let sum = fnv1a64(&out);
-    out.extend_from_slice(&sum.to_le_bytes());
-    out
+    engine_voxel::blueprint_format::encode(bp.size().to_array().map(|n| n as u16), bp.cells())
+        .expect("Blueprint guarantees valid dimensions")
 }
 
 struct Reader<'a> {

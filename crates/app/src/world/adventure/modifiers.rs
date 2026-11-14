@@ -6,6 +6,72 @@ use crate::player::Player;
 use engine_worldgen::sites::modifiers::{SiteModifier, site_modifier};
 use engine_worldgen::{WorldSampleConfig, sites};
 use glam::{IVec3, Quat, Vec3};
+use std::sync::{Mutex, OnceLock, mpsc};
+
+const PREFETCH_M: f32 = 24.0;
+
+#[derive(Default)]
+pub(super) struct Probe {
+    pending: Option<Mutex<mpsc::Receiver<Field>>>,
+    field: Option<Field>,
+}
+
+struct Field {
+    cfg: WorldSampleConfig,
+    centre: Vec3,
+    sites: Vec<engine_worldgen::sites::modifiers::Influence>,
+}
+
+struct Job {
+    cfg: WorldSampleConfig,
+    centre: Vec3,
+    reply: mpsc::SyncSender<Field>,
+}
+
+fn lane() -> Option<&'static mpsc::SyncSender<Job>> {
+    static LANE: OnceLock<Option<mpsc::SyncSender<Job>>> = OnceLock::new();
+    LANE.get_or_init(|| {
+        let (send, receive) = mpsc::sync_channel::<Job>(2);
+        std::thread::Builder::new().name("site-influences".into()).spawn(move || {
+            while let Ok(job) = receive.recv() {
+                let sites = engine_worldgen::sites::modifiers::influences(&job.cfg, job.centre, PREFETCH_M);
+                let _ = job.reply.try_send(Field { cfg: job.cfg, centre: job.centre, sites });
+            }
+        }).ok()?;
+        Some(send)
+    }).as_ref()
+}
+
+impl Probe {
+    fn current(&mut self, cfg: WorldSampleConfig, feet: Vec3) -> SiteModifier {
+        if let Some(pending) = self.pending.as_mut() {
+            match pending.get_mut().unwrap().try_recv() {
+                Ok(field) => { self.field = Some(field); self.pending = None; }
+                Err(mpsc::TryRecvError::Disconnected) => self.pending = None,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        // Drop stale geography immediately on a crossing/teleport/config change.
+        if self.field.as_ref().is_some_and(|f| f.cfg != cfg || f.centre.distance_squared(feet) >= PREFETCH_M.powi(2)) {
+            self.field = None;
+        }
+        if self.pending.is_none()
+            && self.field.as_ref().is_none_or(|f| f.centre.distance_squared(feet) > (PREFETCH_M * 0.5).powi(2))
+            && let Some(lane) = lane()
+        {
+            let (reply, receive) = mpsc::sync_channel(1);
+            if lane.try_send(Job { cfg, centre: feet, reply }).is_ok() {
+                self.pending = Some(Mutex::new(receive));
+            }
+        }
+        self.field.as_ref().into_iter().flat_map(|f| &f.sites)
+            .filter_map(|s| {
+                let d = s.at.distance_squared(feet);
+                (d < s.radius_m * s.radius_m).then_some((d, s.modifier))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0)).map_or(SiteModifier::None, |(_, m)| m)
+    }
+}
 
 /// Site id `z` reserved for Haunted wisps; they never touch site records.
 pub(super) const WISP_Z: i32 = -31;
@@ -86,7 +152,13 @@ pub(super) fn sight_range(m: SiteModifier) -> f32 {
 /// Per-step effects. Runs inside `Adventure::update`.
 pub(super) fn step(adv: &mut Adventure, world: &World, player: &mut Player, feet: Vec3, dt: f32) {
     let cfg = world.sample_config();
-    let m = current(&cfg, feet);
+    // Realm encounter rosters are cheap and have their own site identities.
+    // Surface site planning can inspect hundreds of columns on a cold region.
+    let m = if matches!(cfg.world_type, engine_worldgen::WorldType::Hall | engine_worldgen::WorldType::Nether | engine_worldgen::WorldType::Manyfold | engine_worldgen::WorldType::Realm(_)) {
+        current(&cfg, feet)
+    } else {
+        adv.modifier_probe.current(cfg, feet)
+    };
     adv.site_modifier = m;
     if m == SiteModifier::Frostbound && player.on_ground && !player.flying {
         // Rime underfoot: bleed a share of horizontal speed every step.
@@ -103,6 +175,9 @@ pub(super) fn step(adv: &mut Adventure, world: &World, player: &mut Player, feet
         return;
     }
     adv.haunt_clock = 0.0;
+    if !world.rules.mob_spawning || adv.difficulty == super::difficulty::Difficulty::Peaceful {
+        return;
+    }
     let wisps = adv.enemies.iter().filter(|e| e.site.z == WISP_Z).count();
     let wild = adv.enemies.iter().filter(|e| e.habitat.is_none()).count();
     if wisps >= MAX_WISPS || wild >= MAX_ENEMIES {
@@ -156,6 +231,7 @@ mod tests {
     #[test]
     fn modifier_site_lookup_is_v32_only() {
         let cfg = |v| WorldSampleConfig {
+            planet: None,
             generator_version: v,
             seed: 77,
             world_type: WorldType::Hills,

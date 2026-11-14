@@ -97,11 +97,11 @@ pub(super) fn draw(ctx: &egui::Context, dt: f32) {
     if lines.is_empty() || !enabled() {
         return;
     }
-    egui::Area::new("subtitles".into())
+    egui::Area::new(egui::Id::new("subtitles"))
         .anchor(Align2::RIGHT_BOTTOM, [-16.0, -60.0])
         .interactable(false)
         .show(ctx, |ui| {
-            super::presentation::hud_frame().show(ui, |ui| {
+            super::presentation::hud_frame(ui.ctx()).show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                     for line in lines.iter() {
                         let fade = ((SHOWN_S + FADE_S - line.age) / FADE_S).clamp(0.0, 1.0);

@@ -117,6 +117,41 @@ pub fn store(world: &mut World, p: IVec3, addr: SlotAddr) {
     world.sync_from_inventory();
 }
 
+/// Edits a real stand slot using the same cursor gestures as a chest.
+pub(crate) fn edit_slot(world: &mut World, p: IVec3, index: usize, split: bool) {
+    if world.get(p) != BlockId::BrewingStand { return; }
+    let mut stand = world.block_data.stand(p);
+    let slot = match index {
+        0 => &mut stand.base,
+        1 => &mut stand.modifier,
+        2 => &mut stand.output,
+        _ => return,
+    };
+    let before = *slot;
+    if index == 2 {
+        let Some(mut output) = before else { return };
+        let held = world.inventory.cursor;
+        if held.is_some_and(|stack| stack.item != output.item) { return; }
+        let count = held.map_or(0, |stack| stack.count);
+        let limit = world.inventory.stack_limit(output.item);
+        let amount = if split { output.count.div_ceil(2) } else { output.count };
+        let moved = amount.min(limit.saturating_sub(count));
+        if moved == 0 { return; }
+        output.count -= moved;
+        *slot = (output.count > 0).then_some(output);
+        world.inventory.cursor = Some(ItemStack::new(output.item, count + moved));
+    } else {
+        let expected = if index == 0 { Role::Base } else { Role::Modifier };
+        if world.inventory.cursor.is_some_and(|stack| role(stack.item) != Some(expected)) { return; }
+        world.inventory.edit_cursor_stack(slot, split);
+    }
+    if *slot != before {
+        if index != 2 && before.map(|s| s.item) != slot.map(|s| s.item) { stand.steps = 0; }
+        world.block_data.set_stand(p, stand);
+        world.sync_from_inventory();
+    }
+}
+
 /// Moves stand slot `index` (base, modifier, output) into the player's inventory.
 pub fn take(world: &mut World, p: IVec3, index: usize) {
     if world.get(p) != BlockId::BrewingStand {

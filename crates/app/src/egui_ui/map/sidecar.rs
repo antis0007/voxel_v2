@@ -214,6 +214,9 @@ fn create_temp(path: &Path) -> Result<(std::path::PathBuf, std::fs::File)> {
 /// archive; concurrent writers cannot truncate or rename each other's temporary.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
     let (tmp, mut file) = create_temp(path)?;
     let result = (|| -> Result<()> {
         file.write_all(bytes)?;

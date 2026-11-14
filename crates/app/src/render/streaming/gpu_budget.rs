@@ -13,8 +13,8 @@ pub const MAX_GPU_MIB: usize = if usize::MAX / MIB < 65536 {
 };
 // Zero is the persisted automatic policy, never a zero-byte residency budget.
 static REQUESTED: AtomicUsize = AtomicUsize::new(0);
-static EFFECTIVE: AtomicUsize = AtomicUsize::new(1024);
-static FALLBACK: AtomicUsize = AtomicUsize::new(1024);
+static EFFECTIVE: AtomicUsize = AtomicUsize::new(384);
+static FALLBACK: AtomicUsize = AtomicUsize::new(384);
 static CEILING: AtomicUsize = AtomicUsize::new(usize::MAX);
 static RESIDENT: AtomicUsize = AtomicUsize::new(0);
 static DEFERRED: AtomicUsize = AtomicUsize::new(0);
@@ -27,6 +27,7 @@ struct Memory {
     budget: usize,
     usage: usize,
     live: bool,
+    sampled_at: std::time::Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -39,6 +40,7 @@ pub struct GpuResidencyStatus {
     pub process_usage_mib: usize,
     pub live: bool,
     pub detected: bool,
+    pub sample_age_ms: Option<u64>,
     pub deferred: usize,
 }
 
@@ -68,6 +70,7 @@ pub fn gpu_residency_status() -> GpuResidencyStatus {
         process_usage_mib: memory.map_or(0, |m| m.usage / MIB),
         live: memory.is_some_and(|m| m.live),
         detected: memory.is_some(),
+        sample_age_ms: memory.map(|m| m.sampled_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64),
         deferred: DEFERRED.load(Ordering::Relaxed),
     }
 }
@@ -79,7 +82,13 @@ fn target() -> usize {
         if cap == usize::MAX {
             FALLBACK.load(Ordering::Relaxed)
         } else {
-            cap
+            // A fixed 512 MiB cap continuously evicted visible terrain on large
+            // adapters, exposing proxies and missing chunks even at rest.
+            // Keep three quarters for other allocations; `cap` still applies
+            // the live OS pressure limit, including non-terrain usage.
+            let memory = *MEMORY.lock().unwrap_or_else(|e| e.into_inner());
+            let share = memory.map_or(512, |m| (m.budget / MIB / 4).clamp(256, 8192));
+            cap.min(share)
         }
     } else {
         requested.min(cap)
@@ -148,7 +157,7 @@ pub(crate) fn configure_gpu_residency(adapter: &wgpu::Adapter) {
     let info = adapter.get_info();
     FALLBACK.store(
         match info.device_type {
-            wgpu::DeviceType::DiscreteGpu => 1024,
+            wgpu::DeviceType::DiscreteGpu => 384,
             wgpu::DeviceType::Cpu => 128,
             _ => 256,
         },
@@ -183,6 +192,11 @@ pub(crate) fn configure_gpu_residency(adapter: &wgpu::Adapter) {
                 }
                 if let Some(memory) = query(&adapter, &info) {
                     publish(memory);
+                    if std::env::var_os("VOXEL_GPU_MEMORY_LOG").is_some() {
+                        eprintln!("[gpu-memory] pid={} process_local_mib={} terrain_mib={} os_budget_mib={}",
+                            std::process::id(), memory.usage / MIB,
+                            RESIDENT.load(Ordering::Relaxed) / MIB, memory.budget / MIB);
+                    }
                 }
             }
         });
@@ -235,6 +249,7 @@ fn query_vulkan(adapter: &wgpu::Adapter) -> Option<Memory> {
             budget: 0,
             usage: 0,
             live,
+            sampled_at: std::time::Instant::now(),
         };
         for i in 0..heaps.memory_heap_count as usize {
             let heap = heaps.memory_heaps[i];
@@ -317,6 +332,7 @@ fn query_dxgi(info: &wgpu::AdapterInfo) -> Option<Memory> {
                     budget: usize::try_from(local.Budget).unwrap_or(usize::MAX),
                     usage: usize::try_from(local.CurrentUsage).unwrap_or(usize::MAX),
                     live: true,
+                    sampled_at: std::time::Instant::now(),
                 })
             } else if dedicated > 0 {
                 // Old drivers: leave half the physical memory for unreported use.
@@ -325,6 +341,7 @@ fn query_dxgi(info: &wgpu::AdapterInfo) -> Option<Memory> {
                     budget: dedicated / 2,
                     usage: 0,
                     live: false,
+                    sampled_at: std::time::Instant::now(),
                 })
             } else {
                 None

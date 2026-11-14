@@ -76,6 +76,7 @@ impl Default for Bay {
 
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action {
     NewProject(String, Design),
     /// Replace the draft the player saw at `generation`, then release it.
@@ -295,7 +296,7 @@ type Key = (i32, i32, i32);
 fn key(p: IVec3) -> Key {
     (p.x, p.y, p.z)
 }
-pub use actions::{chip_action, review_fixture};
+pub use actions::{chip_action, resources, review_fixture};
 
 #[cfg(test)]
 #[path = "chips_tests.rs"]

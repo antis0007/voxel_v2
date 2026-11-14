@@ -28,7 +28,23 @@ const CLOUD_MID_ALTITUDE_OFFSET_M: f32 = 1600.0;
 // High ice clouds remain sunlit after the lower liquid decks enter shadow.
 const CLOUD_HIGH_ALTITUDE_OFFSET_M: f32 = 7000.0;
 
-fn cloud_layer_bounds() -> CloudLayerBounds {
+// Cloud geometry follows the 30.6 km game planet, independently of the
+// Earth-sized optical scattering model. Preserve clearance above mountains,
+// then compress convection and ice layers with one monotone map shared by
+// density, culling, shadows and temporal reconstruction.
+fn cloud_atmospheric_height(height: f32) -> f32 {
+    if cam.planet[0].w > 0.5 && cam.planet[0].w < 1.5 {
+        return min(height, 680.0) + clamp(height - 680.0, 0.0, 920.0) * 0.40
+            + max(height - 1600.0, 0.0) * 0.18;
+    }
+    return height;
+}
+
+fn cloud_horizontal_scale() -> f32 {
+    return select(1.0, 0.58, cam.planet[0].w > 0.5 && cam.planet[0].w < 1.5);
+}
+
+fn cloud_unscaled_layer_bounds() -> CloudLayerBounds {
     var b: CloudLayerBounds;
 
     // Conservative superset of cell_low/mid/high_aabb, before the altitude
@@ -80,6 +96,13 @@ fn cloud_layer_bounds() -> CloudLayerBounds {
     return b;
 }
 
+fn cloud_layer_bounds() -> CloudLayerBounds {
+    let b = cloud_unscaled_layer_bounds();
+    return CloudLayerBounds(
+        cloud_atmospheric_height(b.low_base), cloud_atmospheric_height(b.low_top),
+        cloud_atmospheric_height(b.mid_base), cloud_atmospheric_height(b.mid_top),
+        cloud_atmospheric_height(b.high_base), cloud_atmospheric_height(b.high_top));
+}
 
 struct CellAABB {
     y_min : f32,

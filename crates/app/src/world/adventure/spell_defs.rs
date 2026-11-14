@@ -8,79 +8,30 @@
 use super::*;
 pub mod card;
 
-/// What a spell is, for the evaluator and the wand palette.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Class {
-    /// Fires a bolt that flies and impacts.
-    Projectile,
-    /// A card that changes the next bolt, or the deck's control flow.
-    Modifier,
-    /// A growth or summon effect delivered by a Touch or a trigger.
-    Effect,
-    /// Utility casts, delivery cards and the empty slot.
-    Other,
-}
-
-/// What a wand must be (or what rare magic must be found) to hold a spell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Unlock {
-    /// Any wand.
-    FirstWand,
-    /// A second-tier wand, or any rare-magic progress.
-    SecondWandOrRare,
-    /// A third-tier wand, or two rare-magic discoveries.
-    ThirdWandOrTwoRare,
-    /// Only the spell's own rare-magic bit (reliquary spells).
-    RareBit,
-    /// Never holdable: the empty slot.
-    Never,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SpellDef {
-    pub id: u32,
-    #[serde(deserialize_with = "leak")]
-    pub name: &'static str,
-    /// Badge shown on the hover card ("PROJECTILE", "MODIFIER", ...).
-    #[serde(deserialize_with = "leak")]
-    pub tag: &'static str,
-    pub color: [f32; 3],
-    pub cost: f32,
-    pub cooldown: f32,
-    pub cast_delay: f32,
-    pub recharge: f32,
-    pub spread: f32,
-    pub damage: f32,
-    pub speed: f32,
-    pub audio: (Cue, f32),
-    pub class: Class,
-    pub unlock: Unlock,
-}
+pub use engine_content::spells::{Class, Palette, Unlock};
+pub type SpellDef = engine_content::spells::SpellDef<Cue, &'static str>;
 
 /// Shown for ids that are not in the table.
 const UNKNOWN_HINT: &str = "Empty wand slot.";
 
+/// A validated draft table that replaces the compiled one. Only the dev
+/// panel's headless Wand Lab sets it, before anything reads `SPELLS`.
+pub static SPELLS_OVERRIDE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
 /// Every spell, sorted by id, loaded once from `assets/spells.ron`.
 pub static SPELLS: std::sync::LazyLock<Vec<SpellDef>> = std::sync::LazyLock::new(|| {
-    let spells: Vec<SpellDef> = ron::from_str(SPELLS_RON)
-        .unwrap_or_else(|error| panic!("assets/spells.ron: {error}"));
-    for spell in &spells {
-        assert!(card::description(spell.id).is_some(), "missing spell_{} in assets/descriptions.ron", spell.id);
-    }
-    spells
+    engine_content::spells::parse::<Cue>(SPELLS_OVERRIDE.get().copied().unwrap_or(SPELLS_RON))
+        .unwrap_or_else(|errors| panic!("assets/spells.ron: {errors:?}"))
+        .into_iter()
+        .map(engine_content::spells::SpellDef::into_runtime)
+        .collect()
 });
 const SPELLS_RON: &str = include_str!("../../../../../assets/spells.ron");
 #[cfg(test)]
-const SPELLS_HEADER: &str = "// The spell table. One entry per spell, sorted by id; ids 0-95 fit the save format.
+const SPELLS_HEADER: &str = "// The spell table. One entry per spell, sorted by id.
 // Edit here, not in Rust. `cargo test spells_ron_round_trips` checks the format.
 // color is linear RGB; audio is (cue, gain); class and unlock are enum names from spell_defs.rs.
 ";
-
-/// Table strings live for the whole run; leaking them once keeps `SpellDef` a
-/// plain `Copy` row with `&'static str` fields.
-fn leak<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
-    <String as serde::Deserialize>::deserialize(d).map(|s| &*Box::leak(s.into_boxed_str()))
-}
 
 /// The row for a spell id, if it has one.
 pub fn def(id: u32) -> Option<&'static SpellDef> {
@@ -168,7 +119,8 @@ pub fn spell_available(spell: u32, wand: u32, rare: u32) -> bool {
         Unlock::FirstWand => wand >= 1,
         Unlock::SecondWandOrRare => wand >= 2 || rare != 0,
         Unlock::ThirdWandOrTwoRare => wand >= 3 || rare.count_ones() >= 2,
-        Unlock::RareBit => rare & (1 << spell) != 0,
+        Unlock::ThirdWand => wand >= 3,
+        Unlock::RareBit => rare.checked_shr(spell).is_some_and(|bits| bits & 1 != 0),
         Unlock::Never => false,
     }
 }
@@ -226,7 +178,7 @@ mod tests {
 
     #[test]
     fn unknown_ids_fall_back_to_the_documented_defaults() {
-        for id in [33, 95, 4000] {
+        for id in (0..=MAX_SPELL_ID + 1).filter(|id| def(*id).is_none()).chain([4000]) {
             assert!(def(id).is_none());
             assert_eq!(spell_name(id), "Unknown spell");
             assert_eq!(spell_class(id), Class::Other);

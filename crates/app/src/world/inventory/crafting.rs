@@ -105,12 +105,15 @@ impl SurvivalInventory {
         if !fits || !owned || self.craft_grid.iter().any(Option::is_some) {
             return false;
         }
+        // Withdrawals search the grid before the cursor; publish only after all inputs are removed.
+        let mut staged = [None; CRAFT_SLOTS];
         for (i, item, count) in cells {
             if !self.remove_item(item, count) {
                 return false;
             }
-            self.craft_grid[i] = Some(ItemStack { item, count });
+            staged[i] = Some(ItemStack { item, count });
         }
+        self.craft_grid = staged;
         true
     }
 
@@ -192,6 +195,22 @@ mod tests {
     }
 
     #[test]
+    fn bench_crafts_a_wooden_axe_and_shovel_from_planks() {
+        let mut inv = SurvivalInventory::empty();
+        inv.hotbar[0] = Some(ItemStack::new(Item::Block(BlockId::Planks), 16));
+        let axe = recipe("Wooden axe");
+        assert!(axe.needs_bench());
+        assert!(!inv.place_recipe(axe, false, 1));
+        assert!(inv.place_recipe(axe, true, 1));
+        assert_eq!(inv.craft_from_grid(true, true), Some(ItemStack::new(Item::Tool(12), 1)));
+        assert_eq!(inv.count_item(Item::Block(BlockId::Planks)), 12);
+        let shovel = recipe("Wooden shovel");
+        assert!(inv.place_recipe(shovel, true, 1));
+        assert_eq!(inv.craft_from_grid(true, true), Some(ItemStack::new(Item::Tool(15), 1)));
+        assert_eq!(inv.count_item(Item::Block(BlockId::Planks)), 9);
+    }
+
+    #[test]
     fn shaped_recipe_matches_anywhere_and_mirrored() {
         let torch = recipe("Torch (Coal)").shape().unwrap();
         let mut inv = SurvivalInventory::empty();
@@ -257,3 +276,7 @@ mod tests {
         assert_eq!(inv.matching_grid_recipe(true).map(|(r, _)| r.name), Some(kit.name));
     }
 }
+
+#[cfg(test)]
+#[path = "crafting_staging_tests.rs"]
+mod staging_tests;

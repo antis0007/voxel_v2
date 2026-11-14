@@ -8,6 +8,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+mod liveness;
+
 static AUTOSAVE: AtomicBool = AtomicBool::new(true);
 static INTERVAL: AtomicUsize = AtomicUsize::new(30);
 pub fn autosave_enabled() -> bool {
@@ -37,11 +39,13 @@ struct Job {
     footer: Vec<u8>,
     activity: super::super::activity::Snapshot,
     rules: super::super::rules::Rules,
-    farming: Vec<u8>,
-    blocks: Vec<u8>,
-    travel: Vec<u8>,
     progression: Vec<u8>,
+    stats: Vec<u8>,
+    goals: Vec<u8>,
+    gates: Vec<u8>,
+    lightless: Vec<u8>,
     manual: bool,
+    publish_slot: bool,
     id: u64,
 }
 enum Work {
@@ -64,6 +68,7 @@ pub struct SaveService {
     active: bool,
     pending: bool,
     manual: bool,
+    publish_slot: bool,
     applying: Option<Completed>,
     session: Option<PathBuf>,
     next_due: Instant,
@@ -73,6 +78,11 @@ pub struct SaveService {
     pub failed: bool,
 }
 impl SaveService {
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn resident() -> Self {
+        Self { publish_slot: false, ..Self::new() }
+    }
+
     pub fn new() -> Self {
         let (tx, jobs) = mpsc::sync_channel::<Work>(1);
         let (done, rx) = mpsc::sync_channel(1);
@@ -116,6 +126,7 @@ impl SaveService {
             active: false,
             pending: false,
             manual: false,
+            publish_slot: true,
             applying: None,
             session: None,
             next_due: Instant::now(),
@@ -137,6 +148,10 @@ impl SaveService {
     pub fn busy(&self) -> bool {
         self.active || self.pending || self.applying.is_some()
     }
+    pub(crate) fn diagnostic_state(&self) -> String {
+        format!("active={} pending={} applying={} status={:?}", self.active, self.pending,
+            self.applying.as_ref().map_or(0, |done| done.changed.len()), self.status)
+    }
     /// Called from AboutToWait, including while minimized. Acknowledgements are
     /// incremental so a large compacted index cannot monopolize a frame.
     pub fn tick(&mut self, mut world: Option<&mut World>, player: &Player, day: &DayNightCycle) {
@@ -153,10 +168,12 @@ impl SaveService {
                 }
                 Ok(Finished::Collected(result)) => {
                     self.active = false;
+                    self.next_collect = Instant::now() + Duration::from_secs(1);
                     if let Err(e) = result {
                         self.next_collect = Instant::now() + Duration::from_secs(30);
                         eprintln!("Region reclamation deferred: {e:#}");
                     }
+                    return;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.active = false;
@@ -190,6 +207,8 @@ impl SaveService {
                 self.active = false;
                 self.failed = false;
                 self.next_due = Instant::now() + Duration::from_secs(autosave_seconds() as u64);
+                self.next_collect = Instant::now() + Duration::from_secs(1);
+                return;
             }
         }
         let Some(w) = world else {
@@ -219,6 +238,7 @@ impl SaveService {
             return;
         }
         let result = (|| -> Result<Option<Job>> {
+            super::super::farming::jobs::activity::flush(w);
             let header = session_header(w, player, day)?;
             let footer = session_footer(w, super::SAVE_VERSION);
             let Some(edits) = w.capture_edits()? else {
@@ -230,11 +250,13 @@ impl SaveService {
                 footer,
                 activity: w.activity.snapshot(),
                 rules: w.rules,
-                farming: super::super::farming::sidecar::encode(w),
-                blocks: super::super::block_data::sidecar::encode(&w.block_data),
-                travel: super::super::travel::sidecar::encode(&w.travel),
                 progression: super::super::progression::sidecar::encode(&w.progression, &w.inventory),
+                stats: super::super::stats::sidecar::encode(&w.stats),
+                goals: super::super::goals::sidecar::encode(&w.goals.completed),
+                gates: super::super::portals::sidecar::encode(&w.portals),
+                lightless: super::super::lightless_life::encode(&w.lightless),
                 manual: self.manual,
+                publish_slot: self.publish_slot,
                 id: id(),
             }))
         })();
@@ -293,39 +315,18 @@ fn persist(job: Job) -> Result<Completed> {
     let commits = view.root.join("checkpoints");
     fs::create_dir_all(&commits)?;
     job.rules.save(&view.root)?;
-    super::super::farming::sidecar::save(&view.root, &job.farming)?;
-    super::super::block_data::sidecar::save(&view.root, &job.blocks)?;
-    super::super::travel::sidecar::save(&view.root, &job.travel)?;
+    // Residents and travel are in the checksummed manifest with block inventories.
+    // Do not overwrite legacy sidecars: older checkpoints must remain recoverable.
     super::super::progression::sidecar::save(&view.root, &job.progression)?;
+    super::super::stats::sidecar::save(&view.root, &job.stats)?;
+    super::super::goals::sidecar::save(&view.root, &job.goals)?;
+    super::super::portals::sidecar::save(&view.root, &job.gates)?;
+    super::super::lightless_life::save(&view.root, &job.lightless)?;
     let commit = commits.join(format!("commit-{:020}.vxw", job.id));
     write_atomic(&commit, &bytes, job.id)?;
-    let slot = if job.manual {
-        quicksave_path()
-    } else {
-        autosave_path()
-    };
-    // Slots are discovery pointers. Immutable per-world commits remain durable
-    // even if slot replacement is interrupted or another process publishes later.
-    let slot_lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(save_directory().join(".checkpoint-lock"))
-        .with_context(|| format!("Cannot open save lock in {}", save_directory().display()))?;
-    slot_lock.lock()?;
-    if read_manifest(&slot)
-        .ok()
-        .and_then(|b| commit_id(&b))
-        .unwrap_or(0)
-        < job.id
-    {
-        if let Ok(old) = read_manifest(&slot) {
-            write_atomic(&previous(&slot), &old, id())?;
-        }
-        write_atomic(&slot, &bytes, id())?;
+    if job.publish_slot {
+        publish_slot(job.manual, job.id, &bytes)?;
     }
-    drop(slot_lock);
     // Retention only removes manifests. Data collection happens on safe reopen.
     let mut retained = checkpoint_paths(&commits);
     retained.sort_by(|a, b| b.cmp(a));
@@ -343,7 +344,33 @@ fn persist(job: Job) -> Result<Completed> {
         },
     })
 }
-fn checkpoint_paths(dir: &Path) -> Vec<PathBuf> {
+
+fn publish_slot(manual: bool, serial: u64, bytes: &[u8]) -> Result<()> {
+    let slot = if manual { quicksave_path() } else { autosave_path() };
+    // Slots are discovery pointers. Immutable per-world commits remain durable
+    // even if slot replacement is interrupted or another process publishes later.
+    let slot_lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(save_directory().join(".checkpoint-lock"))
+        .with_context(|| format!("Cannot open save lock in {}", save_directory().display()))?;
+    slot_lock.lock()?;
+    if read_manifest(&slot)
+        .ok()
+        .and_then(|b| commit_id(&b))
+        .unwrap_or(0)
+        < serial
+    {
+        if let Ok(old) = read_manifest(&slot) {
+            write_atomic(&previous(&slot), &old, id())?;
+        }
+        write_atomic(&slot, bytes, id())?;
+    }
+    Ok(())
+}
+pub(super) fn checkpoint_paths(dir: &Path) -> Vec<PathBuf> {
     fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -351,13 +378,13 @@ fn checkpoint_paths(dir: &Path) -> Vec<PathBuf> {
         .filter(|p| {
             p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
                 n.starts_with("commit-")
-                    && n.ends_with(".vxw")
+                    && (n.ends_with(".vxw") || n.ends_with(".vxs"))
                     && n[7..n.len() - 4].parse::<u64>().is_ok()
             })
         })
         .collect()
 }
-fn read_manifest(path: &Path) -> Result<Vec<u8>> {
+pub(super) fn read_manifest(path: &Path) -> Result<Vec<u8>> {
     let file = fs::File::open(path)?;
     ensure!(
         file.metadata()?.len() <= MAX_FILE_BYTES,
@@ -376,7 +403,8 @@ fn read_manifest(path: &Path) -> Result<Vec<u8>> {
     );
     Ok(bytes)
 }
-fn commit_id(bytes: &[u8]) -> Option<u64> {
+pub(super) fn commit_id(bytes: &[u8]) -> Option<u64> {
+    let bytes = super::session::world_bytes(bytes).ok()?;
     if save_version(bytes).ok()? < 5 {
         return None;
     }
@@ -388,6 +416,7 @@ fn commit_id(bytes: &[u8]) -> Option<u64> {
     ))
 }
 fn references(bytes: &[u8]) -> Result<(String, HashSet<(IVec3, u64)>)> {
+    let bytes = super::session::world_bytes(bytes)?;
     let version = save_version(bytes)?;
     let five = version >= 5;
     if version < 3 {
@@ -395,7 +424,7 @@ fn references(bytes: &[u8]) -> Result<(String, HashSet<(IVec3, u64)>)> {
     }
     let mut d = Decoder {
         bytes: &bytes[..bytes.len() - 8],
-        offset: if version >= 12 { 176 } else { 164 },
+        offset: super::identity_offset(bytes, version)?,
     };
     let len = d.u32()? as usize;
     ensure!((1..=96).contains(&len), "Invalid world identity");
@@ -495,13 +524,14 @@ impl Reclaimer {
         view.ensure_owner()?;
         // Lock discovery pointers until unlink finishes. A concurrent publisher
         // cannot add a retained reference between the mark and sweep.
+        let directory = view.root.parent().and_then(Path::parent).context("Invalid checkpoint storage root")?;
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
-            .open(save_directory().join(".checkpoint-lock"))
-            .with_context(|| format!("Cannot open save lock in {}", save_directory().display()))?;
+            .open(directory.join(".checkpoint-lock"))
+            .with_context(|| format!("Cannot open save lock in {}", directory.display()))?;
         if let Err(e) = lock.try_lock() {
             return match e {
                 std::fs::TryLockError::WouldBlock => Ok(Default::default()),
@@ -509,12 +539,15 @@ impl Reclaimer {
             };
         }
         let mut paths = checkpoint_paths(&view.root.join("checkpoints"));
-        for slot in [quicksave_path(), autosave_path()] {
+        for slot in [directory.join("quicksave.vxw"), directory.join("autosave.vxw")] {
             for path in [slot.clone(), previous(&slot)] {
                 if path.is_file() {
                     paths.push(path);
                 }
             }
+        }
+        for slot in super::session::slots(directory) {
+            if slot.is_file() { paths.push(slot); }
         }
         let mut refs = Vec::new();
         let mut seen = HashSet::new();

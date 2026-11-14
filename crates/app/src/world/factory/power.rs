@@ -4,33 +4,106 @@
 //! units. One unit is 250 J, which makes the bookkeeping read directly in SI:
 //! a flow of one unit per tick is exactly 1 kW, and 14.4 units are 1 Wh.
 //! Every number the interface shows (W, kW, Wh, kWh) comes from here.
-use super::{Factory, Kind};
+use super::{Factory, Kind, World};
+use crate::world::{BlockId, chunk_coord_from_world_block};
 use glam::IVec3;
 
 pub const JOULES_PER_UNIT: f64 = 250.0;
-pub const TICK_SECONDS: f64 = 0.25;
+pub const TICK_SECONDS: f64 = 1.0 / engine_content::fabrication::TICKS_PER_SECOND as f64;
 /// Units in one watt-hour (3600 J / 250 J).
 pub const UNITS_PER_WH: f64 = 3600.0 / JOULES_PER_UNIT;
 /// Every consumer keeps a small local buffer it fills from the grid.
-pub const CONSUMER_BUFFER: u32 = 64;
+pub use engine_content::fabrication::CONSUMER_BUFFER;
 /// Generator output buffer (500 kJ).
 pub const GENERATOR_BUFFER: u32 = 2000;
 
-/// Battery capacity by tier: 1 kWh, 4 kWh, 16 kWh.
-pub fn battery_capacity(tier: u32) -> u32 {
-    (UNITS_PER_WH * 1000.0) as u32 * 4u32.pow(tier.min(2))
+const THERMOELECTRIC_MODE: u32 = 3;
+const WATERWHEEL_MODE: u32 = 4;
+/// Mode 5 is the boiler. A hedron tap draws on a captured mana hedron beside it.
+const HEDRON_TAP_MODE: u32 = 6;
+
+pub fn passive_rating(mode: u32) -> Option<u32> {
+    match mode {
+        THERMOELECTRIC_MODE => Some(8),
+        WATERWHEEL_MODE => Some(6),
+        HEDRON_TAP_MODE => Some(6),
+        _ => None,
+    }
 }
 
-/// Charge and discharge limit per tick by tier: 4 kW, 16 kW, 64 kW.
+pub(super) fn sample_passive(world: &World, p: IVec3, size: i32, mode: u32) -> (u32, &'static str) {
+    if mode == HEDRON_TAP_MODE {
+        let centre = (p.as_vec3() + glam::Vec3::splat(size as f32 * 0.5)) * world.voxel_scale.meters();
+        let fed = crate::world::adventure::hedrons::feeds(world, centre);
+        return (if fed { 6 } else { 0 }, "Needs a captured hedron within 8 m");
+    }
+    let known = |q| world.chunks.contains_key(&chunk_coord_from_world_block(q));
+    let mid = size / 2;
+    let sides = [
+        (IVec3::new(-1, mid, mid), IVec3::new(size, mid, mid)),
+        (IVec3::new(mid, mid, -1), IVec3::new(mid, mid, size)),
+    ];
+    let mut waiting = false;
+    let mut rate: u32 = 0;
+    for (a, b) in sides {
+        let (a, b) = (p + a, p + b);
+        if mode == THERMOELECTRIC_MODE {
+            if !known(a) || !known(b) {
+                waiting = true;
+                continue;
+            }
+            match (world.get(a), world.get(b)) {
+                (BlockId::Lava, BlockId::Ice) | (BlockId::Ice, BlockId::Lava) => rate += 4,
+                (BlockId::Lava, BlockId::Water) | (BlockId::Water, BlockId::Lava) => rate += 2,
+                _ => {}
+            }
+        } else {
+            for intake in [a, b] {
+                let drop = intake - IVec3::Y;
+                if !known(intake) || !known(drop) {
+                    waiting = true;
+                    continue;
+                }
+                // A drop with free capacity distinguishes a spillway from a pool.
+                if !world.get(drop).is_solid() && world.water_fill(drop) < 0.75 {
+                    rate = rate.max((world.water_fill(intake) * 6.0).floor() as u32);
+                }
+            }
+        }
+    }
+    let idle = if waiting {
+        "Waiting for world data"
+    } else if mode == THERMOELECTRIC_MODE {
+        "Needs opposite hot and cold faces"
+    } else {
+        "Needs water over a free drop"
+    };
+    (rate.min(passive_rating(mode).unwrap_or(0)), idle)
+}
+
+pub const MITHRIL_TIER: u32 = 3;
+pub const MITHRIL_MIN_TIER: u32 = 1;
+
+pub fn accepts_mithril(tier: u32) -> bool {
+    (MITHRIL_MIN_TIER..MITHRIL_TIER).contains(&tier)
+}
+
+/// Battery capacity by tier: 1, 4, 16 and 64 kWh.
+pub fn battery_capacity(tier: u32) -> u32 {
+    (UNITS_PER_WH * 1000.0) as u32 * 4u32.pow(tier.min(MITHRIL_TIER))
+}
+
+/// Charge and discharge limit by tier: 4, 16, 64 and 256 kW.
 pub fn battery_rate(tier: u32) -> u32 {
-    4 * 4u32.pow(tier.min(2))
+    4 * 4u32.pow(tier.min(MITHRIL_TIER))
 }
 
 pub fn battery_tier_name(tier: u32) -> &'static str {
     match tier {
-        0 => "Lead-acid",
-        1 => "Nickel-iron",
-        _ => "Resonant cell",
+        0 => "Copper cell",
+        1 => "Bronze cell",
+        2 => "Resonant cell",
+        _ => "Mithril cell",
     }
 }
 
@@ -99,14 +172,15 @@ pub const MAX_COMBUSTION_BURN: u32 = 800;
 /// Battery behaviour, stored in `Node::mode`.
 pub const BATTERY_MODES: [&str; 4] = [
     "Balanced: stores surplus and covers shortfalls",
-    "Charge only: holds a reserve, never discharges",
-    "Discharge only: drains into the grid, never charges",
+    "Charge only: charges from generators or discharge-only banks",
+    "Discharge only: feeds machines and charge-only banks",
     "Mana font: within 6 m, turns stored charge into the wielder's mana",
 ];
 
 
 /// Measured state of one cable network, refreshed every tick.
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct NetStats {
     /// Units generated this tick (kW).
     pub generation: u32,
@@ -290,10 +364,10 @@ impl Factory {
                     continue;
                 }
                 let cap = self.pool_limits(s.pool).0;
-                let left = allowance.get_mut(&s.pool).unwrap();
+                let reserve = self.nodes[&port].kind == Kind::Battery && self.nodes[&port].mode == 1;
                 let mut room = cap
                     .saturating_sub(self.nodes[&s.pool].energy)
-                    .min(*left)
+                    .min(allowance[&s.pool])
                     .min(budget);
                 for g in &ports {
                     if room == 0 {
@@ -306,11 +380,38 @@ impl Factory {
                     let transfer = room.min(source.energy);
                     source.energy -= transfer;
                     room -= transfer;
-                    *left -= transfer;
+                    *allowance.get_mut(&s.pool).unwrap() -= transfer;
                     budget -= transfer;
                     self.nodes.get_mut(&s.pool).unwrap().energy += transfer;
                     self.stats.storage(transfer, true, self.nodes[&s.pool].kind == Kind::Transformer);
                     self.nodes.get_mut(&port).unwrap().flow += transfer as i32;
+                    moved |= transfer > 0;
+                }
+                // Explicit reserve transfers happen after loads and generator surplus.
+                // Only discharge-only banks can feed charge-only banks, so no cycle forms.
+                if !reserve {
+                    continue;
+                }
+                for &(donor, _) in &stores {
+                    if room == 0 {
+                        break;
+                    }
+                    let source = self.nodes.get_mut(&donor).unwrap();
+                    if source.kind != Kind::Battery || source.mode != 2 {
+                        continue;
+                    }
+                    let transfer = room.min(source.energy).min(allowance[&donor]);
+                    source.energy -= transfer;
+                    source.flow -= transfer as i32;
+                    let dest = self.nodes.get_mut(&s.pool).unwrap();
+                    dest.energy += transfer;
+                    dest.flow += transfer as i32;
+                    *allowance.get_mut(&donor).unwrap() -= transfer;
+                    *allowance.get_mut(&s.pool).unwrap() -= transfer;
+                    self.stats.storage(transfer, false, false);
+                    self.stats.storage(transfer, true, false);
+                    budget -= transfer;
+                    room -= transfer;
                     moved |= transfer > 0;
                 }
             }
@@ -338,8 +439,8 @@ impl Factory {
             net.throughput = cable_capacity(net.tier) - budget;
             self.stats.delivery(net.load);
             if moved {
-                for c in self.power[ni].conduits.clone() {
-                    self.nodes.get_mut(&c).unwrap().activity = 1.0;
+                for c in &self.power[ni].conduits {
+                    self.nodes.get_mut(c).unwrap().activity = 1.0;
                 }
             }
             stats.push(net);

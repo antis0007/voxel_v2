@@ -3,24 +3,26 @@
 mod collar_contract;
 mod quality;
 pub(crate) mod collar;
+pub(crate) mod collar_set;
 mod batches;
 pub mod clip;
 mod edits;
 mod pages;
 mod reference;
 mod upload;
-mod vegetation;
+pub(super) mod vegetation;
+mod structures;
 mod refinement;
 mod water;
 mod fine;
 mod columns;
-mod parallel;
+pub(super) mod parallel;
 pub(crate) mod detail;
 use crate::mesh::{ChunkMesh, Vertex3};
 use crate::world::{WorldSampleConfig, distant_surface};
 use glam::{IVec3, Vec3};
 use super::coverage::ResidentCoverage;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -33,7 +35,7 @@ pub const FAR_PLANE: f32 = 24576.0;
 /// Smallest distant range the settings offer. Below the ordinary view radius
 /// there is nothing left for the horizon to cover.
 pub const MIN_HORIZON_RANGE_M: u32 = 2048;
-static HORIZON_RANGE_M: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(FAR_PLANE as u32);
+static HORIZON_RANGE_M: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(4096);
 
 /// Distance in metres out to which the distant terrain mesh is built. Every
 /// sample and triangle beyond it is skipped, so cost falls with its square.
@@ -87,7 +89,9 @@ fn retry_wait(streak: u32) -> Duration {
 // resident chunk stream. No second completed build can queue behind an upload.
 // Raised from 160 MiB for the fine rings (about 56 MB more terrain at the audit
 // vista), so vegetation keeps every tree beside them.
-const MAX_MESH_BYTES: usize = 192 * 1024 * 1024;
+// Procedural geometry retains its original representation/admission. Enlarged
+// publication capacity belongs only to exact replacements and packing overhead.
+const MAX_MESH_BYTES: usize = budget::BASE_LIMIT;
 
 fn mesh_bytes(mesh: &ChunkMesh) -> usize {
     mesh.vertices.len() * std::mem::size_of::<Vertex3>() + mesh.indices.len() * 4
@@ -136,6 +140,8 @@ type Samples = HashMap<(i32, i32), (f32, crate::world::BlockId, u8)>;
 
 #[derive(Clone)]
 struct BaseCover {
+    startup: bool,
+    clip: Option<clip::ChartClip>,
     quality:Arc<Vec<quality::Candidate>>,
     refinement_eye: Vec3,
     projection_pixels: f32,
@@ -149,11 +155,31 @@ struct BaseCover {
     // Per-pixel distant-terrain detail for this centre. Built with the base,
     // so edit rebuilds reuse it.
     detail: Option<Arc<detail::DetailMap>>,
+    // Midpoints this base meshed; the next base keeps them at the lower retire bar.
+    refined: Arc<HashSet<(i32, i32)>>,
+}
+
+mod budget;
+
+type BaseKey = (bool, (i32,i32), u32, Option<clip::ChartClip>, u32, u32);
+impl BaseCover {
+    fn key(&self) -> BaseKey {
+        (self.startup,self.center,self.range_m,self.clip,self.projection_pixels.to_bits(),self.refinement_eye.y.to_bits())
+    }
+}
+fn matching_base_capacity(key:BaseKey,candidates:impl Iterator<Item=(BaseKey,usize)>)->usize {
+    candidates.filter(|(candidate,_)|*candidate==key).map(|(_,bytes)|bytes).max().unwrap_or(0)
+}
+fn mesh_capacity_bytes(mesh: &ChunkMesh) -> usize {
+    mesh.vertices.capacity().saturating_mul(std::mem::size_of::<Vertex3>())
+        .saturating_add(mesh.indices.capacity().saturating_mul(std::mem::size_of::<u32>()))
 }
 
 enum BuildEvent {
+    BudgetExhausted,
+    PublicationPressure(budget::Denied),
     Base(BaseCover),
-    Complete(Vec<pages::Page>, Samples, edits::Omitted),
+    Complete(Vec<pages::Page>, Arc<Samples>, edits::Omitted, usize),
 }
 pub struct GpuMesh {
     pub collared:bool,
@@ -171,13 +197,15 @@ pub struct GpuPage {
 /// its snapshot: allocator reuse must not make Arc-based edit identities equal.
 #[derive(Clone)]
 struct BuildTarget {
-    collar:Option<Arc<collar::Input>>,
+    startup: bool,
+    collar:Option<Arc<collar_set::Set>>,
     refinement_eye_y: f32,
     projection_pixels: f32,
     range_m: u32,
     center: (i32, i32),
     request_generation: u64,
     source_revision: u64,
+    publication_limit: usize,
     fingerprint: u64,
     snapshot: crate::world::WorldSnapshot,
     eye: Vec3,
@@ -186,7 +214,7 @@ struct BuildTarget {
     coverage: Arc<ResidentCoverage>,
     /// Globe face rect the fine rings stay inside.
     clip: Option<clip::ChartClip>,
-    validation: std::cell::RefCell<[Option<ValidationMemo>;3]>,
+    validation: std::cell::RefCell<[Option<ValidationMemo>;2]>,
 }
 
 #[derive(Clone)]
@@ -198,11 +226,26 @@ struct ValidationMemo {
     valid: bool,
 }
 
-fn same_collar(a:Option<&Arc<collar::Input>>,b:Option<&Arc<collar::Input>>)->bool {
-    match (a,b) {(None,None)=>true,(Some(a),Some(b))=>Arc::ptr_eq(a,b)||a.same_geometry(b),_=>false}
+fn same_collar(a:Option<&Arc<collar_set::Set>>,b:Option<&Arc<collar_set::Set>>)->bool {
+    collar_set::same(a,b)
 }
 
 impl BuildTarget {
+    fn base_key(&self) -> BaseKey {
+        (self.startup,self.center,self.range_m,self.clip,self.projection_pixels.to_bits(),self.refinement_eye_y.to_bits())
+    }
+    fn baked_column(&self, (x, z): (i32, i32)) -> bool {
+        let scale = self.snapshot.cfg.voxel_meters();
+        let center = Vec3::new(self.center.0 as f32, 0.0, self.center.1 as f32);
+        let lo = Vec3::new(x as f32 * 32.0, 0.0, z as f32 * 32.0);
+        let hi = lo + Vec3::new(32.0, 0.0, 32.0);
+        // Use the guaranteed inner footprint, not the speculative guard.
+        let far = ((lo.x * scale - center.x).abs().max((hi.x * scale - center.x).abs()))
+            .hypot((lo.z * scale - center.z).abs().max((hi.z * scale - center.z).abs()));
+        far <= self.range_m as f32
+            && !self.omitted.iter().any(|&(a, b)| a.x < hi.x && b.x > lo.x && a.z < hi.z && b.z > lo.z)
+    }
+
     #[cfg(test)]
     fn valid_for(&self, snapshot: &crate::world::WorldSnapshot) -> bool {
         self.valid_for_coverage(snapshot, self.eye, self.hidden_radius)
@@ -217,12 +260,8 @@ impl BuildTarget {
         self.valid_for_resident(snapshot, eye, hidden, &ResidentCoverage::default())
     }
     fn valid_for_resident(&self, snapshot: &crate::world::WorldSnapshot, eye: Vec3, hidden: f32, coverage: &ResidentCoverage) -> bool {
-        self.validate(snapshot,eye,hidden,coverage,false)
-    }
-    fn validate(&self, snapshot: &crate::world::WorldSnapshot, eye: Vec3, hidden: f32, coverage: &ResidentCoverage, scope_only: bool) -> bool {
-        let index=usize::from(scope_only);
         let eye_bits=eye.to_array().map(f32::to_bits);
-        if let Some(cached)=&self.validation.borrow()[index]
+        if let Some(cached)=&self.validation.borrow()[0]
             && cached.eye==eye_bits && cached.hidden==hidden.to_bits()
                 && cached.coverage.as_ref()==coverage
                 && cached.snapshot.cfg==snapshot.cfg
@@ -232,20 +271,29 @@ impl BuildTarget {
                 && Arc::ptr_eq(&cached.snapshot.regions.records,&snapshot.regions.records) { return cached.valid; }
         let valid=self.snapshot.cfg == snapshot.cfg
             && Arc::ptr_eq(&self.snapshot.regions.root, &snapshot.regions.root)
-            && (scope_only || !edits::changes_visible_resident(&self.snapshot, snapshot, eye, hidden, coverage))
+            && !edits::changes_visible_resident(&self.snapshot, snapshot, eye, hidden, coverage)
             && edits::scope_covers_resident(&self.omitted, snapshot, eye, hidden, coverage);
         // Holding these immutable Arcs also prevents allocator-address reuse
         // from turning an old memo key into a false match.
-        self.validation.borrow_mut()[index]=Some(ValidationMemo {snapshot:snapshot.clone(),eye:eye_bits,hidden:hidden.to_bits(),coverage:Arc::new(*coverage),valid});
+        self.validation.borrow_mut()[0]=Some(ValidationMemo {snapshot:snapshot.clone(),eye:eye_bits,hidden:hidden.to_bits(),coverage:Arc::new(*coverage),valid});
         valid
     }
     fn matches(&self, other: &Self) -> bool {
-        if !same_collar(self.collar.as_ref(),other.collar.as_ref()) {return false;}
-        if self.range_m != other.range_m || self.clip != other.clip || self.center != other.center || self.projection_pixels.to_bits() != other.projection_pixels.to_bits() || self.refinement_eye_y.to_bits() != other.refinement_eye_y.to_bits() { return false; }
+        same_collar(self.collar.as_ref(), other.collar.as_ref()) && self.matches_without_collar(other)
+    }
+
+    fn same_scene(&self, other: &Self) -> bool {
+        same_collar(self.collar.as_ref(), other.collar.as_ref()) && self.same_scene_without_collar(other)
+    }
+    fn matches_without_collar(&self, other: &Self) -> bool {
+        self.publication_limit == other.publication_limit && self.same_scene_without_collar(other)
+    }
+    fn same_scene_without_collar(&self, other: &Self) -> bool {
+        if self.startup != other.startup || self.range_m != other.range_m || self.clip != other.clip || self.center != other.center || self.projection_pixels.to_bits() != other.projection_pixels.to_bits() || self.refinement_eye_y.to_bits() != other.refinement_eye_y.to_bits() { return false; }
         // Desired targets are immutable between coalesced checks. Cache the
         // whole comparison, including the structural scan, across those frames.
         let eye_bits=other.eye.to_array().map(f32::to_bits);
-        if let Some(cached)=&self.validation.borrow()[2]
+        if let Some(cached)=&self.validation.borrow()[1]
             && cached.eye==eye_bits && cached.hidden==other.hidden_radius.to_bits()
                 && cached.coverage==other.coverage
                 && cached.snapshot.cfg==other.snapshot.cfg
@@ -258,7 +306,7 @@ impl BuildTarget {
             && !self.omitted.iter().any(|&(lo,hi)| self.coverage.contains_bounds(lo*scale,hi*scale,scale)
                 && !other.coverage.contains_bounds(lo*scale,hi*scale,scale))
             && self.valid_for_resident(&other.snapshot, other.eye, other.hidden_radius, &other.coverage);
-        self.validation.borrow_mut()[2]=Some(ValidationMemo {snapshot:other.snapshot.clone(),eye:eye_bits,
+        self.validation.borrow_mut()[1]=Some(ValidationMemo {snapshot:other.snapshot.clone(),eye:eye_bits,
             hidden:other.hidden_radius.to_bits(),coverage:other.coverage.clone(),valid});
         valid
     }
@@ -273,8 +321,8 @@ impl BuildTarget {
 
 #[derive(Default)]
 pub struct Horizon {
-    current_collar:Option<Arc<collar::Input>>,
-    collar_preferences:Vec<(i32,i32)>,
+    current_collar:Option<Arc<collar_set::Set>>,
+    collar_changed_at: Option<Instant>,
     collar_observation:Option<(u64,WorldSampleConfig,Arc<std::path::PathBuf>,Arc<ResidentCoverage>)>,
     quality_selector:quality::Selector,
     device_lost:Arc<AtomicBool>,
@@ -295,20 +343,29 @@ pub struct Horizon {
     active: Option<BuildTarget>,
     published: Option<BuildTarget>,
     failed: Option<(BuildTarget, Instant)>,
+    budget_exhausted: Option<BuildTarget>,
+    budget_exhausted_since: Option<Instant>,
+    budget_pressure: bool,
     // Consecutive failures of one target, used by `retry_wait`.
     failure_streak: Option<(BuildTarget, u32)>,
     pending: Option<mpsc::Receiver<BuildEvent>>,
-    // One immutable, bounded procedural mesh survives edit-stage cancellation.
-    // Geometry and sampling are independent of the mutable edit snapshot.
+    // Keep one previous center for reversals. Geometry and sampling are
+    // independent of the mutable edit snapshot.
     base: Option<BaseCover>,
+    previous_base: Option<BaseCover>,
     building_base: bool,
     upload: Option<upload::Upload>,
+    upload_limit: usize,
     // A canceled worker is retained until it exits. Repeated teleports cannot
     // create an unbounded set of detached builders, and update never joins live work.
     worker: Option<JoinHandle<()>>,
-    samples: Samples,
+    samples: Arc<Samples>,
     cancel: Arc<AtomicBool>,
     pub mesh: Option<GpuMesh>,
+    outgoing: Option<(GpuMesh, BuildTarget, Instant)>,
+    /// Set once this world has published a mesh; later rebuilds keep the
+    /// loader off while the far field is replaced.
+    loaded_this_world: bool,
     rejected_stale: u64,
     exclusion_radius: f32,
     resident: Arc<ResidentCoverage>,
@@ -330,24 +387,29 @@ impl Drop for Horizon {
 
 impl Horizon {
     pub fn collar_observation_current(&self,revision:u64,cfg:WorldSampleConfig,
-        root:&Arc<std::path::PathBuf>,coverage:&ResidentCoverage,mut preferred:impl ExactSizeIterator<Item=(i32,i32)>)->bool {
+        root:&Arc<std::path::PathBuf>,coverage:&ResidentCoverage)->bool {
         self.collar_observation.as_ref().is_some_and(|(r,c,p,v)|
             *r==revision && *c==cfg && Arc::ptr_eq(p,root) && v.as_ref()==coverage)
-            && self.collar_preferences.len()==preferred.len()
-            && preferred.all(|column|self.collar_preferences.binary_search(&column).is_ok())
     }
-    pub fn current_collar(&self)->Option<&Arc<collar::Input>> {self.current_collar.as_ref()}
-    pub fn set_collar_observation(&mut self,input:Option<Arc<collar::Input>>,revision:u64,
-        cfg:WorldSampleConfig,root:Arc<std::path::PathBuf>,coverage:ResidentCoverage,preferred:Vec<(i32,i32)>) {
+    pub fn current_collar(&self)->Option<&Arc<collar_set::Set>> {self.current_collar.as_ref()}
+
+    pub(super) fn collar_settled(&self, now: Instant) -> bool {
+        self.collar_changed_at.is_none_or(|changed| now.saturating_duration_since(changed) >= REBUILD_INTERVAL)
+    }
+    pub fn set_collar_observation(&mut self,input:Option<Arc<collar_set::Set>>,revision:u64,
+        cfg:WorldSampleConfig,root:Arc<std::path::PathBuf>,coverage:ResidentCoverage) {
         let source_changed=self.collar_observation.as_ref().is_none_or(|(_,c,r,_)|
             *c!=cfg || !Arc::ptr_eq(r,&root));
         let changed=source_changed || !same_collar(self.current_collar.as_ref(),input.as_ref());
         let coverage=self.collar_observation.as_ref().filter(|(_,_,_,v)|v.as_ref()==&coverage)
             .map_or_else(||Arc::new(coverage),|(_,_,_,v)|Arc::clone(v));
         self.current_collar=input;
-        self.collar_preferences=preferred;
         self.collar_observation=Some((revision,cfg,root,coverage));
-        if changed {self.checked_revision=None;self.last_check=None;}
+        if changed {
+            self.checked_revision = None;
+            self.last_check = None;
+            self.collar_changed_at = Some(Instant::now());
+        }
         self.refresh_collar_mode();
     }
     fn refresh_collar_mode(&mut self) {
@@ -356,10 +418,7 @@ impl Horizon {
             let Some(actual)=self.current_collar.as_ref() else {return false;};
             self.collar_observation.as_ref().is_some_and(|(_,cfg,root,coverage)|
                 *cfg==published.snapshot.cfg && Arc::ptr_eq(root,&published.snapshot.regions.root)
-                && expected.same_geometry(actual)
-                && coverage.contains_column(actual.column.0,actual.column.1)
-                && actual.unowned_columns().is_some_and(|neighbors|neighbors.into_iter()
-                    .all(|(x,z)|!coverage.contains_column(x,z))))
+                && expected.valid_for(actual,coverage))
         });
         if let Some(mesh)=self.mesh.as_mut() {
             let eligible=eligible && mesh.pages.iter().any(|p|p.batches.iter().any(|b|b.conditional()));
@@ -404,23 +463,16 @@ impl Horizon {
     /// publish: `Some(Some(map))` to upload, `Some(None)` to disable it.
     pub fn take_detail_update(&mut self) -> Option<Option<Arc<detail::DetailMap>>> { self.detail_update.take() }
     pub fn published_revision(&self) -> Option<u64> { self.published.as_ref().map(|p|p.source_revision) }
+    pub fn loaded_this_world(&self) -> bool { self.loaded_this_world }
     pub fn baked_columns(&self, columns: &[(i32,i32)]) -> std::collections::HashSet<(i32,i32)> {
-        let mut baked=std::collections::HashSet::new();
-        let Some(published)=&self.published else { return baked; };
-        let scale=published.snapshot.cfg.voxel_meters();
-        let center=Vec3::new(published.center.0 as f32,0.0,published.center.1 as f32);
-        for &(x,z) in columns {
-            let lo=Vec3::new(x as f32*32.0,0.0,z as f32*32.0);
-            let hi=lo+Vec3::new(32.0,0.0,32.0);
-            // Use the guaranteed inner footprint, not the speculative guard.
-            let far=((lo.x*scale-center.x).abs().max((hi.x*scale-center.x).abs()))
-                .hypot((lo.z*scale-center.z).abs().max((hi.z*scale-center.z).abs()));
-            if far>published.range_m as f32 { continue; }
-            if !published.omitted.iter().any(|&(a,b)|a.x<hi.x&&b.x>lo.x&&a.z<hi.z&&b.z>lo.z) {
-                baked.insert((x,z));
-            }
-        }
-        baked
+        let Some(published) = &self.published else { return Default::default(); };
+        columns.iter().copied().filter(|&column| published.baked_column(column)).collect()
+    }
+
+    pub(super) fn covers_streaming_column(&self, cfg: WorldSampleConfig, column: (i32, i32)) -> bool {
+        self.mesh.is_some() && self.published.as_ref().is_some_and(|target| {
+            target.snapshot.cfg == cfg && target.clip.is_none() && target.baked_column(column)
+        })
     }
     pub fn resident_coverage(&self) -> &ResidentCoverage { &self.resident }
     pub fn set_resident_coverage(&mut self, coverage: ResidentCoverage, desired: ResidentCoverage) {
@@ -441,8 +493,15 @@ impl Horizon {
         }
         // Active jobs may still be constructing their omission list. Keep the
         // already-ready edited columns captured by that immutable source view.
-        if let Some(active)=&self.active {
-            for q in active.snapshot.chunks.keys().chain(active.snapshot.regions.records.keys()) {
+        if let Some(active) = &self.active
+            && let [x, z, width, 1] = active.coverage.header
+        {
+            // Desired coverage is a dense local window. Query the saved index
+            // for that window instead of walking the entire save every frame.
+            let radius = width / 2;
+            let center = IVec3::new(x + radius, 0, z + radius);
+            let records = active.snapshot.regions.records.nearby(center, radius);
+            for q in active.snapshot.chunks.keys().chain(records) {
                 if active.coverage.contains_column(q.x,q.z) { result.push((q.x,q.z)); }
             }
         }
@@ -455,6 +514,33 @@ impl Horizon {
     }
     pub fn visibility(&self) -> f32 {
         if self.mesh.is_some() { 1.0 } else { 0.0 }
+    }
+    /// Staged and total pages of the upload in flight.
+    pub fn upload_pages(&self) -> Option<(usize, usize)> { self.upload.as_ref().map(upload::Upload::pages) }
+    /// True while the worker builds the base cover, before page meshing.
+    pub fn building_base(&self) -> bool { self.pending.is_some() && self.building_base }
+    fn retained_base_capacity(&self, key: BaseKey) -> usize {
+        // At most ONE exact base is reused. Shared Arcs/previous-base aliases
+        // are not summed; an upgrade or mismatched recipe gets no credit.
+        matching_base_capacity(key,self.base.iter().chain(self.previous_base.iter())
+            .map(|base|(base.key(),mesh_capacity_bytes(&base.mesh))))
+    }
+    pub fn budget_exhausted(&self) -> bool {
+        self.budget_exhausted.as_ref().is_some_and(|failed|
+            self.desired.as_ref().is_some_and(|desired| if self.budget_pressure {
+                failed.same_scene(desired)
+            } else { failed.matches(desired) }))
+    }
+    fn budget_exhausted_for_limit(&self, world: &crate::world::World, limit: usize) -> bool {
+        self.budget_exhausted() && self.config == Some(world.sample_config())
+            && self.source_root.as_ref().is_some_and(|root| Arc::ptr_eq(root, &world.regions.view.root))
+            && self.budget_exhausted.as_ref().is_some_and(|failed| self.budget_pressure || failed.publication_limit == limit)
+    }
+    pub fn budget_exhausted_for(&self, world: &crate::world::World) -> bool {
+        let retained=self.desired.as_ref().map_or(0,|target|self.retained_base_capacity(target.base_key()));
+        let decision=budget::choose(retained);
+        if self.budget_exhausted_since.is_some_and(|at| budget::telemetry_grace(decision.denial, at.elapsed())) { return false; }
+        self.budget_exhausted_for_limit(world, decision.limit)
     }
     pub fn work_stage(&self) -> &'static str {
         if self.upload.is_some() { "upload" } else if self.pending.is_some() { "build" } else { "idle" }
@@ -471,6 +557,7 @@ impl Horizon {
         revision: u64,
         eye: Vec3,
         hidden_radius: f32,
+        fast_start: bool,
     ) {
         static ENV_RANGE: std::sync::Once = std::sync::Once::new();
         // `VOXEL_HORIZON_RANGE_M` seeds the range for A/B captures with one exe.
@@ -483,17 +570,25 @@ impl Horizon {
         self.exclusion_radius = hidden_radius.max(0.0);
         if eye.is_finite() {
             let previous = self.refinement_eye_y.unwrap_or((eye.y/64.0).round()*64.0);
-            let next = if (eye.y-previous).abs() > 48.0 { (eye.y/64.0).round()*64.0 } else { previous };
+            let cfg = world.sample_config();
+            let sea = cfg.water_level() as f32 * cfg.voxel_meters();
+            let next = if refinement_eye_moved(previous, eye.y, sea) { (eye.y/64.0).round()*64.0 } else { previous };
             if self.refinement_eye_y != Some(next) {
                 self.refinement_eye_y = Some(next);
                 self.checked_revision = None;
                 self.last_check = None;
             }
         }
-        self.update_mesh(device, queue, world, revision, eye, hidden_radius, now);
+        self.update_mesh(device, queue, world, revision, eye, hidden_radius, now, fast_start);
+    }
+
+    pub(super) fn lod_transition(&self, now: Instant) -> Option<(&GpuMesh, u32)> {
+        let (mesh, _, started) = self.outgoing.as_ref()?;
+        Some((mesh, super::lod_transition_phase(*started, now)?))
     }
 
     pub fn clear_mesh(&mut self) {
+        self.outgoing = None;
         if self.mesh.is_some() { self.shadow_generation=self.shadow_generation.wrapping_add(1); }
         self.mesh = None;
         self.published = None;
@@ -509,7 +604,25 @@ impl Horizon {
         // with this one, and at most one CPU build is active per Horizon instance.
     }
 
+    fn stop_expanded_upload(&mut self, reason: budget::Denied) {
+        self.budget_exhausted = self.active.take();
+        self.budget_exhausted_since = Some(Instant::now());
+        self.budget_pressure = true;
+        self.pending = None;
+        self.upload = None; // Drops only unpublished pages; previous valid cover survives.
+        self.upload_limit = 0;
+        self.cancel.store(true, Ordering::Relaxed);
+        eprintln!("[horizon] publication_pressure_abort reason={} partial_pages_published=false", reason.label());
+    }
     fn advance_upload(&mut self,device:&wgpu::Device,queue:&wgpu::Queue,now:Instant)->bool {
+        // Also runs on the final advance immediately before publishing. The
+        // allowance stays immutable: pressure aborts, never shrinks a partial job.
+        if self.upload_limit > budget::BASE_LIMIT
+            && let Some(upload) = self.upload.as_ref()
+            && let Err(reason) = budget::upload_admission(self.upload_limit, upload.unallocated_gpu_bytes()) {
+            self.stop_expanded_upload(reason);
+            return false;
+        }
         match self.upload.as_mut().map(|upload|upload.advance(device,queue,&self.device_lost)) {
             Some(Ok(ready))=>{
                 if self.device_lost.load(Ordering::Acquire) {self.fail_active(now);false} else {ready}
@@ -559,8 +672,23 @@ impl Horizon {
         eye: Vec3,
         hidden_radius: f32,
         now: Instant,
+        fast_start: bool,
     ) {
         self.reap_worker();
+        // Pressure rejection is sticky for the same scene, even when dropping
+        // its own buffers restores apparent headroom or allowance oscillates.
+        // Only a materially different scene/root request can retry it.
+        if self.outgoing.as_ref().is_some_and(|(_, previous, started)| {
+            super::lod_transition_phase(*started, now).is_none()
+                || !previous.valid_for_resident(&world.snapshot(), eye, hidden_radius, &self.resident)
+        }) {
+            self.outgoing = None;
+        }
+        // Only a different world brings the loader back; the horizon rebuilds
+        // in place during play, and the far field should not hide gameplay.
+        if !self.source_root.as_ref().is_some_and(|root| Arc::ptr_eq(root, &world.regions.view.root)) {
+            self.loaded_this_world = false;
+        }
         let cfg = world.sample_config();
         if self.config != Some(cfg)
             || self
@@ -570,8 +698,9 @@ impl Horizon {
         {
             self.cancel_work();
             self.clear_mesh();
-            self.samples.clear();
+            self.samples = Arc::default();
             self.base = None;
+            self.previous_base = None;
             self.detail_center = None;
             self.detail_update = Some(None);
             self.config = Some(cfg);
@@ -579,6 +708,9 @@ impl Horizon {
             self.desired = None;
             self.failed = None;
             self.failure_streak = None;
+            self.budget_exhausted = None;
+            self.budget_exhausted_since = None;
+            self.budget_pressure = false;
             self.checked_revision = None;
             self.checked_eye = None;
             self.last_check = None;
@@ -633,12 +765,24 @@ impl Horizon {
         let eye_cell = eye.floor().as_ivec3();
         // One read per check, so the target and `checked_range` never disagree.
         let range_m = horizon_range_m();
+        // A moving player can lose the previous cover during a rebuild.
+        // Restore ground first, then fill in distant foliage as at startup.
+        let startup = fast_start && self.mesh.is_none();
         let changed_center = self
             .desired
             .as_ref()
             .is_none_or(|target| target.center != center);
-        let needs_check = changed_center
-            || self.desired.as_ref().is_some_and(|d| d.coverage != self.desired_resident)
+        // Do not reinterpret our own in-flight CPU pages as a new request's
+        // budget change. Pressure is checked with stage-aware remaining peaks;
+        // a new allowance is sampled once the current request releases ownership.
+        let projection_pixels=if self.refinement_projection_pixels>0.0 {self.refinement_projection_pixels} else {512.0};
+        let refinement_eye_y=self.refinement_eye_y.unwrap_or((eye.y/64.0).round()*64.0);
+        let key=(startup,center,range_m,self.chart_clip,projection_pixels.to_bits(),refinement_eye_y.to_bits());
+        let publication_limit=self.active.as_ref().map_or_else(
+            ||budget::choose(self.retained_base_capacity(key)).limit,|active|active.publication_limit);
+        let needs_check = self.desired.as_ref().is_some_and(|d| d.publication_limit != publication_limit)
+            || changed_center
+            || self.desired.as_ref().is_some_and(|d| d.startup != startup || d.coverage != self.desired_resident)
             || self.checked_eye != Some(eye_cell)
             || self.checked_radius != hidden_radius
             || self.checked_range != range_m
@@ -647,15 +791,11 @@ impl Horizon {
             || self
                 .last_check
                 .is_none_or(|last| now.saturating_duration_since(last) >= CHECK_INTERVAL);
-        // Proofs captured by the published mesh remain obligations while a
-        // replacement runs. Never expose an omitted edited volume after its
-        // resident owner/occluder disappears, even on a busy worker frame.
-        if self.published.as_ref().is_some_and(|ready| !ready.omitted.is_empty()
-            && !ready.validate(&world.snapshot(), eye, hidden_radius, &self.resident,true)) {
-            eprintln!("[horizon] published omission exposed; destination coverage required");
-            self.clear_mesh();
-            self.last_check = None;
-        }
+        // Keep the published terrain as fallback while the next build repairs
+        // exposed omissions. Dropping the entire cover for one missing patch
+        // leaves every unstreamed column blank. Replacement matching checks
+        // omission scope against the coalesced view below; upload still
+        // validates against the live view before taking ownership.
         if needs_check && check_due {
             let snapshot = world.snapshot();
             self.request_generation=self.request_generation.wrapping_add(1);
@@ -663,14 +803,16 @@ impl Horizon {
             // cannot cancel far work while resident GPU geometry owns them.
             let fingerprint = edits::visible_fingerprint(&snapshot, eye, 0.0);
             self.desired = Some(BuildTarget {
+                startup,
                 collar:self.collar_observation.as_ref().filter(|(_,c,r,_)|*c==cfg && Arc::ptr_eq(r,&world.regions.view.root))
                     .and(self.current_collar.clone()),
-                refinement_eye_y: self.refinement_eye_y.unwrap_or((eye.y/64.0).round()*64.0),
-                projection_pixels: if self.refinement_projection_pixels > 0.0 { self.refinement_projection_pixels } else { 512.0 },
+                refinement_eye_y,
+                projection_pixels,
                 range_m,
                 center,
                 request_generation:self.request_generation,
                 source_revision:revision,
+                publication_limit,
                 fingerprint,
                 snapshot,
                 eye,
@@ -718,12 +860,28 @@ impl Horizon {
         }
         if let Some(result) = self.pending.as_ref().map(|rx| rx.try_recv()) {
             match result {
+                Ok(BuildEvent::PublicationPressure(reason)) => self.stop_expanded_upload(reason),
+                Ok(BuildEvent::BudgetExhausted) => {
+                    self.budget_exhausted = self.active.take();
+                    self.budget_exhausted_since = Some(now);
+                    self.budget_pressure = false;
+                    self.pending = None;
+                    self.upload = None;
+                    eprintln!("[horizon] terminal_budget_failure allowance_bytes={} base_unchanged=true", self.budget_exhausted.as_ref().map_or(budget::BASE_LIMIT, |target| target.publication_limit));
+                }
                 Ok(BuildEvent::Base(base)) => {
-                    self.base = Some(base);
+                    if let Some(previous) = self.base.replace(base)
+                        && self.base.as_ref().is_some_and(|base| base.center != previous.center)
+                    {
+                        self.previous_base = Some(previous);
+                    }
                     self.building_base = false;
                 }
-                Ok(BuildEvent::Complete(pages, samples, omitted)) => {
+                Ok(BuildEvent::Complete(pages, samples, omitted, publication_limit)) => {
                     self.pending = None;
+                    let expansion_denial = if publication_limit > budget::BASE_LIMIT {
+                        budget::upload_admission(publication_limit,pages.iter().map(|page| mesh_bytes(&page.mesh)).sum()).err()
+                    } else { None };
                     if let Some(target) = &mut self.active {
                         target.omitted = Arc::new(omitted);
                         *target.validation.get_mut()=Default::default();
@@ -767,9 +925,13 @@ impl Horizon {
                         );
                         self.samples = samples;
                         self.fail_active(now);
+                    } else if let Some(reason) = expansion_denial {
+                        // Recheck at transfer from the CPU worker before any new GPU allocation.
+                        self.stop_expanded_upload(reason);
                     } else if let Some(target) = &self.active {
+                        self.upload_limit = publication_limit;
                         self.upload =
-                            Some(upload::Upload::new(pages, samples, Some(target.center)));
+                            Some(upload::Upload::new(pages, samples, Some(target.center)).with_live_budget(self.loaded_this_world));
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -779,7 +941,7 @@ impl Horizon {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
-        if self.advance_upload(device,queue,now) {
+        if self.outgoing.is_none() && self.advance_upload(device,queue,now) {
             let (mesh, samples, center) = self.upload.take().unwrap().finish();
             if let Some(target) = self.active.take() {
                 debug_assert_eq!(center, Some(target.center));
@@ -797,9 +959,27 @@ impl Horizon {
                         .sum::<u64>(),
                     samples.len(),target.request_generation,target.snapshot.cfg
                 );
-                self.mesh = Some(mesh);
+                let previous = self.mesh.replace(mesh).zip(self.published.take());
+                self.outgoing = previous.and_then(|(mut old, published)| {
+                    // Omitted areas must still have resident coverage, and
+                    // edited surfaces cannot reappear through an outgoing mesh.
+                    if published.snapshot.cfg != target.snapshot.cfg
+                        || !Arc::ptr_eq(&published.snapshot.regions.root, &target.snapshot.regions.root)
+                        || !published.valid_for_resident(&target.snapshot, eye, hidden_radius, &self.resident)
+                    {
+                        return None;
+                    }
+                    old.collared = published.collar.as_ref().zip(self.current_collar.as_ref())
+                        .is_some_and(|(built, current)| built.valid_for(current, &self.resident));
+                    Some((old, published, Instant::now()))
+                });
+                self.loaded_this_world = true;
+                if target.startup {
+                    println!("[horizon] startup terrain published; completing distant detail");
+                    self.last_check = None;
+                }
                 self.shadow_generation=self.shadow_generation.wrapping_add(1);
-                if self.detail_center != Some(target.center) {
+                if !target.startup && self.detail_center != Some(target.center) {
                     self.detail_center = Some(target.center);
                     self.detail_update = Some(self.base.as_ref()
                         .filter(|base| base.center == target.center)
@@ -826,6 +1006,15 @@ impl Horizon {
         {
             return;
         }
+        // The original cover already has a runtime-masked fallback. Wait for
+        // changing resident edges to settle before uploading a collar-only replacement.
+        if self.mesh.is_some()
+            && (target.collar.is_none() || !self.collar_settled(now))
+            && self.published.as_ref().is_some_and(|ready| ready.matches_without_collar(target))
+        {
+            return;
+        }
+        if self.budget_exhausted() { return; }
         let streak = self
             .failure_streak
             .as_ref()
@@ -850,16 +1039,23 @@ impl Horizon {
         self.last_build = Some(now);
         self.failed = None;
         self.active = Some(target.clone());
-        let tree_samples=self.base.as_ref().map(|base|base.tree_samples.clone()).unwrap_or_default();
-        // The detail map depends only on the source and centre, not on the
-        // refinement eye or projection, so a base rebuilt for those reuses it.
+        let reusable = |base: &BaseCover| {
+            base.center == target.center && base.range_m == target.range_m && base.clip == target.clip
+                && base.projection_pixels.to_bits() == target.projection_pixels.to_bits()
+                && base.refinement_eye.y.to_bits() == target.refinement_eye_y.to_bits()
+        };
+        if self.previous_base.as_ref().is_some_and(reusable)
+            && !self.base.as_ref().is_some_and(reusable)
+        {
+            std::mem::swap(&mut self.base, &mut self.previous_base);
+        }
+        let tree_samples = self.base.as_ref().map(|base| base.tree_samples.clone()).unwrap_or_default();
+        // The detail map depends only on the source and centre.
         let prior_detail = self.base.as_ref().filter(|base| base.center == target.center).and_then(|base| base.detail.clone());
-        let base = self
-            .base
-            .as_ref()
-            .filter(|base| base.center == target.center && base.range_m == target.range_m && base.projection_pixels.to_bits() == target.projection_pixels.to_bits() && base.refinement_eye.y.to_bits() == target.refinement_eye_y.to_bits())
-            .cloned();
-        self.building_base = base.is_none();
+        let held = self.base.as_ref().filter(|base| base.range_m == target.range_m).map(|base| base.refined.clone()).unwrap_or_default();
+        let base = self.base.as_ref().filter(|base| reusable(base)).cloned();
+        let cache_hit = base.as_ref().is_some_and(|base| base.startup == target.startup);
+        self.building_base = !cache_hit;
         self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.cancel.clone();
         let (tx, rx) = mpsc::sync_channel(1);
@@ -868,6 +1064,8 @@ impl Horizon {
         let page_limit = device.limits().max_buffer_size.min(64 * 1024 * 1024);
         let samples = std::mem::take(&mut self.samples);
         match std::thread::Builder::new().name("horizon".into()).spawn(move || {
+            // One unchanged procedural base and ONE admitted publication pass.
+            // The allowance does not enlarge the base or alter its geometry.
             let start = Instant::now();
             let center = target.center;
             let delay = std::env::var("VOXEL_HORIZON_DELAY_MS").ok()
@@ -876,67 +1074,100 @@ impl Horizon {
                 if cancel.load(Ordering::Relaxed) { return; }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            let cache_hit = base.is_some();
-            let base = if let Some(base) = base { base } else {
-                let Some((mesh, samples, trees, tree_samples)) = build_with_focus(cfg, center, Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), target.projection_pixels, &cancel, samples,(*tree_samples).clone(), target.range_m, target.clip) else { return; };
+            let base = if cache_hit { base.unwrap() } else {
+                let built = if let Some(ground) = base.filter(|base| base.startup && !target.startup) {
+                    // The first cover is still on screen. Reuse its exact terrain and
+                    // water on the worker, then add the original foliage to the copy.
+                    let mut mesh = ChunkMesh { vertices: ground.mesh.vertices.clone(), indices: ground.mesh.indices.clone() };
+                    let mut tree_samples = (*tree_samples).clone();
+                    finish_base_detail(&mut mesh, &cfg, center, target.clip, &cancel, &mut tree_samples)
+                        .map(|trees| (mesh, ground.samples, trees, tree_samples, ground.refined))
+                } else {
+                    build_with_focus(cfg, center, Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), target.projection_pixels, &cancel, Arc::unwrap_or_clone(samples.clone()),(*tree_samples).clone(), target.range_m, target.clip, &held, target.startup)
+                        .map(|(mesh, samples, trees, tree_samples, refined)| {
+                            (mesh, Arc::new(samples), trees, tree_samples, Arc::new(refined))
+                        })
+                };
+                let Some((mesh, samples, trees, tree_samples, refined)) = built else { return; };
                 if mesh_bytes(&mesh) > MAX_MESH_BYTES {
-                    eprintln!("[horizon] procedural base exceeds publication budget");
+                    eprintln!("[horizon] procedural base exceeds unchanged base budget");
+                    let _ = tx.send(BuildEvent::BudgetExhausted);
                     return;
                 }
                 let quality_started = Instant::now();
                 let Some(quality)=quality::summarize(cfg,center,&samples,&cancel) else {return;};
                 println!("[horizon-timing] quality_ms={:.0}", quality_started.elapsed().as_secs_f64() * 1000.0);
-                let detail = if let Some(prior) = prior_detail { Some(prior) } else if detail::enabled() {
+                let detail = if target.startup { None } else if let Some(prior) = prior_detail.clone() { Some(prior) } else if detail::enabled() {
                     let detail_started = Instant::now();
                     let Some(map) = detail::build(&cfg, center, &cancel) else { return; };
                     println!("[horizon-timing] detail_ms={:.0}", detail_started.elapsed().as_secs_f64() * 1000.0);
                     Some(Arc::new(map))
                 } else { None };
-                let base = BaseCover { quality:Arc::new(quality),center, refinement_eye: Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), projection_pixels: target.projection_pixels, range_m: target.range_m, mesh: Arc::new(mesh), samples: Arc::new(samples), trees:Arc::new(trees), tree_samples:Arc::new(tree_samples), detail };
+                let base = BaseCover { startup: target.startup, clip: target.clip, quality:Arc::new(quality),center, refinement_eye: Vec3::new(center.0 as f32,target.refinement_eye_y,center.1 as f32), projection_pixels: target.projection_pixels, range_m: target.range_m, mesh: Arc::new(mesh), samples, trees:Arc::new(trees), tree_samples:Arc::new(tree_samples), detail, refined };
                 if tx.send(BuildEvent::Base(base.clone())).is_err() { return; }
                 base
             };
             if cancel.load(Ordering::Relaxed) { return; }
             println!("[horizon] base_cache hit={cache_hit} center={center:?} refinement_eye={:?} focal_pixels={}", base.refinement_eye, base.projection_pixels);
+            let publication_limit=target.publication_limit;
+            if cancel.load(Ordering::Relaxed) { return; }
+            if publication_limit > budget::BASE_LIMIT && let Err(reason) = budget::build_admission(publication_limit,mesh_capacity_bytes(&base.mesh)) {
+                eprintln!("[horizon] publication_expansion_denied reason={}", reason.label());
+                let _ = tx.send(BuildEvent::PublicationPressure(reason));
+                return;
+            }
+            println!("[horizon] publication_attempt=1 limit_bytes={} base_bytes={} retained_base_capacity={} geometry_unchanged=true headroom_reserved=false", publication_limit, mesh_bytes(&base.mesh), mesh_capacity_bytes(&base.mesh));
             // Copy only on the worker: edits clip indices and append patches.
             // The main thread retains just Arcs, never copying a large mesh.
             let mut mesh = ChunkMesh { vertices: base.mesh.vertices.clone(), indices: base.mesh.indices.clone() };
-            let samples = (*base.samples).clone();
+            // Sampling is immutable until the next base needs to consume old entries.
+            let samples = Arc::clone(&base.samples);
             if cancel.load(Ordering::Relaxed) { return; }
-            let Some(omitted) = edits::apply(
+            let mut edit_budget_exhausted = false;
+            let Some(omitted) = edits::apply_with_budget(
                     &mut mesh, &target.snapshot, center, target.eye,
                     target.hidden_radius, &target.coverage, &cancel, &base.trees,
-                ) else { return; };
+                    publication_limit, &mut edit_budget_exhausted,
+                ) else {
+                    if edit_budget_exhausted && !cancel.load(Ordering::Relaxed) { let _=tx.send(BuildEvent::BudgetExhausted); }
+                    return;
+                };
             if cancel.load(Ordering::Relaxed) { return; }
-            if mesh_bytes(&mesh) > MAX_MESH_BYTES {
-                eprintln!("[horizon] mesh budget exceeded: bytes={} limit={MAX_MESH_BYTES}; retained previous cover", mesh_bytes(&mesh));
+            // Canonicalize bit-identical vertices regardless of pressure. Tree
+            // replacement obligations are consumed; collars/batches follow.
+            // Triangle order and full vertex attributes remain unchanged.
+            let before_weld=mesh_bytes(&mesh);
+            edits::weld(&mut mesh);
+            println!("[horizon] final_bitwise_weld before={before_weld} after={}",mesh_bytes(&mesh));
+            if cancel.load(Ordering::Relaxed) { return; }
+            if mesh_bytes(&mesh) > publication_limit {
+                eprintln!("[horizon] mesh budget exceeded: bytes={} limit={publication_limit}", mesh_bytes(&mesh));
+                let _=tx.send(BuildEvent::BudgetExhausted);
                 return;
             }
             let mut variants=None;
             if let Some(input)=target.collar.as_ref() {
-                match collar::apply(&mut mesh,input,&cancel,MAX_MESH_BYTES) {
+                match collar_set::apply(&mut mesh,input,&cancel,publication_limit) {
                     None=>return,
-                    Some(collar::Outcome::Ineligible)=>println!("[horizon-collar] ineligible column={:?} side={} retained_uncollared=true",input.column,input.side),
-                    Some(collar::Outcome::Applied(ranges))=>{
-                        println!("[horizon-collar] built column={:?} side={} collared_indices={} fallback_indices={}",
-                            input.column,input.side,ranges.collared.len(),ranges.uncollared.len());
-                        variants=Some(ranges);
-                    }
+                    Some(collar::Outcome::Ineligible)=>{},
+                    Some(collar::Outcome::Applied(ranges))=>variants=Some(ranges),
                 }
             }
             if cancel.load(Ordering::Relaxed) {return;}
             let batches = batches::partition_variants(&mut mesh,cfg.voxel_meters(),center,variants.as_ref());
             if cancel.load(Ordering::Relaxed) { return; }
             println!(
-                "[horizon] center={center:?} triangles={} vertex_bytes={} index_bytes={} build_ms={:.0} spatial_batches={}",
+                "[horizon] center={center:?} triangles={} vertex_bytes={} index_bytes={} build_ms={:.0} spatial_batches={} startup={}",
                 mesh.indices.len() / 3,
                 mesh.vertices.len() * std::mem::size_of::<Vertex3>(),
                 mesh.indices.len() * std::mem::size_of::<u32>(),
                 start.elapsed().as_secs_f64() * 1000.0,
-                batches.len(),
+                batches.len(), target.startup,
             );
-            let Some(pages) = pages::pack(mesh, batches, page_limit, MAX_MESH_BYTES, &cancel) else {
-                eprintln!("[horizon] page packing cancelled or exceeded actual publication budget={MAX_MESH_BYTES}; retained previous cover");
+            let Some(pages) = pages::pack(mesh, batches, page_limit, publication_limit, &cancel) else {
+                if cancel.load(Ordering::Relaxed) { return; }
+                eprintln!("[horizon] page packing exceeded publication budget={publication_limit}");
+                let _=tx.send(BuildEvent::BudgetExhausted);
                 return;
             };
             if cancel.load(Ordering::Relaxed) { return; }
@@ -948,7 +1179,9 @@ impl Horizon {
                 pages.iter().map(|p| p.mesh.vertices.len() * std::mem::size_of::<Vertex3>()).max().unwrap_or(0),
                 pages.iter().map(|p| p.mesh.indices.len() * std::mem::size_of::<u32>()).max().unwrap_or(0),
             );
-            let _ = tx.send(BuildEvent::Complete(pages, samples, omitted));
+            let packed_bytes: usize = pages.iter().map(|p| mesh_bytes(&p.mesh)).sum();
+            println!("[horizon] publication_prepared attempt=1 packed_bytes={packed_bytes} limit_bytes={publication_limit}");
+            let _ = tx.send(BuildEvent::Complete(pages, samples, omitted, publication_limit));
         }) {
             Ok(worker) => self.worker = Some(worker),
             Err(error) => {
@@ -1128,13 +1361,24 @@ fn evaluate_samples(
     Some(())
 }
 
-#[cfg(test)]
+/// Whether the eye left the band that keeps the refinement focus height.
+/// Projected error scales with 1/distance and distance is at least the height
+/// above sea, so a 25% band bounds the error change the way the projection
+/// band does. A fixed 48 m band rebuilt the base dozens of times per descent.
+fn refinement_eye_moved(previous: f32, eye_y: f32, sea: f32) -> bool {
+    let band = ((previous - sea).abs() * 0.25).max(48.0);
+    (eye_y - previous).abs() > band
+}
+
 fn build(cfg: WorldSampleConfig, center: (i32,i32), cancel: &AtomicBool, old: Samples,
     trees: vegetation::TreeSamples) -> Option<(ChunkMesh, Samples, Vec<vegetation::TreeSource>, vegetation::TreeSamples)> {
     let scale = cfg.voxel_meters();
     let height = distant_surface(&cfg, (center.0 as f32/scale).floor() as i32, (center.1 as f32/scale).floor() as i32).0 * scale;
-    build_with_focus(cfg, center, Vec3::new(center.0 as f32, ((height+100.0)/64.0).round()*64.0, center.1 as f32), 512.0, cancel, old, trees, horizon_range_m(), None)
+    build_with_focus(cfg, center, Vec3::new(center.0 as f32, ((height+100.0)/64.0).round()*64.0, center.1 as f32), 512.0, cancel, old, trees, horizon_range_m(), None, &HashSet::new(), false)
+        .map(|(mesh, samples, trees, tree_samples, _)| (mesh, samples, trees, tree_samples))
 }
+
+type BaseBuild = (ChunkMesh, Samples, Vec<vegetation::TreeSource>, vegetation::TreeSamples, HashSet<(i32, i32)>);
 
 fn build_with_focus(
     cfg: WorldSampleConfig,
@@ -1148,7 +1392,9 @@ fn build_with_focus(
     // when the setting changes mid-build.
     range_m: u32,
     chart_clip: Option<clip::ChartClip>,
-) -> Option<(ChunkMesh, Samples, Vec<vegetation::TreeSource>,vegetation::TreeSamples)> {
+    held: &HashSet<(i32, i32)>,
+    startup: bool,
+) -> Option<BaseBuild> {
     let reach = domain_reach(range_m);
     // Sibling appenders index these SIDE*SIDE grids directly. Keep every grid,
     // including the inactive inner vertices, contiguous and in the old order.
@@ -1220,7 +1466,8 @@ fn build_with_focus(
 
 
     let surface = cfg.water_level() as f32 + 1.0 - crate::mesh::WATER_SURFACE_INSET;
-    let refinement_points = refinement::sample(cfg, center, focus, projection_pixels, reach, cancel, &mut samples, &mut old)?;
+    let refinement_points = refinement::sample(cfg, center, focus, projection_pixels, reach, cancel, &mut samples, &mut old, held)?;
+    let mut refined = HashSet::with_capacity(refinement_points.len());
     println!("[horizon-timing] refinement_ms={:.0}", lap.elapsed().as_secs_f64() * 1000.0);
     lap = std::time::Instant::now();
     let mut refinement_level_samples = [0usize; LEVELS];
@@ -1346,7 +1593,7 @@ fn build_with_focus(
                 let split = horizon_inner_split(level, x, z, corners, &owner);
                 let mut middle = None;
                 if split.is_none()
-                    && let Some(&(bx,bz)) = refinement_points.get(&(base+z*SIDE+x)) {
+                    && let Some(&((bx,bz),was_held)) = refinement_points.get(&(base+z*SIDE+x)) {
                         let &(height,block,_) = samples.get(&(bx,bz))?;
                         let height = height - HORIZON_SINK_VOXELS;
                         let parent = if diagonal_a_to_d(heights[0],heights[1],heights[2],heights[3]) {
@@ -1356,8 +1603,9 @@ fn build_with_focus(
                         let novel_material = corners.iter().all(|&i| mesh.vertices[i as usize].surface[3] != material.shader_key());
                         let distance = (Vec3::new(bx as f32,height,bz as f32)*scale).distance(focus).max(step);
                         let projected_error = (height-parent).abs()*scale*projection_pixels/distance;
-                        if projected_error >= 0.35 || (height < surface) != (parent < surface)
-                            || (novel_material && step*projection_pixels/distance >= 1.0) {
+                        let bar = refinement::bar(was_held);
+                        if projected_error >= bar || (height < surface) != (parent < surface)
+                            || (novel_material && step*projection_pixels/distance >= bar / refinement::REFINE_PIXELS) {
                             if !height.is_finite() { return None; }
                             let index = mesh.vertices.len() as u32;
                             mesh.vertices.push(Vertex3 {
@@ -1367,6 +1615,7 @@ fn build_with_focus(
                             });
                             owner.push(index);
                             middle = Some(index);
+                            refined.insert((bx,bz));
                             refinement_refined += 1;
                         }
                     }
@@ -1420,12 +1669,14 @@ fn build_with_focus(
     // would also remove a fine grid appended before it. Fine's own cut then
     // only trims column boundary slivers, and its grid is appended last.
     // Time each column/fine/reference stage separately; columns dominate.
-    let split_started = std::time::Instant::now();
-    columns::apply(&mut mesh, &cfg, center, cancel, fine::HALF_M)?;
-    println!("[horizon-timing] split_columns_ms={:.0}", split_started.elapsed().as_secs_f64() * 1000.0);
-    let split_started = std::time::Instant::now();
-    fine::apply(&mut mesh, &cfg, center, cancel, chart_clip)?;
-    println!("[horizon-timing] split_fine_ms={:.0}", split_started.elapsed().as_secs_f64() * 1000.0);
+    if fine::fits_chart(center, chart_clip) {
+        let split_started = std::time::Instant::now();
+        columns::apply(&mut mesh, &cfg, center, cancel, fine::HALF_M)?;
+        println!("[horizon-timing] split_columns_ms={:.0}", split_started.elapsed().as_secs_f64() * 1000.0);
+        let split_started = std::time::Instant::now();
+        fine::apply(&mut mesh, &cfg, center, cancel, chart_clip)?;
+        println!("[horizon-timing] split_fine_ms={:.0}", split_started.elapsed().as_secs_f64() * 1000.0);
+    }
     let split_started = std::time::Instant::now();
     reference::apply(&mut mesh, &cfg);
     println!("[horizon-timing] split_reference_ms={:.0}", split_started.elapsed().as_secs_f64() * 1000.0);
@@ -1438,17 +1689,35 @@ fn build_with_focus(
         return None;
     }
     println!("[horizon-timing] mesh_ms={:.0}", lap.elapsed().as_secs_f64() * 1000.0);
-    lap = std::time::Instant::now();
-    let mut trees=vegetation::append(&mut mesh, &cfg, center, cancel,&mut tree_samples);
-    println!("[horizon-timing] vegetation_ms={:.0}", lap.elapsed().as_secs_f64() * 1000.0);
-    reference::apply_voxels(&mut mesh, &cfg, cancel)?;
+    let trees = if startup {
+        Vec::new()
+    } else {
+        finish_base_detail(&mut mesh, &cfg, center, chart_clip, cancel, &mut tree_samples)?
+    };
+    Some((mesh, samples, trees,tree_samples,refined))
+}
+
+fn finish_base_detail(
+    mesh: &mut ChunkMesh,
+    cfg: &WorldSampleConfig,
+    center: (i32, i32),
+    chart_clip: Option<clip::ChartClip>,
+    cancel: &AtomicBool,
+    tree_samples: &mut vegetation::TreeSamples,
+) -> Option<Vec<vegetation::TreeSource>> {
+    let start = Instant::now();
+    let mut trees = vegetation::append(mesh, cfg, center, cancel, tree_samples);
+    println!("[horizon-timing] vegetation_ms={:.0}", start.elapsed().as_secs_f64() * 1000.0);
+    let start = Instant::now();
+    let before = mesh_bytes(mesh);
+    structures::append(mesh, cfg, center, chart_clip, cancel, &mut trees);
+    println!("[horizon-timing] structures_ms={:.1} structures_bytes={}",
+        start.elapsed().as_secs_f64() * 1000.0, mesh_bytes(mesh) - before);
+    reference::apply_voxels(mesh, cfg, cancel)?;
     // Review-only exact patches rewrite index order. Their dedicated source
     // comparison runs have no edit fixture; never reuse pre-rewrite offsets.
     if std::env::var("VOXEL_HORIZON_EXACT_PATCH").is_ok_and(|s|!s.trim().is_empty()) { trees.clear(); }
-    if cancel.load(Ordering::Relaxed) {
-        return None;
-    }
-    Some((mesh, samples, trees,tree_samples))
+    (!cancel.load(Ordering::Relaxed)).then_some(trees)
 }
 
 #[cfg(test)]
@@ -1462,6 +1731,7 @@ mod profile {
     #[ignore]
     fn profile_cold_horizon_build() {
         let cfg = WorldSampleConfig {
+            planet: None,
             generator_version: 18,
             seed: 2_738_958_700,
             world_type: WorldType::Hills,
@@ -1487,7 +1757,7 @@ mod profile {
     }
 }
 
-fn proxy_box(
+pub(super) fn proxy_box(
     mesh: &mut ChunkMesh,
     center: Vec3,
     size: Vec3,
@@ -1530,6 +1800,32 @@ fn proxy_box(
 }
 
 #[cfg(test)]
+mod refinement_eye_band {
+    use super::refinement_eye_moved;
+
+    #[test]
+    fn near_ground_keeps_the_fixed_band() {
+        assert!(!refinement_eye_moved(64.0, 100.0, 12.0));
+        assert!(refinement_eye_moved(64.0, 128.0, 12.0));
+    }
+
+    #[test]
+    fn high_flight_rebuilds_on_relative_height() {
+        // 3 km above sea: a 500 m descent stays inside the 25% band.
+        assert!(!refinement_eye_moved(3012.0, 2512.0, 12.0));
+        assert!(refinement_eye_moved(3012.0, 2200.0, 12.0));
+        let mut eye = 3012.0;
+        let mut rebuilds = 0;
+        let mut focus = eye;
+        while eye > 12.0 {
+            eye -= 8.0;
+            if refinement_eye_moved(focus, eye, 12.0) { focus = (eye / 64.0_f32).round() * 64.0; rebuilds += 1; }
+        }
+        assert!(rebuilds < 30, "descent rebuilt the base {rebuilds} times");
+    }
+}
+
+#[cfg(test)]
 mod sample_speed {
     use super::*;
     use crate::fluid::VoxelScalePreset;
@@ -1563,6 +1859,7 @@ mod continuity_contract {
     fn target(world: &mut World, eye: Vec3) -> BuildTarget {
         let snapshot = world.snapshot();
         BuildTarget {
+            startup: false,
             collar:None,
             refinement_eye_y: (eye.y/64.0).round()*64.0,
             projection_pixels: 512.0,
@@ -1570,6 +1867,7 @@ mod continuity_contract {
             center: (0, 0),
             request_generation:0,
             source_revision:world.revision(),
+            publication_limit: budget::BASE_LIMIT,
             fingerprint: edits::visible_fingerprint(&snapshot, eye, 128.0),
             snapshot,
             eye,
@@ -1579,6 +1877,89 @@ mod continuity_contract {
             clip: None,
             validation: Default::default(),
         }
+    }
+
+    #[test]
+    fn reusable_base_credit_counts_real_capacity_once_and_rejects_other_recipes() {
+        let key:BaseKey=(false,(0,0),1024,None,512.0f32.to_bits(),0.0f32.to_bits());
+        let mut other=key;other.0=true;
+        assert_eq!(matching_base_capacity(key,std::iter::empty()),0);
+        assert_eq!(matching_base_capacity(key,[(other,999)].into_iter()),0);
+        assert_eq!(matching_base_capacity(key,[(key,100),(key,100),(other,999)].into_iter()),100);
+        let mut mesh=ChunkMesh {vertices:Vec::with_capacity(10),indices:Vec::with_capacity(12)};
+        let allocated=mesh_capacity_bytes(&mesh);
+        assert_eq!(allocated,mesh.vertices.capacity()*std::mem::size_of::<Vertex3>()+mesh.indices.capacity()*4);
+        mesh.indices.push(0);assert_eq!(mesh_capacity_bytes(&mesh),allocated);
+    }
+
+    #[test]
+    fn terminal_budget_failure_blocks_only_the_same_world_and_request() {
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
+        let requested = target(&mut world, Vec3::new(0.0, 30.0, 0.0));
+        let mut horizon = Horizon::default();
+        horizon.desired = Some(requested.clone());
+        horizon.budget_exhausted = Some(requested.clone());
+        assert!(horizon.budget_exhausted());
+        horizon.config = Some(world.sample_config());
+        horizon.source_root = Some(world.regions.view.root.clone());
+        assert!(horizon.budget_exhausted_for_limit(&world, budget::BASE_LIMIT));
+        assert!(!horizon.budget_exhausted_for_limit(&world, budget::MAX_PUBLICATION_LIMIT));
+        let replacement = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
+        assert!(!horizon.budget_exhausted_for_limit(&replacement, budget::BASE_LIMIT));
+        let mut moved = requested.clone();
+        moved.center = (512, 0);
+        horizon.desired = Some(moved);
+        assert!(!horizon.budget_exhausted());
+        let mut other = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
+        horizon.desired = Some(target(&mut other, Vec3::new(0.0, 30.0, 0.0)));
+        assert!(!horizon.budget_exhausted());
+    }
+
+    #[test]
+    fn pressure_revocation_drops_only_unpublished_state_and_never_marks_ready() {
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
+        let mut job = target(&mut world, Vec3::new(0.0, 30.0, 0.0));
+        job.publication_limit = budget::MAX_PUBLICATION_LIMIT;
+        let mut horizon = Horizon::default();
+        horizon.active = Some(job.clone());
+        horizon.desired = Some(job);
+        horizon.upload_limit = budget::MAX_PUBLICATION_LIMIT;
+        horizon.stop_expanded_upload(budget::Denied::GpuPressure);
+        assert!(horizon.active.is_none() && horizon.upload.is_none());
+        assert!(horizon.mesh.is_none() && horizon.published.is_none());
+        assert!(!horizon.loaded_this_world);
+        assert!(horizon.budget_pressure && horizon.budget_exhausted());
+        let mut reduced = horizon.desired.clone().unwrap();
+        reduced.publication_limit = budget::BASE_LIMIT;
+        horizon.desired = Some(reduced);
+        // Own freed allocation/telemetry lag may lower then raise allowance.
+        // Neither observation permits the same failed scene to retry.
+        assert!(horizon.budget_exhausted());
+        let mut restored = horizon.desired.clone().unwrap();
+        restored.publication_limit = budget::MAX_PUBLICATION_LIMIT;
+        horizon.desired = Some(restored);
+        assert!(horizon.budget_exhausted());
+        assert!(horizon.mesh.is_none());
+        let mut moved = horizon.desired.clone().unwrap();
+        moved.center = (512,0);
+        horizon.desired = Some(moved);
+        assert!(!horizon.budget_exhausted());
+    }
+
+    #[test]
+    fn changed_allowance_is_a_new_request_without_changing_geometry() {
+        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7);
+        let requested = target(&mut world, Vec3::new(0.0, 30.0, 0.0));
+        let mut enlarged = requested.clone();
+        enlarged.publication_limit = budget::MAX_PUBLICATION_LIMIT;
+        assert_eq!(enlarged.projection_pixels, requested.projection_pixels);
+        assert_eq!(enlarged.range_m, requested.range_m);
+        assert!(Arc::ptr_eq(&enlarged.snapshot.regions.root, &requested.snapshot.regions.root));
+        assert!(!enlarged.matches(&requested));
+        let mut horizon = Horizon::default();
+        horizon.budget_exhausted = Some(requested);
+        horizon.desired = Some(enlarged);
+        assert!(!horizon.budget_exhausted());
     }
 
     #[test]
@@ -1737,7 +2118,7 @@ mod continuity_contract {
         let owned=Arc::new(owned);
         job.coverage=owned.clone();job.omitted=Arc::new(vec![(Vec3::ZERO,Vec3::splat(8.0))]);desired.coverage=owned.clone();
         assert!(job.matches(&desired));assert!(job.matches(&desired));
-        assert!(job.validation.borrow()[2].is_some());
+        assert!(job.validation.borrow()[1].is_some());
         Arc::make_mut(&mut desired.coverage).words=[[0;4];131];
         assert!(!job.matches(&desired),"losing a required owner invalidates an otherwise identical memo key");
         desired.coverage=owned.clone();assert!(job.matches(&desired));
@@ -1873,7 +2254,7 @@ mod continuity_contract {
                 batches: Vec::new(),
             };
             let (tx, rx) = mpsc::sync_channel(1);
-            tx.send(BuildEvent::Complete(vec![page], Samples::new(), Vec::new()))
+            tx.send(BuildEvent::Complete(vec![page], Arc::default(), Vec::new(), budget::BASE_LIMIT))
                 .unwrap();
             let mut horizon = Horizon::default();
             horizon.config = Some(world.sample_config());
@@ -1895,13 +2276,13 @@ mod continuity_contract {
                 let mut horizon = make(&mut world);
                 if stage == "pending_upload" {
                     let revision = world.revision();
-                    horizon.update(&device, &queue, &mut world, revision, Vec3::ZERO, 128.0);
+                    horizon.update(&device, &queue, &mut world, revision, Vec3::ZERO, 128.0, false);
                     assert!(horizon.upload.is_some());
                     assert!(horizon.mesh.is_none());
                 }
                 if switch {
                     let revision = other.revision();
-                    horizon.update(&device, &queue, &mut other, revision, Vec3::ZERO, 128.0);
+                    horizon.update(&device, &queue, &mut other, revision, Vec3::ZERO, 128.0, false);
                 } else {
                     world.set(
                         IVec3::new(400, 20, 0),
@@ -1912,7 +2293,7 @@ mod continuity_contract {
                         },
                     );
                     let revision = world.revision();
-                    horizon.update(&device, &queue, &mut world, revision, Vec3::ZERO, 128.0);
+                    horizon.update(&device, &queue, &mut world, revision, Vec3::ZERO, 128.0, false);
                 }
                 queue.submit([]);
                 assert!(horizon.upload.is_none());
@@ -1930,6 +2311,7 @@ mod continuity_contract {
                 revision,
                 Vec3::new(512.0, 30.0, 0.0),
                 128.0,
+                false,
             );
             queue.submit([]);
             if horizon.mesh.is_some() {

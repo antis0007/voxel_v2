@@ -8,8 +8,11 @@ pub use crate::material::BlockId;
 pub mod activity;
 pub mod adventure;
 mod collision;
+mod ca;
 pub mod bed;
+pub mod spawn;
 pub mod block_data;
+pub mod chests;
 pub mod stations;
 pub mod travel;
 pub mod blueprint;
@@ -19,35 +22,68 @@ pub mod workshop;
 pub mod environment;
 pub(crate) mod effects;
 pub mod factory;
+pub mod industry;
 pub mod farming;
+pub mod goals;
 pub mod habitats;
 pub mod interaction;
+pub(crate) mod mirage;
 pub mod fittings;
 pub mod inventory;
+pub mod portals;
+pub mod hell_gate;
+pub mod hall_gate;
+pub mod lightless_gate;
+pub mod lightless_life;
+pub mod containers;
+pub mod dungeon_quest;
+pub mod scanner;
+mod prospecting;
+pub mod smeltery;
+pub mod tool_workshop;
+pub(crate) mod pickups;
 pub mod mining;
 pub mod recipe_index;
+pub mod technology;
 pub mod mood;
+pub mod sky_air;
+pub mod ambience;
 pub mod orbital;
 pub mod progression;
+pub mod stats;
 pub mod regions;
+#[cfg(feature = "multiplayer")]
+pub(crate) mod replica;
 pub mod rules;
+pub mod systems;
 mod sample_cache;
+mod readonly_pick;
+pub(crate) use readonly_pick::{PickHit, ReadOnlyPicker, Readiness};
+pub(crate) mod stored_samples;
 pub mod storage;
 pub(crate) mod trace;
+pub(crate) mod block_light;
+pub use block_light::relight_bounds;
 pub mod undercrown;
-mod water;
+pub mod volcanism;
+pub(crate) mod water;
+pub(crate) mod water_tools;
+pub(crate) mod mill;
 pub(crate) use water::WaterSnapshot;
 mod weather;
+pub(crate) use weather::{WEATHER_SPIN_UP, WEATHER_UNITS_PER_DAY, cloud_shell_sample_raw, CycloneShot, cyclone_review, publish_fronts, updraft_at, weather_model_time, weather_params, wind_at};
+pub(crate) use collision::{collides_ready_local, try_move_ready_local};
 pub use collision::{
     collides_world, collides_world_local, player_aabb, raycast_block, raycast_block_precise,
     resolve_penetration_local, try_move_local, try_step_up_local,
 };
+pub(crate) use collision::raycast_loaded_block_precise;
 
 #[allow(unused_imports)]
 pub use weather::{
     CloudWeatherField, CloudWeatherUploadManifest, WEATHER_CLIPMAP_LEVEL_COUNT,
-    WEATHER_TEXTURE_RESOLUTION, WeatherClipmapUploadBatch, WeatherRuntimeState, WeatherUploadRect,
-    coverage_at,
+    WEATHER_TEXTURE_RESOLUTION, WeatherClipmapUploadBatch, WeatherClock, WeatherRuntimeState, WeatherUploadRect,
+    coverage_at, precipitation_at, synoptic, wind_offset,
 };
 
 /// How deep inside a starlit cosmos chamber a point (in metres) is, 0..1.
@@ -60,7 +96,7 @@ pub use engine_voxel::{
     CURRENT_GENERATOR_VERSION, ChunkData, WATER_LEVEL_METERS, WorldSampleConfig, WorldType,
 };
 pub use engine_worldgen::{
-    TreeVisual, biome_weights, distant_surface, dungeon, landscape, lore, prism_sanctum, sample_block, sites,
+    TreeCanopy, TreeLobe, TreeVisual, biome_weights, distant_surface, dungeon, landscape, lore, prism_sanctum, sample_block, sites,
     terrain_height, toll_crossing, tree_visual, tree_visual_lod, zones,
 };
 use engine_worldgen::{lerp_color, sample_column, saturate, smoothstep};
@@ -101,7 +137,11 @@ pub fn player_eye_height_blocks(voxel_scale: VoxelScalePreset, player_scale: f32
 }
 
 pub fn player_step_height_blocks(voxel_scale: VoxelScalePreset, player_scale: f32) -> f32 {
-    blocks_from_meters(voxel_scale, STEP_HEIGHT * player_scale.max(0.1))
+    let scale = player_scale.max(0.1);
+    // A normal-sized player can climb a coarse voxel stair. Small players
+    // retain a body-sized limit; headroom is still checked by collision.
+    let step = (STEP_HEIGHT * scale).max(voxel_scale.meters().min(scale));
+    blocks_from_meters(voxel_scale, step)
 }
 
 pub fn speed_blocks(voxel_scale: VoxelScalePreset, meters_per_second: f32) -> f32 {
@@ -119,6 +159,8 @@ pub fn hotbar_block(slot: usize) -> Option<BlockId> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct LightingState {
+    /// Selects Hell's atmospheric transport and restrained split-tone grade.
+    pub hell: bool,
     pub sun_dir: Vec3,
     pub moon_dir: Vec3,
     pub sun_color: [f32; 3],
@@ -137,6 +179,8 @@ pub struct LightingState {
     pub saturation: f32,
     pub fog_height: f32,
     pub fog_falloff: f32,
+    /// Camera enclosure fades unloaded underground space to darkness.
+    pub cave_darkness: f32,
     /// x: cosmos chamber (fog becomes starfield), y: aurora, z: meteor shower,
     /// w: rainbow. Zero unless `with_mood` or the camera says otherwise.
     pub mood: [f32; 4],
@@ -147,9 +191,18 @@ pub struct LightingState {
     pub foliage_tint: [f32; 3],
     /// Living air: fireflies, pollen, diamond dust, embers. Each 0..1.
     pub ambience: [f32; 4],
+    /// Today's aerosol regime plus regional air at the player.
+    pub sky_air: sky_air::SkyAir,
+    /// Petals, spores, water spray and dry dust.
+    pub biome_ambience: [f32; 4],
+    /// Healthy glints, blight, poisonous pressure and local mist.
+    pub mana_ambience: [f32; 4],
+    /// Local atmospheric colour multiplier and grade amount.
+    pub location_mood: [f32; 4],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloudControls {
     // --- Low-level clouds (0-2000m) ---
     pub coverage: f32,
@@ -326,8 +379,11 @@ impl LightingState {
         let twilight_core = 1.0 - smoothstep(0.22, 0.62, sun_height.abs());
         let horizon_glow = 1.0 - smoothstep(0.04, 0.34, sun_height.abs());
         let golden_hour = 1.0 - smoothstep(0.03, 0.42, sun_height.abs());
-        let twilight = (twilight_core * 0.68 + horizon_glow * 0.62 + golden_hour * 0.42)
-            * (1.0 - daylight * 0.46);
+        // Match the shader's afterglow window. The symmetric abs(height)
+        // lobes otherwise keep painting sunset colours far into the night.
+        let twilight = ((twilight_core * 0.68 + horizon_glow * 0.62 + golden_hour * 0.42)
+            * (1.0 - daylight * 0.46)
+            * smoothstep(-0.16, -0.055, sun_height)).clamp(0.0, 1.0);
         let night = 1.0 - daylight;
 
         // Solar source stays nearly white. Atmospheric transmittance already
@@ -346,7 +402,7 @@ impl LightingState {
             [0.18, 0.12, 0.14],
             twilight * (1.0 - overcast * 0.68) * 0.18,
         );
-        let overcast_ambient = [0.17, 0.19, 0.22];
+        let overcast_ambient = [0.22, 0.235, 0.25];
         ambient_color = lerp_color(ambient_color, overcast_ambient, overcast * daylight * 0.48);
         ambient_color = lerp_color(
             ambient_color,
@@ -489,7 +545,7 @@ impl LightingState {
             // Once the disc is down the scene is lit only by afterglow;
             // exposure adapts upward (blue-hour adaptation) instead of the
             // sky being repainted brighter, and settles back by full night.
-            (0.465 + daylight * 0.400 + twilight * 0.06 + afterglow_adaptation(sun_height) * 0.42)
+            (0.865 + night * 0.035 + twilight * 0.06 + afterglow_adaptation(sun_height) * 0.42)
                 * (1.0 - overcast * 0.08) + haze * 0.008;
         // Rod vision: moonlit colour fades toward grey, so foliage reads as
         // cool silhouettes under the blue split tone instead of olive mud.
@@ -519,11 +575,17 @@ impl LightingState {
             saturation: saturation.clamp(0.40, 1.12),
             fog_height,
             fog_falloff,
+            cave_darkness: 0.0,
+            hell: false,
             mood: [0.0; 4],
             mood_tint: [1.0, 1.0, 1.0, 0.0],
+            biome_ambience: [0.0; 4],
+            mana_ambience: [0.0; 4],
+            location_mood: [1.0, 1.0, 1.0, 0.0],
             grass_tint: [1.0; 3],
             foliage_tint: [1.0; 3],
             ambience: [0.0; 4],
+            sky_air: sky_air::for_time(day_index, weather_seed, time_of_day),
         }
     }
 }
@@ -830,7 +892,8 @@ fn weather_profile_for_day(day_index: u32, weather_seed: u32) -> WeatherProfile 
         }
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DayNightCycle {
     time_of_day: f32,
     day_length_seconds: f32,
@@ -838,6 +901,7 @@ pub struct DayNightCycle {
     weather_seed: u32,
     cloud_controls: CloudControls,
     /// Lightning flash and the last weather step; runtime only, never saved.
+    #[serde(skip)]
     pub(crate) storm: crate::simulation::storms::Pulse,
 }
 
@@ -1096,13 +1160,23 @@ impl DayNightCycle {
     }
 
     pub fn lighting(&self) -> LightingState {
+        self.lighting_at(self.time_of_day)
+    }
+
+    /// Lighting for another clock time on today's calendar and weather.
+    pub fn lighting_at(&self, time_of_day: f32) -> LightingState {
+        self.lighting_under(time_of_day, self.cloud_controls)
+    }
+
+    /// `lighting_at` under `controls`, the weather over one place (`synoptic::controls_at`).
+    pub fn lighting_under(&self, time_of_day: f32, controls: CloudControls) -> LightingState {
         LightingState::from_time_and_day(
-            self.time_of_day,
+            time_of_day,
             self.day_index,
             self.weather_seed,
-            self.cloud_controls,
+            controls,
         )
-        .with_mood(self.weather_seed, self.day_index, self.time_of_day)
+        .with_mood(self.weather_seed, self.day_index, time_of_day)
         .with_flash(self.storm.flash())
     }
 
@@ -1110,6 +1184,8 @@ impl DayNightCycle {
     pub fn set_day_index(&mut self, day: u32) {
         self.day_index = day;
     }
+
+    pub fn day_index(&self) -> u32 { self.day_index }
 
     /// The sky event running right now, for the HUD announcement.
     pub fn sky_event(&self) -> Option<mood::ActiveEvent> {
@@ -1119,6 +1195,7 @@ impl DayNightCycle {
 
 #[derive(Clone)]
 pub struct WorldSnapshot {
+    pub(crate) ca_view: Option<Arc<crate::simulation::cpu_region::Snapshot>>,
     pub regions: regions::RegionView,
     pub water_levels: Arc<water::WaterSnapshot>,
     pub cfg: WorldSampleConfig,
@@ -1137,30 +1214,54 @@ impl WorldSnapshot {
                 .nearby(center, radius)
                 .filter(|c| !self.chunks.contains_key(c))
                 .copied(),
-        )
+        ).chain(self.ca_chunks().filter(move |c| {
+            c.x.abs_diff(center.x).max(c.z.abs_diff(center.z)) <= radius.max(0) as u32
+                && !self.chunks.contains_key(c) && !self.regions.records.contains_key(c)
+        }))
     }
+    /// Whether a mesh rebuild may read this chunk now.
+    ///
+    /// Only the centre has to be available: `get` reads a neighbour's stored
+    /// record when that chunk was evicted. Requiring all twenty-seven to be
+    /// simulation-resident stalled every rebuild near an evicted edit, so the
+    /// world stopped showing the blocks the player had just removed.
     pub fn edits_ready(&self, c: IVec3) -> bool {
-        (-1..=1).all(|z| {
-            (-1..=1).all(|y| {
-                (-1..=1).all(|x| {
-                    let p = c + IVec3::new(x, y, z);
-                    !self.regions.records.contains_key(&p) || self.chunks.contains_key(&p)
-                })
-            })
-        })
+        self.chunks.contains_key(&c) || !self.regions.records.contains_key(&c)
     }
     pub fn get(&self, p: IVec3) -> BlockId {
+        self.get_with_disk(p, |coord, index| {
+            self.regions.load(coord).ok().flatten()
+                .map_or(BlockId::Stone, |data| data.chunk.blocks[index])
+        })
+    }
+
+    /// Memoizes a batch of voxel queries and pins each loaded region chunk.
+    /// Both caches belong to this reader's immutable snapshot.
+    pub(crate) fn voxel_reader(&self) -> impl FnMut(IVec3) -> BlockId + '_ {
+        let mut disk = crate::fast_hash::FastMap::<IVec3, Arc<ChunkData>>::default();
+        let mut blocks = crate::fast_hash::FastMap::default();
+        move |p| *blocks.entry(p).or_insert_with(|| self.get_with_disk(p, |coord, index| {
+            if let Some(chunk) = disk.get(&coord) {
+                return chunk.blocks[index];
+            }
+            let Some(data) = self.regions.load(coord).ok().flatten() else {
+                return BlockId::Stone;
+            };
+            let block = data.chunk.blocks[index];
+            disk.insert(coord, data.chunk);
+            block
+        }))
+    }
+
+    fn get_with_disk(&self, p: IVec3, read_disk: impl FnOnce(IVec3, usize) -> BlockId) -> BlockId {
+        if let Some(value) = self.ca_view.as_ref().and_then(|view| view.cell(p)) {
+            return ca::block(value);
+        }
         let chunk_coord = chunk_coord_from_world_block(p);
         if let Some(chunk) = self.chunks.get(&chunk_coord) {
             chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
         } else if self.regions.records.contains_key(&chunk_coord) {
-            self.regions
-                .load(chunk_coord)
-                .ok()
-                .flatten()
-                .map_or(BlockId::Stone, |c| {
-                    c.chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
-                })
+            read_disk(chunk_coord, ChunkData::local_index(p.x, p.y, p.z))
         } else {
             sample_block(&self.cfg, p)
         }
@@ -1168,6 +1269,12 @@ impl WorldSnapshot {
 }
 
 pub fn suggested_spawn(cfg: &WorldSampleConfig) -> Option<Vec3> {
+    if cfg.world_type == WorldType::Hall { return Some(engine_worldgen::hall::spawn(cfg)); }
+    if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Lightless) { return Some(engine_worldgen::lightless::spawn(cfg)); }
+    if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Gilded) { return Some(engine_worldgen::gilded::spawn(cfg)); }
+    if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Highfold) { return Some(engine_worldgen::highfold::spawn(cfg)); }
+    if cfg.world_type == WorldType::Manyfold { return Some(engine_worldgen::manyfold::spawn(cfg)); }
+    if cfg.world_type == WorldType::Planet { return Some(crate::planet::spawn(cfg)); }
     if cfg.generator_version >= 3 && cfg.world_type != WorldType::Superflat {
         // The generator reserves a dry 20 m clearing on connected inland terrain.
         let ground = sample_column(cfg, 0, 0).height;
@@ -1216,6 +1323,50 @@ pub fn suggested_spawn(cfg: &WorldSampleConfig) -> Option<Vec3> {
     None
 }
 
+/// Generated trees whose crowns can shade `coord`'s columns. Only chunks
+/// holding turf or tree blocks ask: ground cover and canopy shade read it.
+fn tree_footprints(
+    cfg: &WorldSampleConfig,
+    coord: IVec3,
+    blocks: &[BlockId],
+) -> Vec<crate::mesh::TreeFootprint> {
+    // Giants reach 22.5 m; ordinary crowns stay well inside this margin.
+    const MARGIN_M: f32 = 24.0;
+    let rainforest_understory = cfg.generator_version >= engine_voxel::RAINFOREST_UNDERSTORY_GENERATOR;
+    if !blocks.iter().any(|&b| {
+        matches!(b, BlockId::Grass | BlockId::FungalSoil | BlockId::Leaves | BlockId::PineLeaves | BlockId::Log)
+            || (rainforest_understory && b == BlockId::GroveMoss)
+    }) {
+        return Vec::new();
+    }
+    let scale = cfg.voxel_meters();
+    let size = CHUNK_SIZE;
+    let cell = cfg.blocks_for_span(12.0);
+    let margin = cfg.blocks_for_span(MARGIN_M);
+    let (lo, hi) = (coord * size - IVec3::splat(margin), coord * size + IVec3::splat(size + margin));
+    let (floor_m, ceil_m) = (lo.y as f32 * scale, hi.y as f32 * scale);
+    let mut out = Vec::new();
+    for cz in engine_core::floor_div(lo.z, cell)..=engine_core::floor_div(hi.z - 1, cell) {
+        for cx in engine_core::floor_div(lo.x, cell)..=engine_core::floor_div(hi.x - 1, cell) {
+            let Some(t) = engine_worldgen::tree_visual(cfg, cx, cz) else { continue };
+            let top = t.base.y + t.height + t.crown_height;
+            if top < floor_m || t.base.y > ceil_m {
+                continue;
+            }
+            out.push(crate::mesh::TreeFootprint {
+                x: t.base.x,
+                z: t.base.z,
+                base_y: t.base.y,
+                reach: t.radius,
+                crown_low: t.base.y + t.height * 0.55,
+                top,
+                rainforest: rainforest_understory && t.canopy == TreeCanopy::Rainforest,
+            });
+        }
+    }
+    out
+}
+
 /// Generated terrain for `coord` plus its halo, as the mesher reads it.
 pub fn generate_padded(
     cfg: &WorldSampleConfig,
@@ -1225,38 +1376,75 @@ pub fn generate_padded(
     let terrain = engine_worldgen::generate_padded(cfg, coord, cancelled)?;
     let mut chunk = crate::mesh::GeneratedChunk::new(coord, terrain.blocks);
     chunk.voxel_meters = cfg.voxel_meters();
+    chunk.generator_version = cfg.generator_version;
+    if cfg.generator_version >= engine_voxel::SURFACE_FLORA_GENERATOR
+        && matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged | WorldType::Planet)
+    {
+        chunk.flora_config = Some(*cfg);
+    }
+    chunk.manyfold_shell = cfg.world_type == WorldType::Manyfold
+        && engine_worldgen::manyfold::shell_curve(cfg.generator_version).is_some();
     chunk.bed_height = terrain.bed_height;
     chunk.bed_frac = terrain.bed_frac;
     chunk.sky_ceiling = terrain.sky_ceiling;
+    chunk.trees = tree_footprints(cfg, coord, &chunk.blocks);
+    let quantum = engine_core::environment::cell_volume(cfg.voxel_scale) / 8;
+    for (p, amount) in terrain.partial_water {
+        let coarse = amount.div_ceil(quantum) as u8;
+        if coarse < 8 { chunk.water_levels.insert(p, coarse); }
+        let deficit = u64::from(coarse) * quantum - amount;
+        if deficit > 0 { chunk.water_deficit.insert(p, deficit); }
+    }
     Some(chunk)
 }
 
 mod resident;
+mod river_water;
 #[cfg(test)]
 mod change_tests;
 
 pub struct World {
+    #[cfg(feature="multiplayer")]
+    pub(crate) multiplayer: Option<crate::multiplayer::gameplay::ContextFrame>,
+    #[cfg(feature="multiplayer")]
+    pub(crate) network_host:bool,
+    #[cfg(feature="multiplayer")]
+    pub(crate) network_changes:std::collections::HashSet<IVec3>,
     /// Cells committed since the last `publish_changes`, in write order with
     /// repeats. Every chunk writer appends here so no caller can skip meshing.
     changed_cells: Vec<IVec3>,
-    /// Exact, tick-labelled view used only by the isolated headless CA option.
+    /// Exact, tick-labelled view used by isolated cellular sessions.
     pub(crate) ca_view: Option<Arc<crate::simulation::cpu_region::Snapshot>>,
+    pub(crate) ca_reservations: HashSet<IVec3>,
     pub habitats: habitats::State,
     /// Loaded from and saved to the `farming::sidecar::FILE` sidecar in `regions.root`.
     pub farming: farming::State,
+    /// The Hush colony and the torches it knows; only the Lightless uses it.
+    pub lightless: lightless_life::Life,
+    pub(crate) mill: Option<mill::Mill>,
     /// Loaded from and saved to the `block_data::sidecar::FILE` sidecar in `regions.root`.
     pub block_data: block_data::State,
     /// Loaded from and saved to the `travel::sidecar::FILE` sidecar in `regions.root`.
     pub travel: travel::State,
     /// Loaded from and saved to the `progression::sidecar::FILE` sidecar in `regions.root`.
     pub progression: progression::State,
+    /// Loaded from and saved to the `stats::sidecar::FILE` sidecar in `regions.root`.
+    pub stats: stats::State,
+    pub chests: chests::State,
+    pub goals: goals::State,
     pub orbital: orbital::State,
     pub inventory: inventory::SurvivalInventory,
+    pub caches: Vec<containers::Cache>,
     pub sandbox: crate::simulation::sandbox::Sandbox,
+    pub mining_fractures: mining::Fractures,
+    pub manyfold_weight: crate::manyfold::Weight,
+    /// Loaded from and saved to the `portals::sidecar::FILE` sidecar in `regions.root`.
+    pub portals: portals::gates::Gates,
     pub environment: environment::State,
     pub adventure: adventure::Adventure,
     pub undercrown: undercrown::State,
     pub factory: factory::Factory,
+    pub industry: industry::State,
     pub expedition: expedition::Expedition,
     /// Loaded from and saved to the `rules::FILE` sidecar in `regions.root`.
     pub rules: rules::Rules,
@@ -1266,7 +1454,9 @@ pub struct World {
     pub ripples: crate::fluid::ripples::RippleField,
     pub activity: activity::Activity,
     pub generator_version: u32,
+    pub planet_settings: Option<engine_voxel::PlanetSettings>,
     sample_cache: std::cell::RefCell<sample_cache::SampleCache>,
+    stored_samples: std::cell::RefCell<stored_samples::Cache>,
     pub chunks: resident::ResidentEdits,
     snapshot_cache: WorldSnapshot,
     snapshot_revision: u64,
@@ -1286,16 +1476,43 @@ impl World {
 
     pub fn with_seed(world_type: WorldType, voxel_scale: VoxelScalePreset, seed: u32) -> Self {
         let regions = regions::RegionStream::new();
+        Self::with_regions(world_type, voxel_scale, seed, regions)
+    }
+
+    pub(crate) fn with_seed_in(world_type: WorldType, voxel_scale: VoxelScalePreset, seed: u32, directory: &std::path::Path) -> Self {
+        Self::with_regions(world_type, voxel_scale, seed, regions::RegionStream::new_in(directory))
+    }
+
+    fn with_regions(world_type: WorldType, voxel_scale: VoxelScalePreset, seed: u32, regions: regions::RegionStream) -> Self {
+        let generator_version = match world_type {
+            WorldType::Planet => engine_voxel::PLANET_GENERATOR_VERSION,
+            WorldType::Manyfold => engine_worldgen::manyfold::maze::TWISTED,
+            WorldType::Hills => CURRENT_GENERATOR_VERSION,
+            _ => engine_voxel::WATERSHED_LOD_GENERATOR,
+        };
         let region_view = regions.view.clone();
         let mut world = Self {
+            #[cfg(feature="multiplayer")]
+            multiplayer: None,
+            #[cfg(feature="multiplayer")]
+            network_host:false,
+            #[cfg(feature="multiplayer")]
+            network_changes:Default::default(),
             changed_cells: Vec::new(),
             ca_view: None,
+            ca_reservations: HashSet::new(),
             habitats: habitats::State::default(),
             farming: farming::State::default(),
+            lightless: lightless_life::Life::default(),
+            mill: None,
             block_data: block_data::State::default(),
             travel: travel::State::default(),
             progression: progression::State::default(),
+            stats: stats::State::default(),
+            chests: chests::State::default(),
+            goals: goals::State::default(),
             orbital: orbital::State::default(),
+            caches: Vec::new(),
             inventory: {
                 let mut inv = inventory::SurvivalInventory::default();
                 inv.voxel_m = voxel_scale.meters();
@@ -1305,21 +1522,29 @@ impl World {
             rules: rules::Rules::default(),
             expedition: expedition::Expedition::default(),
             factory: factory::Factory::default(),
+            industry: industry::State::default(),
             adventure: adventure::Adventure::default(),
             undercrown: undercrown::State::default(),
             sandbox: Default::default(),
+            mining_fractures: Default::default(),
+            manyfold_weight: Default::default(),
+            portals: Default::default(),
             environment: environment::State { cells_per_metre: (1.0 / voxel_scale.meters()) as i32, ..Default::default() },
-            generator_version: CURRENT_GENERATOR_VERSION,
+            generator_version,
+            planet_settings: None,
             water_levels: water::WaterLevels::default(),
             ripples: Default::default(),
             activity: activity::Activity::default(),
             sample_cache: Default::default(),
+            stored_samples: Default::default(),
             chunks: resident::ResidentEdits::default(),
             snapshot_cache: WorldSnapshot {
+                ca_view: None,
                 regions: region_view,
                 water_levels: Arc::default(),
                 cfg: WorldSampleConfig {
-                    generator_version: CURRENT_GENERATOR_VERSION,
+                    planet: None,
+                    generator_version,
                     seed,
                     world_type,
                     voxel_scale,
@@ -1334,6 +1559,13 @@ impl World {
             seed,
             revision: 0,
         };
+        if world_type == WorldType::Manyfold {
+            world.rules.mob_spawning = false;
+            let cfg = WorldSampleConfig { planet: None, generator_version, seed, world_type, voxel_scale };
+            if let Some(home) = engine_worldgen::manyfold::cradle(&cfg) {
+                world.manyfold_weight.position = home;
+            }
+        }
         world.sync_from_inventory();
         // Noita starts the player with a wand. The old crafted/altar-only path
         // left new players unarmed with no visible route to spellcasting.
@@ -1359,6 +1591,7 @@ impl World {
 
     /// Synchronizes legacy resource/kit/ration/weapon fields from the authoritative survival inventory.
     pub fn sync_from_inventory(&mut self) {
+        if self.inventory.balance != self.rules.stacks { self.inventory.migrate_balance(self.rules.stacks); }
         use inventory::{FoodKind, Item};
         for i in 0..factory::RESOURCE_COUNT {
             let whole = self.inventory.count_item(Item::Resource(i as u8));
@@ -1488,8 +1721,7 @@ impl World {
     pub fn eat_food(&mut self, food: inventory::FoodKind, preferred_hotbar: Option<usize>) -> bool {
         let max_hp = self.adventure.max_health();
         if !food.is_potion() && self.adventure.hunger >= 99.5 && self.adventure.health >= max_hp - 0.1 {
-            self.expedition.message = "Already well-fed.".into();
-            self.expedition.message_seconds = 2.0;
+            self.expedition.say_for("Hunger Full", 2.0);
             return false;
         }
         let item = inventory::Item::Food(food);
@@ -1504,19 +1736,22 @@ impl World {
         self.adventure.hunger = (self.adventure.hunger + food.hunger_restore()).min(100.0);
         self.adventure.health = (self.adventure.health + food.health_restore()).min(max_hp);
         self.progression.eat(food, self.adventure.hunger);
+        self.goals.note(goals::Event::Ate);
+        progression::fill_absorption(self);
         self.inventory.eat_timer = 1.35;
         self.sync_from_inventory();
-        self.expedition.message = if food.is_potion() {
+        let message = if food.is_potion() {
             format!("Drank {}", food.name())
         } else {
-            format!("Ate {} (+{:.0} hunger, +{:.0} health).", food.name(), food.hunger_restore(), food.health_restore())
+            format!("Ate {} · Hunger +{:.0} · Health +{:.0}", food.name(), food.hunger_restore(), food.health_restore())
         };
-        self.expedition.message_seconds = 2.4;
+        self.expedition.say_for(message, 2.4);
         true
     }
 
     pub fn sample_config(&self) -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: self.planet_settings,
             generator_version: self.generator_version,
             seed: self.seed,
             world_type: self.world_type,
@@ -1548,8 +1783,10 @@ impl World {
             self.full_snapshot_cache = Some((
                 self.revision,
                 WorldSnapshot {
+                    ca_view: self.ca_view.clone(),
                     regions: self.regions.view.clone(),
-                    water_levels: Arc::new(self.water_levels.snapshot_all().with_precision(&self.environment.water_deficit)),
+                    water_levels: Arc::new(self.water_levels.snapshot_all().with_precision(&self.environment.water_deficit)
+                        .with_ca(self.ca_view.as_deref(), engine_core::environment::cell_volume(self.voxel_scale))),
                     cfg,
                     chunks: Arc::new(self.chunks.clone()),
                 },
@@ -1559,27 +1796,52 @@ impl World {
         // Region publications can change without resident voxel mutations.
         // Replace reader pins without copying unchanged chunk/water maps.
         cached.regions = self.regions.view.clone();
+        cached.ca_view = self.ca_view.clone();
         cached.clone()
     }
 
     pub fn get(&self, p: IVec3) -> BlockId {
+        self.get_with_procedural(p, |p| self.sample_cache.borrow_mut().get(self.sample_config(), p))
+    }
+
+    pub(crate) fn resident_block(&self, p: IVec3) -> Option<BlockId> {
         if let Some(cell) = self.ca_view.as_ref().and_then(|view| view.cell(p)) {
-            return if cell.volume == 0 { BlockId::Air } else { BlockId::from_u32(cell.material as u32) };
+            return Some(if cell.volume == 0 { BlockId::Air } else { BlockId::from_u32(cell.material as u32) });
+        }
+        self.chunks.get(&chunk_coord_from_world_block(p))
+            .map(|chunk| chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)])
+    }
+
+    pub(crate) fn column_reader(&self, x: i32, z: i32) -> impl FnMut(i32) -> BlockId + '_ {
+        let cfg = self.sample_config();
+        let mut column = None;
+        move |y| {
+            self.get_with_procedural(IVec3::new(x, y, z), |p| {
+                self.sample_cache.borrow_mut().get_or_sample(cfg, p, || {
+                    if p.y < cfg.min_world_y() || p.y >= cfg.max_world_y() {
+                        return BlockId::Air;
+                    }
+                    let sample = *column.get_or_insert_with(|| sample_column(&cfg, p.x, p.z));
+                    engine_worldgen::sample_block_in_column(&cfg, p, sample)
+                })
+            })
+        }
+    }
+
+    fn get_with_procedural(&self, p: IVec3, procedural: impl FnOnce(IVec3) -> BlockId) -> BlockId {
+        if let Some(block) = self.resident_block(p) {
+            return block;
         }
         let chunk_coord = chunk_coord_from_world_block(p);
-        if let Some(chunk) = self.chunks.get(&chunk_coord) {
-            chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
-        } else if self.regions.view.records.contains_key(&chunk_coord) {
-            self.regions
-                .view
-                .load(chunk_coord)
-                .ok()
-                .flatten()
+        if let Some(record) = self.regions.view.records.get(&chunk_coord) {
+            self.stored_samples.borrow_mut()
+                .read(chunk_coord, self.regions.instance_id, record.version,
+                    || self.regions.view.load(chunk_coord).ok().flatten())
                 .map_or(BlockId::Stone, |c| {
                     c.chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
                 })
         } else {
-            self.sample_cache.borrow_mut().get(self.sample_config(), p)
+            procedural(p)
         }
     }
 
@@ -1627,6 +1889,7 @@ impl World {
     }
 
     fn write_water_cell(&mut self, p: IVec3, volume: u8) -> Option<IVec3> {
+        if self.ca_view.is_some() || mill::owns_water(self, p) { return None; }
         let cfg = self.sample_config();
         if p.y < cfg.min_world_y()
             || p.y >= cfg.max_world_y()
@@ -1658,6 +1921,8 @@ impl World {
             chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)]
         });
         if current != id {
+            farming::jobs::activity::before_edit(self,p);
+            self.block_data.note_sediment_write(p, current, id);
             if let Some(mut chunk) = self.chunks.get_mut(&coord) {
                 let chunk = Arc::make_mut(&mut chunk);
                 chunk.blocks[ChunkData::local_index(p.x, p.y, p.z)] = id;
@@ -1712,6 +1977,14 @@ impl World {
         to_volume: u8,
         moved: u8,
     ) -> bool {
+        if mill::owns_water(self, from) || mill::owns_water(self, to) { return false; }
+        self.apply_metered_water_pair(from, from_volume, to, to_volume, moved)
+    }
+
+    fn apply_metered_water_pair(
+        &mut self, from: IVec3, from_volume: u8, to: IVec3, to_volume: u8, moved: u8,
+    ) -> bool {
+        if self.ca_view.is_some() { return false; }
         if from == to || moved == 0 || from_volume > 8 || to_volume > 8 {
             return false;
         }
@@ -1737,6 +2010,7 @@ impl World {
             || !matches!(self.get(to), BlockId::Air | BlockId::Water) {
             return false;
         }
+        let Some(pollution_transfer)=industry::water::prepare(self,from,to,moved_ul) else {return false;};
         let from_chunk = chunk_coord_from_world_block(from);
         let to_chunk = chunk_coord_from_world_block(to);
         // Admit BOTH owners before changing either. Missing/corrupt targets
@@ -1750,6 +2024,9 @@ impl World {
         } else { (from_volume, to_volume) };
         self.commit_resident_water_cell(from, from_units);
         self.commit_resident_water_cell(to, to_units);
+        self.industry.transfer_water(pollution_transfer);
+        #[cfg(feature="multiplayer")]
+        if self.network_host {self.network_changes.insert(from);self.network_changes.insert(to);}
         if environmental {
             self.environment.transport_exact(from, to, source_ul, target_ul, moved_ul, &impact);
             self.environment.encode_water(from, source_ul - moved_ul);
@@ -1766,7 +2043,11 @@ impl World {
     /// voxel water volume rather than assuming a flat sea level, so contact
     /// rings sit on partial cells and cave pools as well as the ocean.
     pub(crate) fn water_surface_at(&self, point: Vec3) -> Option<Vec3> {
-        water::surface_at(self, point, self.voxel_scale.meters())
+        water::surface_at(self, point, self.voxel_scale.meters(), BlockId::Water)
+    }
+
+    pub(crate) fn viscous_surface_at(&self, point: Vec3, liquid: BlockId) -> Option<Vec3> {
+        water::surface_at(self, point, self.voxel_scale.meters(), liquid)
     }
 
     /// Y of the exposed water surface voxel at `column`, searching `hint` and
@@ -1816,6 +2097,7 @@ impl World {
     }
 
     pub fn set_water_volume(&mut self, p: IVec3, volume: u8) {
+        if self.ca_view.is_some() { return; }
         let volume = volume.min(8);
         if self.water_volume(p) == volume {
             return;
@@ -1897,6 +2179,52 @@ impl World {
         self.set_many_with(edits, false, false, true, |_,_,_|{});
     }
 
+    /// Apply host edits to one resident chunk and relight its changed area once.
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn set_replica_cells(
+        &mut self,
+        coord: IVec3,
+        edits: &[(IVec3, BlockId)],
+        blocks: &mut HashSet<IVec3>,
+        chunks: &mut HashSet<IVec3>,
+    ) -> bool {
+        let Some(mut chunk) = self.chunks.get_mut(&coord) else { return false };
+        let mut light: Option<(IVec3, IVec3)> = None;
+        let mut committed = 0;
+        for &(p, id) in edits {
+            debug_assert_eq!(chunk_coord_from_world_block(p), coord);
+            let index = ChunkData::local_index(p.x, p.y, p.z);
+            let old = chunk.blocks[index];
+            if old == id { continue; }
+            let data = Arc::make_mut(&mut chunk);
+            data.blocks[index] = id;
+            data.note_modified(p, old, id);
+            if id.is_light_source() { data.torches.insert(p); } else { data.torches.remove(&p); }
+            if block_light::affects(old, id) {
+                light = Some(light.map_or((p, p), |(lo, hi)| (lo.min(p), hi.max(p))));
+            }
+            if id != BlockId::Water {
+                self.water_levels.remove(&p);
+                self.water_levels.remove_velocity(&p);
+                self.environment.water_deficit.remove(&environment::key(p));
+            }
+            self.changed_cells.push(p);
+            blocks.insert(p);
+            mark_chunk_and_neighbors_dirty(chunks, p);
+            committed += 1;
+        }
+        drop(chunk);
+        if committed > 0 {
+            self.regions.mark_dirty(coord);
+            self.invalidate_snapshot_at(coord);
+            self.revision = self.revision.wrapping_add(committed);
+        }
+        if let Some((lo, hi)) = light {
+            relight_bounds(self, lo, hi);
+        }
+        true
+    }
+
     fn set_many_with(
         &mut self,
         edits: &[(IVec3, BlockId)],
@@ -1905,8 +2233,14 @@ impl World {
         fitting_edit: bool,
         mut committed: impl FnMut(IVec3, BlockId, BlockId),
     ) {
+        if self.ca_view.is_some() { return; }
         let mut changed = false;
+        let mut light_lo: Option<IVec3> = None;
+        let mut light_hi: Option<IVec3> = None;
         for &(p, id) in edits {
+            if mill::owns_water(self, p) || (!unseal && orbital::cargo::security::protected(self, p)) {
+                continue;
+            }
             // Earlier cells can exhaust activity capacity. Recheck immediately
             // before each write rather than relying on a whole-batch preview.
             if require_admission && effects::admit(self, p).is_err() {
@@ -1922,12 +2256,17 @@ impl World {
                 continue;
             }
             let cfg = self.sample_config();
-            if p.y < cfg.min_world_y() || p.y >= cfg.max_world_y() {
+            if (p.y < cfg.min_world_y() || p.y >= cfg.max_world_y())
+                && !orbital::habitat::allows_cell(self, p) {
                 continue;
             }
             let current = self.get(p);
             if !fitting_edit && engine_content::fittings::state(current).is_some() { continue; }
-            if current == id || current == BlockId::Bedrock || (current == BlockId::TombStone && !unseal) {
+            if current == id || current == BlockId::Bedrock || (current.is_seal() && !unseal) {
+                continue;
+            }
+            farming::jobs::activity::before_edit(self, p);
+            if !self.block_data.can_write_sediment(p, id) {
                 continue;
             }
 
@@ -2007,7 +2346,10 @@ impl World {
                 }
             }
             let metres = self.voxel_scale.meters();
-            self.block_data.on_replaced(p, current, id, &mut self.inventory.dropped, metres);
+            if current == BlockId::ClaimStake {
+                self.farming.base.remove_stake(p);
+            }
+            self.block_data.on_replaced(p, current, id, &mut self.inventory.dropped, &mut self.inventory.overflow, metres);
 
             if phase_change {
                 if id == BlockId::Water {
@@ -2049,14 +2391,22 @@ impl World {
             }
             self.wake_acting(p);
             self.invalidate_snapshot_at(chunk_coord_from_world_block(p));
-            if id.is_torch() {
-                propagate_light(self, p, 14);
+            if block_light::affects(current, id) {
+                light_lo = Some(light_lo.map_or(p, |lo| lo.min(p)));
+                light_hi = Some(light_hi.map_or(p, |hi| hi.max(p)));
             }
             changed = true;
             self.changed_cells.push(p);
             committed(p, current, id);
+            mill::edited(self, p, id);
+            orbital::habitat::note_edit(&mut self.orbital.habitats, p, self.voxel_scale.meters());
+            #[cfg(feature="multiplayer")]
+            if self.network_host {self.network_changes.insert(p);}
         }
 
+        if let (Some(lo), Some(hi)) = (light_lo, light_hi) {
+            relight_bounds(self, lo, hi);
+        }
         if changed {
             self.revision = self.revision.wrapping_add(1);
         }
@@ -2113,45 +2463,6 @@ impl World {
     }
 }
 
-pub fn propagate_light(world: &mut World, start_pos: IVec3, light_level: u8) {
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back((start_pos, light_level));
-
-    while let Some((pos, level)) = queue.pop_front() {
-        if level <= 1 {
-            continue;
-        }
-
-        let neighbors = [
-            pos + IVec3::X,
-            pos - IVec3::X,
-            pos + IVec3::Y,
-            pos - IVec3::Y,
-            pos + IVec3::Z,
-            pos - IVec3::Z,
-        ];
-
-        for n in neighbors {
-            let chunk_coord = chunk_coord_from_world_block(n);
-            if let Some(mut chunk) = world.chunks.get_mut(&chunk_coord) {
-                let chunk_mut = Arc::make_mut(&mut chunk);
-                let idx = ChunkData::local_index(n.x, n.y, n.z);
-
-                if !chunk_mut.blocks[idx].is_solid() {
-                    let current_light = chunk_mut.light[idx] & 0x0F;
-                    let new_light = level - 1;
-                    if new_light > current_light {
-                        chunk_mut.light[idx] = (chunk_mut.light[idx] & 0xF0) | new_light;
-                        world.regions.mark_dirty(chunk_coord);
-                        queue.push_back((n, new_light));
-                    }
-                }
-            }
-        }
-    }
-}
-
-
 pub fn mark_chunk_and_neighbors_dirty(dirty: &mut HashSet<IVec3>, block: IVec3) {
     let center = chunk_coord_from_world_block(block);
     let local = block.rem_euclid(IVec3::splat(CHUNK_SIZE));
@@ -2180,6 +2491,11 @@ fn default_seed(world_type: WorldType) -> u32 {
         WorldType::Superflat => 0x051f_1001,
         WorldType::Hills => 0x051f_1002,
         WorldType::Ridged => 0x051f_1003,
+        WorldType::Nether => 0x051f_1004,
+        WorldType::Planet => 0x051f_1005,
+        WorldType::Manyfold => 0x051f_1006,
+        WorldType::Hall => 0x051f_1007,
+        WorldType::Realm(kind) => 0x051f_1000 + u32::from(kind.code()) + 1,
     }
 }
 
@@ -2205,6 +2521,7 @@ mod undercrown_generation {
     #[test]
     fn generator_19_authors_outside_the_locked_grid() {
         let base = WorldSampleConfig {
+            planet: None,
             generator_version: 18,
             seed: 17,
             world_type: WorldType::Hills,
@@ -2421,6 +2738,9 @@ mod far_ring_seam {
         assert!(worst <= 1, "ring step of {worst} voxels around the 110 m radius");
     }
 }
+
+#[cfg(test)]
+mod edit_border_tests;
 
 #[cfg(test)]
 mod bedrock_tests {

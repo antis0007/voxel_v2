@@ -1,44 +1,69 @@
 //! Metre-grid factory assemblies. Item and power networks are separate, bounded,
 //! deterministic graphs; only conduits carry traffic between machine ports.
 use super::{BlockId as B, World, mark_chunk_and_neighbors_dirty};
+use super::industry::SPECIES;
 use glam::{IVec3, Vec3};
 use std::collections::{HashMap, HashSet, VecDeque};
 mod extraction;
+mod persistence;
+#[cfg(all(test, feature = "multiplayer"))]
+mod network_tests;
+mod catalog;
+mod chest_io;
+pub mod industry;
+pub mod blocks;
+pub mod biomatter;
 pub mod chips;
 pub mod assembler;
 pub mod induction;
 pub mod multiblock;
+pub mod bases;
 pub mod overview;
+pub mod fuel_order;
+pub mod stock_order;
 pub mod pile;
 pub mod power;
 pub mod portable;
 pub mod quarry;
+pub mod placer;
 mod quick_stack;
 pub mod sides;
+pub mod ports;
 pub mod stats;
 pub mod recipes;
+mod process_table;
 pub mod transit;
 mod routes;
 #[cfg(test)]
+mod packing_tests;
+#[cfg(test)]
 mod authority_tests;
+#[cfg(test)]
+mod block_tests;
 #[cfg(test)]
 mod routing_reference;
 #[cfg(test)]
 mod routing_tests;
 pub(crate) use extraction::tick_world;
 
-pub const RESOURCE_COUNT: usize = 22;
-/// Resources that existed before save version 20 (coke, creosote and
-/// bio-ethanol were appended after them).
-pub const LEGACY_RESOURCE_COUNT: usize = 19;
+// Keep the factory API stable while the catalogue owns machine definitions.
+#[allow(unused_imports)]
+pub use catalog::{Kind, MachineDef, MACHINES};
+pub use engine_content::factory_resources::RESOURCE_COUNT;
 pub const COKE: usize = 19;
 pub const CREOSOTE: usize = 20;
 pub const ETHANOL: usize = 21;
-pub const CAPACITY: u32 = 64 * 64;
+pub const GOLD_CONCENTRATE: usize = 22;
+pub const GOLD_INGOT: usize = 23;
+pub const FEATHERS: usize = 24;
+pub use persistence::{FACTORY_FORMAT, LEGACY_RESOURCE_COUNT, resources_in_save};
+#[cfg(feature = "multiplayer")]
+use persistence::{read_counts, read_gas_counts};
+#[cfg(feature = "multiplayer")]
+pub(crate) use persistence::read_resources;
+pub use engine_content::fabrication::CAPACITY;
+const TICK_SECONDS: f32 = 1.0 / engine_content::fabrication::TICKS_PER_SECOND as f32;
 pub const MAX_NODES: usize = 1024;
-/// Layout version `Factory::encode` writes (save version 20 and later).
-#[cfg(test)]
-pub const FACTORY_FORMAT: u8 = 10;
 pub(crate) const DIRS: [IVec3; 6] = [
     IVec3::X,
     IVec3::NEG_X,
@@ -48,184 +73,27 @@ pub(crate) const DIRS: [IVec3; 6] = [
     IVec3::NEG_Z,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[repr(u32)]
-pub enum Kind {
-    Generator,
-    Crusher,
-    Furnace,
-    Feeder,
-    Storage,
-    Pipe,
-    Cable,
-    Bioreactor,
-    AlloyKiln,
-    Fabricator,
-    Cultivator,
-    MiningDrill,
-    Pump,
-    FluidPipe,
-    Tank,
-    Washer,
-    Battery,
-    CokeOven,
-    BlastFurnace,
-    CokeBrick,
-    BlastBrick,
-    InductionCasing,
-    InductionPort,
-    InductionCell,
-    InductionProvider,
-    Transformer,
-    Assembler,
-}
-impl Kind {
-    pub const COUNT: usize = 27;
-    /// Kinds that existed before save version 20.
-    pub const LEGACY_COUNT: usize = 16;
-    /// Number of kinds a factory layout version stores.
-    pub fn count_in_format(format: u8) -> usize {
-        match format {
-            10.. => Self::COUNT,
-            9 => 21,
-            8 => Self::LEGACY_COUNT,
-            7 => 11,
-            _ => 8,
-        }
-    }
-    pub const ALL: [Self; Self::COUNT] = [
-        Self::Generator,
-        Self::Crusher,
-        Self::Furnace,
-        Self::Feeder,
-        Self::Storage,
-        Self::Pipe,
-        Self::Cable,
-        Self::Bioreactor,
-        Self::AlloyKiln,
-        Self::Fabricator,
-        Self::Cultivator,
-        Self::MiningDrill,
-        Self::Pump,
-        Self::FluidPipe,
-        Self::Tank,
-        Self::Washer,
-        Self::Battery,
-        Self::CokeOven,
-        Self::BlastFurnace,
-        Self::CokeBrick,
-        Self::BlastBrick,
-        Self::InductionCasing,
-        Self::InductionPort,
-        Self::InductionCell,
-        Self::InductionProvider,
-        Self::Transformer,
-        Self::Assembler,
-    ];
-    fn def(self) -> &'static MachineDef {
-        &MACHINES[self as usize]
-    }
-    pub fn block(self) -> B {
-        self.def().block
-    }
-    pub fn from_block(b: B) -> Option<Self> {
-        Self::ALL.into_iter().find(|k| k.block() == b)
-    }
-    pub fn name(self) -> &'static str {
-        self.def().name
-    }
-    /// Workbench cost in resource units (index, count).
-    pub fn recipe(self) -> &'static [(usize, u32)] {
-        &self.def().recipe
-    }
-    pub fn yield_count(self) -> u32 {
-        self.def().yield_count
-    }
-    pub fn accepts(self, i: usize) -> bool {
-        self.def().accepts.contains(&i)
-    }
-    /// Multiblock casing. Not a port, not a machine: it only gives shape to a
-    /// coke oven or blast furnace.
-    pub fn structural(self) -> bool {
-        self.def().structural
-    }
-    /// Holds grid energy in a pool: batteries, transformers, matrix ports.
-    pub fn stores_power(self) -> bool {
-        self.def().stores_power
-    }
-    pub fn conduit(self) -> bool {
-        self.def().conduit
-    }
-    pub fn powered(self) -> bool {
-        self.def().powered
-    }
-    /// Machines that take the three-step upgrade: drives for consumers,
-    /// cell chemistry for batteries.
-    pub fn upgradable(self) -> bool {
-        self.def().upgradable
-    }
-    /// Cost of the first upgrade, then of every later one.
-    pub fn upgrade_cost(self, level: u32) -> &'static [(usize, u32)] {
-        &self.def().upgrade_cost[usize::from(level != 0)]
-    }
-    pub fn water_port(self) -> bool {
-        self.def().water_port
-    }
-    pub(crate) fn generator(self) -> bool {
-        self.def().generator
-    }
-}
-
-/// One machine kind's data row, from `assets/machines.ron`; indexed by `Kind as usize`.
-#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct MachineDef {
-    pub kind: Kind,
-    pub block: B,
-    #[serde(deserialize_with = "leak")]
-    pub name: &'static str,
-    pub recipe: Vec<(usize, u32)>,
-    pub yield_count: u32,
-    /// Resource indices the machine takes as input.
-    pub accepts: Vec<usize>,
-    pub structural: bool,
-    pub stores_power: bool,
-    pub conduit: bool,
-    pub powered: bool,
-    pub upgradable: bool,
-    /// Cost of upgrade level 0, then of every later level.
-    pub upgrade_cost: [Vec<(usize, u32)>; 2],
-    pub water_port: bool,
-    pub generator: bool,
-}
-
-const MACHINES_RON: &str = include_str!("../../../../assets/machines.ron");
-pub static MACHINES: std::sync::LazyLock<Vec<MachineDef>> = std::sync::LazyLock::new(|| {
-    let rows: Vec<MachineDef> =
-        ron::from_str(MACHINES_RON).unwrap_or_else(|error| panic!("assets/machines.ron: {error}"));
-    assert_eq!(rows.len(), Kind::COUNT, "assets/machines.ron must list every Kind once, in enum order");
-    for (i, row) in rows.iter().enumerate() {
-        assert_eq!(row.kind as usize, i, "assets/machines.ron row {i} is {:?}, expected enum order", row.kind);
-    }
-    rows
-});
-
-fn leak<'de, D: serde::Deserializer<'de>>(d: D) -> Result<&'static str, D::Error> {
-    <String as serde::Deserialize>::deserialize(d).map(|s| &*Box::leak(s.into_boxed_str()))
-}
-
 #[derive(Clone)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Node {
     pub kind: Kind,
     /// Derived from the chip bay's saved production order; not serialized here.
     pub lab_recipe: Option<u8>,
+    #[cfg_attr(feature = "multiplayer", serde(deserialize_with = "read_resources"))]
     pub input: [u32; RESOURCE_COUNT],
+    #[cfg_attr(feature = "multiplayer", serde(deserialize_with = "read_resources"))]
     pub output: [u32; RESOURCE_COUNT],
+    /// Saved from format 11. Whole blocks use item counts, not resource units.
+    pub blocks: blocks::Buffers,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub placer: placer::Buffer,
     pub energy: u32,
     pub burn: u32,
     pub progress: u32,
     pub recipe: Option<usize>,
     pub enabled: bool,
-    pub status: &'static str,
+#[cfg_attr(feature="multiplayer", serde(deserialize_with="crate::multiplayer::text::string"))]
+    pub status: crate::world::interaction::Text,
     pub mode: u32,
     pub upgrade: u32,
     pub filter: Option<usize>,
@@ -233,7 +101,7 @@ pub struct Node {
     pub activity: f32,
     pub water: u32,      // 512 units per cubic metre at every voxel scale
     pub excavation: u32, // next cell in the drill shaft
-    work_clock: f32,
+    pub(super) work_clock: f32,
     pub draining: bool,
     /// Signed power flow last tick in units (= kW): positive while a
     /// generator produces or a battery charges, negative while drawing.
@@ -242,10 +110,12 @@ pub struct Node {
     pub formed: bool,
     /// Controllers: (bricks found, bricks needed) for the best orientation.
     pub structure: (u16, u16),
-    /// Controllers: outward face of the oven door / tuyere.
+    /// Controllers: outward face of the oven door / tuyere or direction of the quarry pit.
     pub facing: IVec3,
     /// Saved from format 10. Assembler: recipe index + 1 (0 = none).
     /// Battery: I/O limit in kW (0 = the cell's full rate).
+    /// Mining drill or quarry: depth in metres (0 = 24 m).
+    /// Supported processors: tagged stock reserve, or legacy fuel batch.
     pub target: u32,
     /// Saved from format 10. Assembler: finished items that are not
     /// resources (machine kits), waiting to be collected.
@@ -255,6 +125,28 @@ pub struct Node {
     /// Induction matrix master: capacity (units) and transfer rate (units per tick).
     pub store_cap: u32,
     pub store_rate: u32,
+    /// Item face roles, two bits per `DIRS` entry: 0 both, 1 in, 2 out, 3 off.
+    /// Factory format 13. Conduits stay 0; closed conduit faces stay in `target`.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub faces: u32,
+    #[cfg_attr(feature = "multiplayer", serde(default, deserialize_with = "read_gas_counts"))]
+    pub exhaust: [u32; SPECIES],
+    #[cfg_attr(feature = "multiplayer", serde(default, deserialize_with = "read_gas_counts"))]
+    pub residue: [u32; SPECIES],
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub filter_credit: u32,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub gas_vent: bool,
+    #[cfg_attr(feature = "multiplayer", serde(default = "industry::default_fuel"))]
+    pub fuel_resource: u32,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub ruptured: bool,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub gas_vent_side: u8,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub gas_vent_species: u8,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub separator_water_mg: u32,
 }
 impl Node {
     fn new(kind: Kind) -> Self {
@@ -263,13 +155,15 @@ impl Node {
             lab_recipe: None,
             input: [0; RESOURCE_COUNT],
             output: [0; RESOURCE_COUNT],
+            blocks: blocks::Buffers::default(),
+            placer: placer::Buffer::default(),
             energy: 0,
             burn: 0,
             progress: 0,
             recipe: None,
-            enabled: true,
+            enabled: kind != Kind::Quarry,
             status: "Ready",
-            mode: 0,
+            mode: if matches!(kind, Kind::Storage | Kind::Quarry) { 1 } else { 0 },
             upgrade: 0,
             filter: None,
             phase: 0.0,
@@ -287,14 +181,37 @@ impl Node {
             pool: None,
             store_cap: 0,
             store_rate: 0,
+            faces: 0,
+            exhaust: [0; SPECIES],
+            residue: [0; SPECIES],
+            filter_credit: 0,
+            gas_vent: false,
+            fuel_resource: industry::default_fuel(),
+            ruptured: false,
+            gas_vent_side: 0,
+            gas_vent_species: 0,
+            separator_water_mg: 0,
         }
     }
 }
 
+/// Fixed-size counts; serde/default implementations also support more than 32 kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KindCounts(pub [u32; Kind::COUNT]);
+impl Default for KindCounts { fn default()->Self {Self([0;Kind::COUNT])} }
+impl std::ops::Deref for KindCounts {type Target=[u32;Kind::COUNT];fn deref(&self)->&Self::Target{&self.0}}
+impl std::ops::DerefMut for KindCounts {fn deref_mut(&mut self)->&mut Self::Target{&mut self.0}}
 #[derive(Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Factory {
+    /// Consumed into the persistent workshop record after a real pipe delivery.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pub(crate) workshop_delivery: bool,
     pub nodes: crate::fast_hash::FastMap<IVec3, Node>,
-    pub kits: [u32; Kind::COUNT],
+    pub kits: KindCounts,
+    /// Stable machine groups for dashboards; rebuilt from `nodes`, never saved.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pub bases: bases::Bases,
     pub focus: Option<IVec3>,
     pub bench: Option<IVec3>,
     accumulator: f32,
@@ -313,12 +230,18 @@ pub struct Factory {
     refunds: Vec<(usize, u32)>,
     /// Item pipe cell -> index into `items`.
     item_net: HashMap<IVec3, usize>,
+    /// Live reserve destinations, derived on the factory clock and shown to guests.
+    #[cfg_attr(feature = "multiplayer", serde(default, skip_serializing_if = "Vec::is_empty"))]
+    stock_receivers: Vec<(IVec3, IVec3)>,
     /// Route trees for `items`; cleared whenever the networks are rebuilt.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
     routes: routes::Routes,
     /// Drill and pump positions, reused by every fixed step.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
     machine_scratch: Vec<IVec3>,
     /// Tests: route with the uncached reference pass instead.
     #[cfg(test)]
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
     reference_routing: bool,
     /// Measured state of each power network, parallel to `power`.
     power_stats: Vec<power::NetStats>,
@@ -326,6 +249,9 @@ pub struct Factory {
     power_net: HashMap<IVec3, usize>,
     /// Factorio-style production and power history.
     pub stats: stats::Production,
+    /// The same history per base in `bases`; runtime only.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pub by_base: stats::ByBase,
     /// Player-designed controllers and their library.
     #[cfg_attr(feature="multiplayer", serde(skip))]
     pub chips: chips::Bay,
@@ -333,19 +259,34 @@ pub struct Factory {
 
 #[derive(Clone, Default)]
 pub struct View {
+    pub workshop_alerts: Vec<WorkshopAlert>,
+    pub air: [f32; SPECIES],
+    pub contamination_mg: u64,
+    pub wind: [f32; 2],
+    pub workshop: Option<super::workshop::Progress>,
+    pub orbital_cell: bool,
+    pub orbital_delivery: Option<(u32, IVec3)>,
+    pub meridian_terminal: Option<IVec3>,
+    pub iron_line: Option<&'static str>,
     pub fabrication: std::sync::Arc<chips::production::Production>,
     pub fabrication_site: Option<IVec3>,
     pub fabrication_node: Option<Node>,
     pub habitats: super::habitats::View,
-    pub kits: [u32; Kind::COUNT],
+    pub kits: KindCounts,
     pub bench: bool,
     pub focused: Option<(IVec3, Node)>,
+    pub cells_per_metre: i32,
     /// Cable network of the focused machine.
     pub focused_grid: Option<power::NetStats>,
+    /// Faces with a real connection on the focused conduit.
+    pub focused_links: u8,
     /// Energy pool (stored, capacity, rate) of a focused storage assembly.
     pub focused_pool: Option<(u32, u32, u32)>,
     /// Factory health: what every assembly is doing, and the main limit.
     pub health: overview::Summary,
+    pub outposts: Vec<overview::Outpost>,
+    pub fuel_order: Option<fuel_order::View>,
+    pub stock_reserve: Option<stock_order::View>,
     /// Production totals and the span (s) they cover: last minute, last hour.
     pub minute: (stats::Sample, f32),
     pub hour: (stats::Sample, f32),
@@ -359,11 +300,22 @@ pub struct View {
     /// Chip bay clock (1/120 s ticks), for lot progress.
     pub chips_now: u64,
 }
+
 #[derive(Clone, Copy)]
+pub struct WorkshopAlert {
+    pub source: IVec3,
+    pub target: IVec3,
+    pub kind: Kind,
+    pub health: overview::Health,
+}
+
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action {
+    ToolWorkshop(super::tool_workshop::Action),
     Resonance(super::adventure::resonance::Action),
     Habitat(super::habitats::Action),
-    /// Assembler recipe (index + 1, 0 clears) or battery I/O limit in kW.
+    /// Machine-specific target, such as quarry depth or assembler recipe.
     SetTarget(IVec3, u32),
     Craft(Kind),
     Select(Kind),
@@ -373,9 +325,10 @@ pub enum Action {
     EatRation,
     Load(IVec3),
     Collect(IVec3),
-    /// Move `amount` units of a resource between a container and the pack.
-    /// `deposit` sends pack → container. `u32::MAX` means the whole compartment.
+    /// Move `amount` units between an input buffer and the pack.
+    /// `deposit` sends pack → input. `u32::MAX` means the whole compartment.
     BufferMove(IVec3, usize, u32, bool),
+    ContainerClick(IVec3, usize, bool, bool),
     Toggle(IVec3),
     /// Close or reopen one face of a conduit (face index into `DIRS`).
     ToggleSide(IVec3, u8),
@@ -386,6 +339,13 @@ pub enum Action {
     Wand,
     SetWandSlot(u32, u32),
     SwapWandSlots(u32, u32),
+    /// Replace the held wand's deck with a rune deck packed by `adventure::runes::pack`.
+    InscribeWand(u64),
+    /// Begin a ritual circle from a phrase packed by `adventure::runes::pack_phrase`.
+    DrawCircle(u64),
+    /// Bind a phrase packed by `adventure::runes::pack_program` to the held wand for the
+    /// native rune path; `u64::MAX` releases the binding.
+    BindRunes(u64),
     SetWandMode(u32),
     Drain(IVec3),
     /// Fit a material into a tool part. Parameters are `Part`, `Material`.
@@ -394,8 +354,21 @@ pub enum Action {
     ClearToolParts,
     /// Move pack resources a storage container already holds into it.
     QuickStack(IVec3),
+    /// Item face role on a machine. Face is a `DIRS` index; role is 0 both, 1 in, 2 out, 3 off.
+    SetFace(IVec3, u8, u8),
+    PackWaste(IVec3),
+    VentGas(IVec3),
+    GasOutlet(IVec3, u8, u8),
+    FillFuelCell(IVec3),
+    RepairGas(IVec3),
+    CleanPollution(IVec3),
+    SetQuarryDirection(IVec3, u8),
+    SetPlacer(IVec3, bool),
+    FlushSediment(IVec3),
+    InstallMithril(IVec3),
 }
 
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 struct Network {
     ports: Vec<IVec3>,
     conduits: Vec<IVec3>,
@@ -406,6 +379,12 @@ struct Network {
     pipes: HashSet<IVec3>,
     /// Directed (conduit, neighbour) pairs whose shared face a conduit closed.
     closed: HashSet<(IVec3, IVec3)>,
+    /// Item pipe edges that must not pull or push out of the machine.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    no_extract: HashSet<(IVec3, IVec3)>,
+    /// Item pipe edges that must not push into the machine.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    no_insert: HashSet<(IVec3, IVec3)>,
 }
 impl Network {
     fn new(ports: Vec<IVec3>, conduits: Vec<IVec3>) -> Self {
@@ -415,6 +394,8 @@ impl Network {
             conduits,
             pipes,
             closed: HashSet::new(),
+            no_extract: HashSet::new(),
+            no_insert: HashSet::new(),
             tier: 0,
         }
     }
@@ -427,6 +408,26 @@ pub fn tank_level(n: &Node) -> f32 {
 
 pub fn step(world: &World) -> i32 {
     (1.0 / world.voxel_scale.meters()).round() as i32
+}
+
+/// Samples environmental inputs when the factory is ready to use them.
+pub(crate) fn tick_power(world: &mut World, dt: f32) {
+    let size = step(world);
+    let mut passive = HashMap::new();
+    if world.factory.accumulator + dt.clamp(0.0, TICK_SECONDS) >= TICK_SECONDS {
+        for (&p, node) in &world.factory.nodes {
+            if node.enabled && node.kind == Kind::Generator && power::passive_rating(node.mode).is_some() {
+                passive.insert(p, power::sample_passive(world, p, size, node.mode));
+            }
+        }
+    }
+    world.factory.tick_with_power(dt, size, |p| passive.get(&p).copied());
+}
+
+impl Factory {
+    pub(super) fn input_reserved(&self, pos: IVec3, resource: usize) -> u32 {
+        self.reserved.get(&(pos, resource)).copied().unwrap_or(0)
+    }
 }
 pub fn anchor(p: IVec3, size: i32) -> IVec3 {
     IVec3::new(
@@ -451,7 +452,7 @@ fn near(world: &World, p: IVec3, player: Vec3) -> bool {
         * world.voxel_scale.meters()
         <= 7.0
 }
-fn at_bench(world: &World, player: Vec3) -> bool {
+pub(crate) fn at_bench(world: &World, player: Vec3) -> bool {
     world
         .factory
         .bench
@@ -465,9 +466,23 @@ pub(super) fn fabrication_site(world: &World, player: Vec3) -> Option<IVec3> {
             .map(|(p, _)| *p).min_by_key(|p| (p.x, p.y, p.z)))
 }
 
-pub fn view(world: &World, player: Vec3) -> View {
+pub fn view(world: &World, player: Vec3, production: bool, logistics: bool) -> View {
     let lab = fabrication_site(world, player);
+    let cfg = world.sample_config();
+    use engine_worldgen::meridian_terminal as terminal;
     View {
+        workshop_alerts: if logistics { workshop_alerts(world, player) } else { Vec::new() },
+        air: world.industry.concentration(player.floor().as_ivec3(), world.voxel_scale.meters()),
+        contamination_mg: world.factory.focus.map_or(0, |p| world.industry.contamination(p, world.voxel_scale.meters())),
+        wind: world.industry.wind,
+        workshop: super::workshop::progress(world),
+        orbital_cell: super::orbital::cargo::cell_ready(world),
+        orbital_delivery: super::orbital::cargo::cell_delivery(world),
+        meridian_terminal: terminal::enabled(&cfg).then(|| {
+            (Vec3::new(terminal::X, terminal::floor(&cfg), terminal::Z) * cfg.inv_voxel_meters())
+                .floor().as_ivec3()
+        }),
+        iron_line: None,
         habitats: super::habitats::view(world, player * world.voxel_scale.meters()),
         kits: world.factory.kits,
         bench: at_bench(world, player),
@@ -477,18 +492,27 @@ pub fn view(world: &World, player: Vec3) -> View {
             .focus
             .filter(|p| near(world, *p, player))
             .and_then(|p| world.factory.nodes.get(&p).cloned().map(|n| (p, n))),
+        cells_per_metre: step(world),
         focused_grid: world.factory.focus.and_then(|p| world.factory.grid(p)),
+        focused_links: world.factory.focus.filter(|p| near(world, *p, player)).map_or(0, |p| {
+            let size = step(world);
+            (0..6).fold(0, |mask, side| mask | (u8::from(world.factory.conduit_join(p, side, size)) << side))
+        }),
         focused_pool: world.factory.focus.and_then(|p| world.factory.pool_of(p)),
-        health: overview::summarize(&world.factory),
-        minute: world.factory.stats.window(false),
-        hour: world.factory.stats.window(true),
-        power_history: world
+        health: if production { overview::summarize(&world.factory) } else { Default::default() },
+        outposts: Vec::new(),
+        fuel_order: if production { fuel_order::view(world, player) } else { None },
+        stock_reserve: world.factory.focus.filter(|&p| near(world, p, player))
+            .and_then(|p| stock_order::view(&world.factory, p)),
+        minute: if production { world.factory.stats.window(false) } else { Default::default() },
+        hour: if production { world.factory.stats.window(true) } else { Default::default() },
+        power_history: if production { world
             .factory
             .stats
             .seconds
             .iter()
             .map(|s| (s.generated, s.drawn))
-            .collect(),
+            .collect() } else { Vec::new() },
         chips: Some(world.factory.chips.library.clone()),
         fabrication: world.factory.chips.production.clone(),
         fabrication_site: lab,
@@ -499,8 +523,77 @@ pub fn view(world: &World, player: Vec3) -> View {
     }
 }
 
+fn workshop_alerts(world: &World, player: Vec3) -> Vec<WorkshopAlert> {
+    const ALERT_LIMIT: usize = 8;
+    let mut alerts = Vec::with_capacity(ALERT_LIMIT);
+    let rank = |a: &(f32, IVec3, Kind, overview::Health), b: &(f32, IVec3, Kind, overview::Health)| {
+        a.0.total_cmp(&b.0).then_with(|| a.1.to_array().cmp(&b.1.to_array()))
+    };
+    for (&source, node) in &world.factory.nodes {
+        let health = overview::classify(node);
+        if health.is_problem() {
+            let candidate = (source.as_vec3().distance_squared(player), source, node.kind, health);
+            let index = alerts.partition_point(|alert| rank(alert, &candidate).is_lt());
+            if index < ALERT_LIMIT {
+                if alerts.len() == ALERT_LIMIT { alerts.pop(); }
+                alerts.insert(index, candidate);
+            }
+        }
+    }
+    alerts.into_iter().map(|(_, source, kind, health)| {
+        let factory = &world.factory;
+        let node = &factory.nodes[&source];
+        // Delivered packets are removed immediately. A live shipment still
+        // gives us a proven route and reserved capacity at its receiver.
+        let target = if node.status == "Output blocked" {
+            factory.packets.iter().filter(|p| {
+                p.src == source && node.output.get(p.item).is_some_and(|&n| n != 0)
+                    && factory.nodes.get(&p.dst).is_some_and(|receiver| {
+                        let reserved = factory.reserved.get(&(p.dst, p.item)).copied().unwrap_or(0);
+                        receiver.input[p.item].saturating_add(reserved) >= CAPACITY
+                    })
+            }).min_by_key(|p| (p.path.len(), p.dst.to_array())).map_or(source, |p| p.dst)
+        } else {
+            source
+        };
+        WorkshopAlert { source, target, kind, health }
+    }).collect()
+}
+
 pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
     match action {
+        Action::ToolWorkshop(a) => {
+            if at_bench(world, player) { super::tool_workshop::action(world, a); }
+            else { world.expedition.say("Workbench Required"); }
+        }
+        Action::ContainerClick(p, item, right, shift) => {
+            if !near(world, p, player) || item >= RESOURCE_COUNT { return None; }
+            let Some(node) = world.factory.nodes.get_mut(&p).filter(|n| n.kind == Kind::Storage) else { return None };
+            use super::inventory::{Item, ItemStack};
+            let kind = Item::Resource(item as u8);
+            if shift {
+                let count = node.input[item] / 64;
+                let (inserted, _) = world.inventory.try_insert_pack_first(ItemStack::new(kind, count));
+                node.input[item] -= inserted * 64;
+            } else if let Some(mut cursor) = world.inventory.cursor {
+                if cursor.item == kind && node.accepts(item) {
+                    let reserved = world.factory.reserved.get(&(p, item)).copied().unwrap_or(0);
+                    let room = CAPACITY.saturating_sub(node.input[item].saturating_add(reserved)) / 64;
+                    let n = cursor.count.min(room).min(if right { 1 } else { u32::MAX });
+                    node.input[item] += n * 64;
+                    cursor.count -= n;
+                    world.inventory.cursor = (cursor.count > 0).then_some(cursor);
+                }
+            } else {
+                let count = (node.input[item] / 64).min(world.inventory.stack_limit(kind));
+                let n = if right { count.div_ceil(2) } else { count };
+                if n > 0 {
+                    node.input[item] -= n * 64;
+                    world.inventory.cursor = Some(ItemStack::new(kind, n));
+                }
+            }
+            world.sync_from_inventory();
+        }
         Action::Resonance(action) => {
             let bench = at_bench(world, player);
             super::adventure::resonance::action(world, bench, action);
@@ -718,13 +811,38 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
             }
         }
         Action::SetWandSlot(slot, spell) => {
-            world.adventure.set_wand_slot(slot, spell);
+            if !super::adventure::wands::fits_instrument(spell, world.adventure.loadout.mode) {
+                world.expedition.say("Concentration requires a grimoire");
+            } else {
+                world.adventure.set_wand_slot(slot, spell);
+            }
         }
         Action::SwapWandSlots(a, b) => {
             world.adventure.swap_wand_slots(a, b);
         }
+        Action::DrawCircle(phrase) => {
+            let feet = player * world.voxel_scale.meters();
+            let mut adventure = std::mem::take(&mut world.adventure);
+            let outcome = adventure.draw_circle(world, feet, phrase);
+            world.adventure = adventure;
+            match outcome {
+                Ok(seconds) => world.expedition.say(format!("Ritual: {seconds:.0}s")),
+                Err(reason) => world.expedition.say(reason),
+            }
+        }
+        Action::BindRunes(word) => {
+            let message = match world.adventure.bind_runes(word) {
+                Ok(message) | Err(message) => message,
+            };
+            world.expedition.say(message);
+        }
+        Action::InscribeWand(deck) => {
+            if let Err(reason) = world.adventure.inscribe_wand(deck) {
+                world.expedition.say(reason);
+            }
+        }
         Action::SetWandMode(mode) => {
-            if mode <= 3 {
+            if mode <= 3 && !super::adventure::wands::is_grimoire(world.adventure.loadout.mode) {
                 world.adventure.loadout.mode = mode;
             }
         }
@@ -767,6 +885,32 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
             }
             sides::toggle_side(world, p, side);
         }
+        Action::SetFace(p, face, role) => {
+            if !near(world, p, player) {
+                world.expedition.say("Move within 7 metres of the machine.");
+                return None;
+            }
+            sides::set_face(world, p, face, role);
+        }
+        Action::CleanPollution(p) => { industry::clean(world, p, player); }
+        Action::InstallMithril(p) => {
+            if world.ca_view.is_some() || !world.rules.mode.interacts()
+                || world.adventure.is_dead() || !near(world, p, player) {
+                return None;
+            }
+            if !world.factory.nodes.get(&p).is_some_and(|n| {
+                n.kind == Kind::Battery && power::accepts_mithril(n.upgrade)
+            }) {
+                world.expedition.say("Upgrade to Bronze Cells");
+                return None;
+            }
+            if super::orbital::cargo::install_cell(world) {
+                world.factory.nodes.get_mut(&p).unwrap().upgrade = power::MITHRIL_TIER;
+                world.expedition.say("Mithril Cell Installed · 64 kWh");
+            } else {
+                world.expedition.say("Orbital Mithril Delivery Required");
+            }
+        }
         Action::Load(p)
         | Action::Collect(p)
         | Action::BufferMove(p, _, _, _)
@@ -776,17 +920,58 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
         | Action::SetFilter(p, _)
         | Action::UpgradeMachine(p)
         | Action::SetTarget(p, _)
+        | Action::SetQuarryDirection(p, _)
+        | Action::SetPlacer(p, _)
+        | Action::FlushSediment(p)
+        | Action::PackWaste(p)
+        | Action::RepairGas(p)
+        | Action::VentGas(p)
+        | Action::GasOutlet(p, _, _)
+        | Action::FillFuelCell(p)
         | Action::Drain(p) => {
             if !near(world, p, player) {
                 world.expedition.say("Move within 7 metres of the machine.");
                 return None;
             }
+            let cell_size = step(world);
             if let Some(n) = world.factory.nodes.get_mut(&p) {
                 match action {
+                    Action::RepairGas(_) if n.ruptured => {
+                        if world.rules.mode.creative_tools() || world.expedition.pay(&crate::world::industry::config::CONFIG.repair_cost) {n.ruptured=false;n.gas_vent=false;n.status="Ready";}
+                        else {world.expedition.say("Needs repair materials");}
+                    }
+                    Action::PackWaste(_) => { industry::pack_waste(n, &mut world.inventory); }
+                    Action::VentGas(_) if industry::port(n.kind) => {
+                        n.gas_vent = n.ruptured || !n.gas_vent;
+                    }
+                    Action::GasOutlet(_, side, species)
+                        if industry::port(n.kind) && side <= 6 && usize::from(species) <= SPECIES =>
+                    {
+                        n.gas_vent_side = side;
+                        n.gas_vent_species = species;
+                    }
+                    Action::FillFuelCell(_) if n.kind == Kind::GasTank || industry::processor(n) => {
+                        if let Err(message) = industry::fill_fuel_cell(n, &mut world.inventory) {
+                            world.expedition.say(message);
+                        }
+                    }
+                    Action::SetRecipe(_, _) if fuel_order::is_batch(n)
+                        || stock_order::read(n.kind, n.mode, n.target).is_some() => {
+                        world.expedition.say("Clear Production Order First");
+                    }
                     Action::SetRecipe(_, mode)
                         if (n.kind == Kind::Furnace && (9..12).contains(&mode))
                             || (mode as usize) < n.kind.modes().len() =>
                     {
+                        if n.kind == Kind::Generator && n.mode != mode && n.burn > 0 {
+                            world.expedition.say("Finish burning the current fuel before switching modes.");
+                            return None;
+                        }
+                        let footprint_changed = n.kind.excavates() && n.mode != mode;
+                        if placer::sluice(n) {
+                            if n.mode == mode { return None; }
+                            n.placer.cancel_batch();
+                        }
                         if n.kind == Kind::Furnace && mode >= 9 {
                             n.mode = 0;
                             n.recipe = Some(mode as usize);
@@ -802,10 +987,13 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                             n.mode = mode;
                             n.recipe = None;
                         }
-                        // A generator's progress is its heat; switching mode
-                        // must not be a free way to dump it.
-                        if !matches!(n.kind, Kind::Generator | Kind::Battery) {
+                        // Mode switches retain heat and paid assembler work.
+                        if !matches!(n.kind, Kind::Generator | Kind::Battery | Kind::Assembler) {
                             n.progress = 0;
+                        }
+                        // The cursor indexes a footprint that the mode just changed.
+                        if footprint_changed {
+                            n.excavation = 0;
                         }
                         if n.kind == Kind::Storage && n.mode == 2 && n.filter.is_none() {
                             n.filter = n
@@ -818,33 +1006,35 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                         }
                     }
                     Action::BufferMove(_, item, amount, deposit)
-                        if n.kind == Kind::Storage && item < RESOURCE_COUNT =>
+                        if n.kind != Kind::Feeder && item < RESOURCE_COUNT =>
                     {
+                        use super::inventory::resources;
                         if deposit {
                             if n.accepts(item) {
-                                let room = CAPACITY.saturating_sub(n.input[item]);
+                                let reserved = world.factory.reserved.get(&(p, item)).copied().unwrap_or(0);
+                                let room = CAPACITY.saturating_sub(n.input[item].saturating_add(reserved));
                                 let moved =
                                     amount.min(room).min(world.expedition.resources[item]);
-                                if moved > 0 && n.mode == 2 && n.filter.is_none() {
-                                    n.filter = Some(item);
+                                if moved > 0 && resources::exchange(&mut world.inventory, &[(item, moved)], &[]) {
+                                    n.input[item] += moved;
+                                    if n.kind == Kind::Storage && n.mode == 2 && n.filter.is_none() {
+                                        n.filter = Some(item);
+                                    }
                                 }
-                                world.expedition.resources[item] -= moved;
-                                n.input[item] += moved;
                             } else {
                                 world
                                     .expedition
-                                    .say("This container will not take that item.");
+                                    .say("Input does not accept this item");
                             }
                         } else {
-                            let have = n.input[item];
-                            let moved = amount.min(have);
+                            let moved = resources::collect(&mut world.inventory, item, amount.min(n.input[item]));
                             n.input[item] -= moved;
-                            world.expedition.resources[item] =
-                                world.expedition.resources[item].saturating_add(moved);
-                            if n.mode == 2 && n.input.iter().all(|count| *count == 0) {
+                            if n.kind == Kind::Storage && n.mode == 2 && n.input.iter().all(|count| *count == 0) {
                                 n.filter = None;
                             }
                         }
+                        world.sync_from_inventory();
+                        return None;
                     }
                     Action::SetFilter(_, filter)
                         if matches!(n.kind, Kind::Feeder | Kind::Storage | Kind::Pipe)
@@ -852,7 +1042,62 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                     {
                         n.filter = filter
                     }
+                    Action::SetPlacer(_, enabled) if n.kind == Kind::Quarry => {
+                        if n.placer.enabled != enabled {
+                            n.placer.enabled = enabled;
+                            n.excavation = 0;
+                        }
+                    }
+                    Action::FlushSediment(_) if matches!(n.kind, Kind::Quarry | Kind::Washer)
+                        && !n.enabled =>
+                    {
+                        if !placer::flush(n, cell_size) {
+                            world.expedition.say("Output Full");
+                        }
+                    }
+                    Action::SetQuarryDirection(_, direction) if n.kind == Kind::Quarry => {
+                        if let Some(&(_, facing)) = quarry::DIRECTIONS.get(direction as usize)
+                            && facing != n.facing
+                        {
+                            n.facing = facing;
+                            n.excavation = 0;
+                        }
+                    }
                     Action::SetTarget(_, target) => match n.kind {
+                        _ if target == 0 && stock_order::read(n.kind, n.mode, n.target).is_some() => {
+                            n.target = 0;
+                            n.enabled = false;
+                            world.expedition.say("Reserve Cleared · Machine Paused");
+                        }
+                        _ if stock_order::read(n.kind, n.mode, target).is_some() => {
+                            if fuel_order::is_batch(n) && n.target > 1 {
+                                world.expedition.say("Clear Fuel Request First");
+                            } else {
+                                n.target = target;
+                                n.enabled = true;
+                                world.expedition.say("Stock Reserve Set");
+                            }
+                        }
+                        Kind::Cultivator if target == 0 => {
+                            if n.target != 0 {
+                                n.target = 0;
+                                n.enabled = false;
+                                world.expedition.say("Fuel Request Cleared");
+                            }
+                        }
+                        Kind::Cultivator if fuel_order::valid_request(target) => {
+                            if n.target > 1 || n.recipe.is_some() || n.progress != 0
+                                || n.output[ETHANOL] != 0
+                                || world.factory.packets.iter().any(|packet| packet.src == p && packet.item == ETHANOL)
+                            {
+                                world.expedition.say("Fermenter Busy");
+                            } else {
+                                n.mode = fuel_order::MODE;
+                                n.target = target;
+                                n.enabled = true;
+                                world.expedition.say("Fuel Requested");
+                            }
+                        }
                         Kind::Assembler
                             if target as usize <= assembler::recipe_count()
                                 && (target == 0
@@ -868,6 +1113,9 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                             }
                         }
                         Kind::Battery if target <= power::battery_rate(n.upgrade) => {
+                            n.target = target;
+                        }
+                        k if k.excavates() && target <= quarry::MAX_DEPTH_M as u32 => {
                             n.target = target;
                         }
                         _ => {}
@@ -930,6 +1178,19 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                             world.expedition.say("Missing drive upgrade ingredients.");
                         }
                     }
+                    Action::Drain(_) if n.kind == Kind::GasGenerator => {
+                        if let Err(message) = industry::turbine::bottle(n, &mut world.inventory) {
+                            world.expedition.say(message);
+                        }
+                    }
+                    Action::Drain(_) if n.water == 0 && n.separator_water_mg > 0 => {
+                        if industry::replace_bucket(&mut world.inventory, 0, n.separator_water_mg) {
+                            n.separator_water_mg = 0;
+                            n.status = "Drained";
+                        } else {
+                            world.expedition.say("Needs an empty bucket for the remaining water");
+                        }
+                    }
                     Action::Drain(_) if n.kind.water_port() => {
                         n.draining = !n.draining;
                         n.enabled = false;
@@ -939,6 +1200,7 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                         n.draining = false;
                     }
                     Action::Load(_) => {
+                        let mut reserved = [0; RESOURCE_COUNT];
                         for i in 0..RESOURCE_COUNT {
                             if !n.accepts(i) {
                                 continue;
@@ -948,20 +1210,28 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                             } else {
                                 &mut n.input[i]
                             };
-                            let amount = world.expedition.resources[i].min(CAPACITY - *dst);
+                            let incoming = if n.kind == Kind::Feeder { 0 } else {
+                                world.factory.reserved.get(&(p, i)).copied().unwrap_or(0)
+                            };
+                            reserved[i] = incoming;
+                            let amount = world.expedition.resources[i]
+                                .min(CAPACITY.saturating_sub(dst.saturating_add(incoming)));
                             world.expedition.resources[i] -= amount;
                             *dst += amount;
                         }
+                        blocks::load(&mut world.inventory, n, cell_size, &reserved);
                         world.expedition.say("Loaded matching supplies. Item pipes feed connected machines automatically.");
                     }
                     Action::Collect(_) if n.kind == Kind::Assembler && n.stock > 0 => {
-                        if let Some(kind) = assembler::stock_kind(n) {
+                        if let Some(item) = assembler::stock_item(n) {
                             let (count, _) = world.inventory.try_insert(super::inventory::ItemStack::new(
-                                super::inventory::Item::Block(kind.block()), n.stock));
+                                item, n.stock));
                             n.stock -= count;
-                            world.factory.kits[kind as usize] += count;
-                            world.expedition.say(format!("Collected {count} × {}.", kind.name()));
+                            world.expedition.say(format!("Collected {count} × {}.", item.name()));
                         }
+                    }
+                    Action::Collect(_) if n.kind == Kind::Cultivator && n.target > 1 => {
+                        world.expedition.say("Fuel Request Active · Collect From Storage");
                     }
                     Action::Collect(_) => {
                         // Collect also unloads inputs. Pausing first lets the player safely reconfigure a line.
@@ -974,10 +1244,13 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                                 *src -= amount;
                             }
                         }
+                        blocks::collect(&mut world.inventory, n);
                         world.expedition.say("Collected what fits. Remaining supplies stay in the machine.");
                     }
                     Action::QuickStack(_) => {
-                        quick_stack::quick_stack(n, &mut world.inventory, &mut world.expedition.resources);
+                        let reserved = &world.factory.reserved;
+                        quick_stack::quick_stack_reserved(n, &mut world.inventory, &mut world.expedition.resources,
+                            |i| reserved.get(&(p, i)).copied().unwrap_or(0));
                     }
                     _ => {}
                 }
@@ -1011,7 +1284,9 @@ pub fn place(
         super::inventory::Item::PowerKit(k) if k.kind == kind && world.inventory.count_item(i) > 0 => Some(k),
         _ => None,
     });
-    if world.factory.nodes.len() >= MAX_NODES || (portable.is_none() && world.factory.kits[kind as usize] == 0) {
+    let item = portable.map(super::inventory::Item::PowerKit)
+        .unwrap_or(super::inventory::Item::Block(kind.block()));
+    if world.factory.nodes.len() >= MAX_NODES || world.inventory.count_item(item) == 0 {
         world
             .expedition
             .say("No crafted kits available, or the 1024-part factory limit was reached.");
@@ -1028,24 +1303,28 @@ pub fn place(
     let (lo, hi) = super::player_aabb(player.pos, world.voxel_scale, player.scale, player.crouch_t);
     let a = p.as_vec3();
     let z = a + Vec3::splat(size as f32);
-    if (lo.cmplt(z) & hi.cmpgt(a)).all() || body.iter().any(|c| world.get(*c) != B::Air) {
+    if (lo.cmplt(z) & hi.cmpgt(a)).all() || body.iter().any(|&c| {
+        world.get(c) != B::Air || super::orbital::cargo::security::protected(world, c)
+    }) {
         world
             .expedition
             .say("Assembly needs a clear 1 × 1 × 1 metre space outside your body.");
         return true;
     }
-    let edits: Vec<_> = body.iter().map(|c| (*c, b)).collect();
+    let mut edits: Vec<_> = body.iter().map(|c| (*c, b)).collect();
     world.set_many(&edits);
-    if body.iter().any(|c| world.get(*c) != b) {
-        // All assemblies fit one chunk; a failed resident edit never earns a node.
+    if body.iter().any(|c| world.get(*c) != b) || !world.inventory.remove_item(item, 1) {
+        // Clear any partial casing. The kit is paid only for a completed assembly.
+        edits.retain(|(c, _)| world.get(*c) == b);
+        for (_, block) in &mut edits {
+            *block = B::Air;
+        }
+        world.set_many(&edits);
         world
             .expedition
             .say("Assembly could not be placed; kit retained.");
         return true;
     }
-    let item = portable.map(super::inventory::Item::PowerKit)
-        .unwrap_or(super::inventory::Item::Block(kind.block()));
-    let _ = world.inventory.remove_item(item, 1);
     world.sync_from_inventory();
     world.factory.nodes.insert(p, portable.map_or_else(|| Node::new(kind), |k| k.node()));
     world.factory.form_matrices(size);
@@ -1066,6 +1345,8 @@ pub fn dismantle(
     let size = step(world);
     let p = anchor(cell, size);
     if !world.factory.nodes.contains_key(&p) { return false; }
+    super::containers::flush(world);
+    let cache_id = world.caches.iter().position(|c| c.cells == [p]);
     // Publish charge to individual cells before any topology edit. Removing a
     // port cannot remove the pool, and removing a cell takes only its charge.
     world.factory.scatter_matrix_energy();
@@ -1073,12 +1354,23 @@ pub fn dismantle(
     let Some(node) = world.factory.nodes.remove(&p) else {
         return false;
     };
-    if node.water > 0 {
+    if node.ruptured || node.exhaust.iter().chain(&node.residue).any(|&v| v > 0) {
+        world.factory.nodes.insert(p, node);
+        world.expedition.say("Vent gas, pack waste and repair before dismantling.");
+        return true;
+    }
+    if node.water > 0 || node.separator_water_mg > 0 {
         world.factory.nodes.insert(p, node);
         world.factory.form_matrices(size);
         world
             .expedition
             .say("Drain this assembly from its machine panel before packing it up.");
+        return true;
+    }
+    if node.placer.has_feed() {
+        world.factory.nodes.insert(p, node);
+        world.factory.form_matrices(size);
+        world.expedition.say("Sediment Buffer Occupied");
         return true;
     }
     if node.kind == Kind::InductionCell && node.energy > induction::CELL_CAPACITY {
@@ -1087,19 +1379,47 @@ pub fn dismantle(
         world.expedition.say("Restore matrix capacity before packing this cell: excess legacy charge is held offline.");
         return true;
     }
-    let portable = portable::PowerKit::from_node(&node);
+    let portable = match portable::PowerKit::from_node(&node) {
+        Ok(kit) => kit,
+        Err(error) => {
+            world.factory.nodes.insert(p, node);
+            world.factory.form_matrices(size);
+            world.expedition.say(error.to_string());
+            return true;
+        }
+    };
     use super::inventory::{Item, ItemStack};
     let mut inventory = world.inventory.clone();
     let item = portable.map(Item::PowerKit).unwrap_or(Item::Block(node.kind.block()));
     let mut fits = inventory.try_insert(ItemStack::new(item, 1)).1 == 0;
+    if let Some(id) = cache_id {
+        for stack in world.caches[id].slots.into_iter().flatten() {
+            fits &= inventory.try_insert(stack).1 == 0;
+        }
+    }
     if let Some(order) = world.factory.chips.production.orders.iter().find(|o| o.site == (p.x, p.y, p.z)) {
         fits &= inventory.try_insert(ItemStack::new(Item::Block(B::Sand), order.sand)).1 == 0;
     }
-    if let Some(kind) = assembler::stock_kind(&node)
+    if let Some(item) = assembler::stock_item(&node)
         && node.stock > 0 {
-            fits &= inventory.try_insert(ItemStack { item: Item::Block(kind.block()), count: node.stock }).1 == 0;
+            fits &= inventory.try_insert(ItemStack { item, count: node.stock }).1 == 0;
         }
+    if let Some(cast) = super::smeltery::installed_cast(&node) {
+        fits &= inventory.try_insert(ItemStack::new(cast, 1)).1 == 0;
+    }
+    fits &= blocks::refund_fits(&mut inventory, &node);
     let mut refunds = std::array::from_fn::<_, RESOURCE_COUNT, _>(|i| node.input[i] + node.output[i]);
+    // A departed shipment no longer needs its source, but packing its receiver
+    // or any pipe on its route must reclaim it before the inventory can change.
+    let interrupted = |packet: &transit::Packet| {
+        packet.dst == p || packet.path.iter().skip(1)
+            .take(packet.path.len().saturating_sub(2)).any(|cell| *cell == p)
+    };
+    let shipments: Vec<_> = world.factory.packets.iter().filter(|packet| interrupted(packet))
+        .map(|packet| (packet.dst, packet.item, packet.amount)).collect();
+    for &(_, item, amount) in &shipments {
+        refunds[item] += amount;
+    }
     for level in 0..if portable.is_some() { 0 } else { node.upgrade } {
         for &(i, n) in node.kind.upgrade_cost(level) { refunds[i] += n; }
     }
@@ -1128,7 +1448,17 @@ pub fn dismantle(
         world.factory.form_matrices(size);
         return true;
     }
+    // Commit packet ownership only after every capacity and world-edit check.
+    // Failed pickup must keep both the shipments and their reservations live.
+    world.factory.packets.retain(|packet| !interrupted(packet));
+    for (dst, item, amount) in shipments {
+        world.factory.release(dst, item, amount);
+    }
     world.inventory = inventory;
+    if let Some(id) = cache_id {
+        world.caches[id].slots = [None; super::containers::SLOTS];
+        if world.inventory.container.as_ref().is_some_and(|(active, _)| *active == id) { world.inventory.container = None; }
+    }
     world.sync_from_inventory();
     std::sync::Arc::make_mut(&mut world.factory.chips.production).orders.retain(|o| o.site != (p.x, p.y, p.z));
     world.factory.chips.remove(p);
@@ -1167,256 +1497,14 @@ impl Factory {
         }
     }
     #[cfg(test)]
-    pub fn encode(&self, bytes: &mut Vec<u8>) {
-        self.encode_format(bytes, FACTORY_FORMAT);
-    }
-    /// Writes an older layout (format 8: 16 kinds, 19 resources). Saves never
-    /// go backwards; this exists so tests can build genuine legacy files.
-    pub fn encode_format(&self, bytes: &mut Vec<u8>, format: u8) {
-        let kinds = Kind::count_in_format(format);
-        let resources = if format >= 9 {
-            RESOURCE_COUNT
-        } else {
-            LEGACY_RESOURCE_COUNT
-        };
-        let mut put = |n: u32| bytes.extend_from_slice(&n.to_le_bytes());
-        for &n in &self.kits[..kinds] {
-            put(n);
-        }
-        put(self.nodes.len() as u32);
-        let mut nodes: Vec<_> = self.nodes.iter().collect();
-        nodes.sort_by_key(|(p, _)| (p.x, p.y, p.z));
-        for (p, n) in nodes {
-            for v in p.to_array() {
-                put(v as u32);
-            }
-            put(n.kind as u32);
-            for (i, v) in n.input.into_iter().enumerate().take(resources) {
-                // Items still in a pipe are saved as delivered: capacity was
-                // reserved at launch, so this always fits.
-                put(v + self.reserved.get(&(*p, i)).copied().unwrap_or(0));
-            }
-            for v in n.output.into_iter().take(resources) {
-                put(v);
-            }
-            for v in [
-                n.energy,
-                n.burn,
-                n.progress,
-                n.recipe.map_or(0, |i| i as u32 + 1),
-                u32::from(n.enabled),
-            ] {
-                put(v);
-            }
-            for v in [
-                n.mode,
-                n.upgrade,
-                n.filter.map_or(0, |i| i as u32 + 1),
-                n.water,
-                n.excavation,
-            ] {
-                put(v);
-            }
-            if format >= 10 {
-                put(n.target);
-                put(n.stock);
-            }
-        }
-    }
-    pub fn decode(
-        read: &mut impl FnMut() -> anyhow::Result<u32>,
-        size: i32,
-        version: u8,
-    ) -> anyhow::Result<Self> {
-        use anyhow::ensure;
-        let mut factory = Self::default();
-        let extended = version >= 7;
-        let kinds = Kind::count_in_format(version);
-        let resources = if version >= 9 {
-            RESOURCE_COUNT
-        } else if extended {
-            LEGACY_RESOURCE_COUNT
-        } else {
-            14
-        };
-        for k in &mut factory.kits[..kinds] {
-            *k = read()?;
-            ensure!(*k <= 65536, "Invalid factory kit count");
-        }
-        let count = read()? as usize;
-        ensure!(count <= MAX_NODES, "Factory exceeds assembly limit");
-        for _ in 0..count {
-            let p = IVec3::new(read()? as i32, read()? as i32, read()? as i32);
-            ensure!(
-                p.to_array().iter().all(|v| v.unsigned_abs() <= 1_000_000) && anchor(p, size) == p,
-                "Invalid assembly coordinate"
-            );
-            let k = read()? as usize;
-            ensure!(k < kinds, "Unknown factory assembly");
-            let mut n = Node::new(Kind::ALL[k]);
-            for i in 0..resources {
-                n.input[i] = read()?;
-                ensure!(
-                    n.input[i] <= CAPACITY
-                        && (n.input[i] == 0 || (n.kind != Kind::Feeder && n.kind.accepts(i))),
-                    "Invalid machine input"
-                );
-            }
-            for i in 0..resources {
-                n.output[i] = read()?;
-                let valid = match n.kind {
-                    Kind::Feeder => n.kind.accepts(i),
-                    Kind::Crusher | Kind::Washer => (9..12).contains(&i),
-                    Kind::MiningDrill => i < 4 || i == 5,
-                    Kind::Furnace => (6..9).contains(&i),
-                    Kind::AlloyKiln => matches!(i, 14 | 15),
-                    Kind::Fabricator => matches!(i, 12 | 16 | 17 | 18),
-                    Kind::Cultivator => matches!(i, 4 | 13 | ETHANOL),
-                    Kind::CokeOven => matches!(i, COKE | CREOSOTE),
-                    Kind::BlastFurnace => matches!(i, 8 | 15),
-                    Kind::Assembler => true, // validated against its target below
-                    _ => false,
-                };
-                ensure!(
-                    n.output[i] <= CAPACITY && (n.output[i] == 0 || valid),
-                    "Invalid machine output"
-                );
-            }
-            n.energy = read()?;
-            n.burn = read()?;
-            n.progress = read()?;
-            let recipe = read()?;
-            let enabled = read()?;
-            if extended {
-                n.mode = read()?;
-                n.upgrade = read()?;
-                let filter = read()?;
-                ensure!(
-                    n.mode < n.kind.modes().len().max(1) as u32
-                        && n.upgrade <= 2
-                        && filter <= RESOURCE_COUNT as u32,
-                    "Invalid machine configuration"
-                );
-                ensure!(n.upgrade == 0 || n.kind.upgradable(), "Invalid drive upgrade");
-                ensure!(
-                    filter == 0 || matches!(n.kind, Kind::Feeder | Kind::Storage | Kind::Pipe),
-                    "Invalid machine filter"
-                );
-                n.filter = filter.checked_sub(1).map(|v| v as usize);
-            }
-            if version >= 8 {
-                n.water = read()?;
-                n.excavation = read()?;
-                ensure!(
-                    n.water <= extraction::WATER_CAPACITY
-                        && n.water.is_multiple_of(64 / (size * size * size) as u32)
-                        && (n.water == 0 || n.kind.water_port()),
-                    "Invalid fluid buffer"
-                );
-                ensure!(
-                    n.excavation <= quarry::limit(size, n.mode) as u32
-                        && (n.excavation == 0 || n.kind == Kind::MiningDrill),
-                    "Invalid drill depth"
-                );
-            }
-            if version >= 10 {
-                n.target = read()?;
-                n.stock = read()?;
-                let target_ok = match n.kind {
-                    Kind::Assembler => n.target == 0 || assembler::recipe(&n).is_some(),
-                    Kind::Battery => n.target <= power::battery_rate(n.upgrade),
-                    k if sides::is_conduit(k) => n.target <= sides::SIDE_BITS,
-                    _ => n.target == 0,
-                };
-                ensure!(target_ok, "Invalid machine target");
-                ensure!(
-                    n.stock <= assembler::STOCK_LIMIT && (n.stock == 0 || n.kind == Kind::Assembler),
-                    "Invalid assembler stock"
-                );
-                if n.kind == Kind::Assembler {
-                    let output = assembler::recipe(&n).map(|r| r.output.item);
-                    ensure!(n.stock == 0 || assembler::stock_kind(&n).is_some(), "Assembler stock has no kit identity");
-                    ensure!(n.output.iter().enumerate().all(|(i, &v)| v == 0 || output == Some(super::inventory::Item::Resource(i as u8))), "Assembler output does not match target");
-                    ensure!(n.progress < assembler::CRAFT_TICKS && (n.progress == 0 || output.is_some()), "Invalid assembler progress");
-                }
-            }
-            let processing = n.kind.powered();
-            ensure!(
-                n.energy
-                    <= if n.kind.generator() {
-                        power::GENERATOR_BUFFER
-                    } else if processing {
-                        power::CONSUMER_BUFFER
-                    } else if n.kind == Kind::Battery {
-                        power::battery_capacity(n.upgrade)
-                    } else if n.kind == Kind::Transformer {
-                        power::transformer_rate(n.upgrade) * 2
-                    } else if matches!(n.kind, Kind::InductionPort | Kind::InductionCell) {
-                        induction::MAX_CAPACITY
-                    } else {
-                        0
-                    },
-                "Invalid stored power"
-            );
-            ensure!(
-                n.burn
-                    <= if n.kind == Kind::Generator {
-                        if n.mode == 1 {
-                            pile::CAPACITY
-                        } else {
-                            power::MAX_COMBUSTION_BURN
-                        }
-                    } else if n.kind == Kind::CokeOven {
-                        multiblock::COKE_OVEN_MAX_C
-                    } else if n.kind == Kind::BlastFurnace {
-                        multiblock::BLAST_MAX_C
-                    } else if n.kind == Kind::MiningDrill {
-                        (size * size * size) as u32
-                    } else if n.kind == Kind::Bioreactor {
-                        800
-                    } else {
-                        0
-                    },
-                "Invalid stored fuel"
-            );
-            ensure!(
-                enabled <= 1
-                    && (recipe > 0
-                        || n.progress == 0
-                        || n.kind == Kind::Assembler
-                        || (n.kind == Kind::Generator && n.progress <= pile::MAX_HEAT)),
-                "Invalid machine state"
-            );
-            n.enabled = enabled != 0;
-            if recipe > 0 {
-                let i = (recipe - 1) as usize;
-                let process = recipes::process(n.kind, i)
-                    .ok_or_else(|| anyhow::anyhow!("Invalid processing recipe"))?;
-                ensure!(n.progress < process.ticks, "Invalid processing progress");
-                ensure!(
-                    n.kind.modes().is_empty()
-                        || n.kind == Kind::Furnace
-                        || i == n.mode as usize,
-                    "Recipe does not match machine mode"
-                );
-                n.recipe = Some(i);
-            }
-            ensure!(
-                factory.nodes.insert(p, n).is_none(),
-                "Duplicate factory assembly"
-            );
-        }
-        Ok(factory)
-    }
     fn networks(&self, conduit: Kind, size: i32) -> Vec<Network> {
+        let starts = self.nodes.iter().filter_map(|(&p, n)| (n.kind == conduit).then_some(p)).collect();
+        self.networks_from(conduit, size, starts)
+    }
+
+    fn networks_from(&self, conduit: Kind, size: i32, mut starts: Vec<IVec3>) -> Vec<Network> {
         let mut visited = HashSet::new();
         let mut nets = Vec::new();
-        let mut starts: Vec<_> = self
-            .nodes
-            .iter()
-            .filter(|(_, n)| n.kind == conduit)
-            .map(|(p, _)| *p)
-            .collect();
         starts.sort_by_key(|p| (p.x, p.y, p.z));
         for p in starts {
             if !visited.insert(p) {
@@ -1428,6 +1516,8 @@ impl Factory {
             let mut ports = HashSet::new();
             let mut conduits = Vec::new();
             let mut closed = HashSet::new();
+            let mut no_extract = HashSet::new();
+            let mut no_insert = HashSet::new();
             while let Some(p) = queue.pop_front() {
                 conduits.push(p);
                 for (side, d) in DIRS.into_iter().enumerate() {
@@ -1444,11 +1534,32 @@ impl Factory {
                             if visited.insert(q) {
                                 queue.push_back(q);
                             }
-                        } else if !n.kind.conduit() && !n.kind.structural() {
-                            if self.side_open(p, side) {
-                                ports.insert(q);
-                            } else {
+                        } else if !n.kind.conduit() && ports::accepts(conduit, n.kind) {
+                            if !self.side_open(p, side) {
                                 closed.insert((p, q));
+                                continue;
+                            }
+                            // Item roles follow the machine face the pipe touches.
+                            // Cables and fluid pipes ignore them.
+                            if conduit == Kind::Pipe {
+                                match sides::role(n, side ^ 1) {
+                                    sides::Role::Off => {
+                                        closed.insert((p, q));
+                                    }
+                                    sides::Role::In => {
+                                        ports.insert(q);
+                                        no_extract.insert((p, q));
+                                    }
+                                    sides::Role::Out => {
+                                        ports.insert(q);
+                                        no_insert.insert((p, q));
+                                    }
+                                    sides::Role::Both => {
+                                        ports.insert(q);
+                                    }
+                                }
+                            } else {
+                                ports.insert(q);
                             }
                         }
                     }
@@ -1458,12 +1569,24 @@ impl Factory {
             ports.sort_by_key(|p| (p.x, p.y, p.z));
             let mut net = Network::new(ports, conduits);
             net.closed = closed;
+            net.no_extract = no_extract;
+            net.no_insert = no_insert;
             net.tier = tier;
             nets.push(net);
         }
         nets
     }
+    #[cfg(test)]
     pub fn tick(&mut self, dt: f32, size: i32) {
+        self.tick_with_power(dt, size, |_| None);
+    }
+
+    fn tick_with_power(
+        &mut self,
+        dt: f32,
+        size: i32,
+        passive: impl Fn(IVec3) -> Option<(u32, &'static str)>,
+    ) {
         self.step_controllers((dt * engine_chip::characterize::TICK_HZ as f32).round() as u64);
         for n in self.nodes.values_mut() {
             if n.enabled
@@ -1474,18 +1597,29 @@ impl Factory {
             {
                 n.phase = (n.phase + dt * (1 + n.upgrade) as f32) % 1000.0;
             }
-            n.activity = (n.activity - dt * 2.0).max(0.0);
+            if n.activity > 0.0 {
+                n.activity = (n.activity - dt * 2.0).max(0.0);
+            }
         }
         self.advance_packets(dt);
-        self.accumulator += dt.clamp(0.0, 0.25);
-        if self.accumulator < 0.25 {
+        self.accumulator += dt.clamp(0.0, TICK_SECONDS);
+        if self.accumulator < TICK_SECONDS {
             return;
         }
-        self.accumulator -= 0.25;
+        self.accumulator -= TICK_SECONDS;
         if !self.topology {
-            self.power = self.networks(Kind::Cable, size);
-            self.items = self.networks(Kind::Pipe, size);
-            self.fluids = self.networks(Kind::FluidPipe, size);
+            let [mut cables, mut pipes, mut fluids] = [Vec::new(), Vec::new(), Vec::new()];
+            for (&p, n) in &self.nodes {
+                match n.kind {
+                    Kind::Cable => cables.push(p),
+                    Kind::Pipe => pipes.push(p),
+                    Kind::FluidPipe => fluids.push(p),
+                    _ => {}
+                }
+            }
+            self.power = self.networks_from(Kind::Cable, size, cables);
+            self.items = self.networks_from(Kind::Pipe, size, pipes);
+            self.fluids = self.networks_from(Kind::FluidPipe, size, fluids);
             self.item_net.clear();
             self.routes.clear();
             for (ni, net) in self.items.iter().enumerate() {
@@ -1519,6 +1653,29 @@ impl Factory {
             if n.kind == Kind::Generator && !pile::is_pile(n) {
                 pile::cool_idle(n);
             }
+            if n.enabled && n.kind == Kind::Generator && power::passive_rating(n.mode).is_some() {
+                let (rate, idle) = passive(p).unwrap_or((0, "Waiting for world data"));
+                let output = rate.min(power::GENERATOR_BUFFER.saturating_sub(n.energy));
+                n.energy += output;
+                n.flow = output as i32;
+                n.status = if output > 0 {
+                    "Generating"
+                } else if rate > 0 {
+                    "Buffer full"
+                } else {
+                    idle
+                };
+                continue;
+            }
+            if industry::boiler::active(n) {
+                if n.enabled {
+                    if self.chips.allows(p) { industry::boiler::step(n); }
+                    else { n.status = "Controller Hold"; }
+                }
+                continue;
+            }
+            if industry::blocked(n) { n.status = "Exhaust blocked"; continue; }
+            if n.kind == Kind::GasGenerator { continue; }
             if !n.enabled || !n.kind.generator() {
                 if pile::is_pile(n) {
                     pile::cool_idle(n);
@@ -1551,6 +1708,7 @@ impl Factory {
                         if n.input[fuel] >= portion {
                             n.input[fuel] -= portion;
                             n.burn = energy;
+                            n.fuel_resource=fuel as u32;
                         }
                     } else if n.kind == Kind::Generator {
                         // Best fuel first: coke, coal, bio-ethanol, creosote.
@@ -1560,6 +1718,7 @@ impl Factory {
                         {
                             n.input[fuel] -= portion;
                             n.burn = energy;
+                            n.fuel_resource=fuel as u32;
                         }
                     } else if n.input[13] >= 32 {
                         n.input[13] -= 32;
@@ -1570,6 +1729,7 @@ impl Factory {
                 n.burn -= energy;
                 n.energy += energy;
                 n.flow = energy as i32;
+                industry::produce(n, energy);
                 n.status = if energy > 0 {
                     "Generating"
                 } else {
@@ -1581,15 +1741,23 @@ impl Factory {
         }
         // Count each generator's committed production once, including isolated
         // generators. Network membership is not a source of fresh energy.
+        industry::burn_gas(self);
         let generated = self.nodes.values().filter(|n| n.kind.generator())
             .map(|n| n.flow.max(0) as u32).sum();
         self.stats.power(generated, 0);
         self.run_multiblocks();
         self.distribute_power();
         extraction::route_water(self);
+        industry::process_water(self);
         self.cursor = self.cursor.wrapping_add(1);
+        let stock_lines = stock_order::lines(self, size);
+        self.stock_receivers.clear();
+        self.stock_receivers.extend(stock_lines.iter().map(|(&source, line)| (source, line.dest)));
+        self.stock_receivers.sort_unstable_by_key(|(source, _)| source.to_array());
+        let energy_mark = self.by_base.energy_mark(&self.nodes);
         for (p, n) in self.nodes.iter_mut() {
             if self.chips.production.owns((p.x, p.y, p.z)) { continue; }
+            if industry::blocked(n) { n.status = "Exhaust blocked"; continue; }
             if !n.enabled || !n.kind.processor() {
                 continue;
             }
@@ -1597,21 +1765,63 @@ impl Factory {
                 n.status = "Held by controller";
                 continue;
             }
-            if n.recipe.is_none() {
-                n.recipe = n.choose_recipe();
+            if stock_order::read(n.kind, n.mode, n.target).is_some() && n.recipe.is_none() {
+                match stock_lines.get(p) {
+                    None => { n.status = "Needs filtered storage route"; continue; }
+                    Some(line) if !line.needed => {
+                        n.status = if line.stocked { "Reserve stocked" } else { "Sending to reserve" };
+                        continue;
+                    }
+                    Some(_) => {}
+                }
+            }
+            if fuel_order::is_batch(n) && n.recipe.is_none() {
+                let remaining = n.target - 1;
+                if remaining == 0 {
+                    n.status = "Fuel Delivered";
+                    continue;
+                }
+                let queued = n.output[ETHANOL].saturating_add(fuel_order::in_flight(&self.packets, *p));
+                if queued >= remaining {
+                    n.status = "Awaiting Storage";
+                    continue;
+                }
+            }
+            if n.kind == Kind::Cultivator && let Some(recipe) = biomatter::recipe(n.mode) {
+                let cost = biomatter::step(n, recipe);
+                self.stats.power(0, cost);
+                continue;
+            }
+            if let Some(cost) = placer::process(n, size) {
+                self.stats.power(0, cost);
+                continue;
+            }
+            if n.recipe.is_none() && !(n.kind == Kind::Crusher && n.progress > 0) {
+                n.recipe = n.choose_recipe(size);
+            }
+            if n.kind == Kind::Crusher
+                && n.recipe.is_none()
+                && (n.progress > 0 || blocks::recipe(n).is_some())
+            {
+                let cost = blocks::step(n);
+                industry::produce(n, cost);
+                self.stats.power(0, cost);
+                continue;
             }
             let Some(recipe) = n.process() else {
                 n.status = "Needs input";
                 continue;
             };
             let (out, yield_n) = recipe.output;
-            if !recipe.inputs.iter().all(|&(i, n_in)| n.input[i] >= n_in) {
+            if !recipe.ready(n, size) {
                 n.recipe = None;
                 n.progress = 0;
                 n.status = "Needs input";
                 continue;
             }
-            if n.output[out] > CAPACITY - yield_n {
+            if n.output[out] > CAPACITY - yield_n
+                || recipe.byproduct.is_some_and(|(side, amount)| n.output[side] > CAPACITY.saturating_sub(amount))
+            {
                 n.status = "Output blocked";
                 continue;
             }
@@ -1619,15 +1829,19 @@ impl Factory {
                 n.status = "Needs water";
                 continue;
             }
-            let steps = (1 + n.upgrade).min(recipe.ticks - n.progress);
+            let mut steps = (1 + n.upgrade).min(recipe.ticks - n.progress);
+            if n.kind == Kind::Fabricator {
+                steps = steps.min(n.energy / recipe.power);
+            }
             let cost = recipe.power * steps;
-            if n.energy < cost {
+            if steps == 0 || n.energy < cost {
                 n.status = "Needs cable / power";
                 continue;
             }
             n.energy -= cost;
             self.stats.power(0, cost);
             n.progress += steps;
+            industry::produce(n, steps);
             n.status = "Processing";
             if n.progress >= recipe.ticks {
                 for (i, amount) in recipe.inputs {
@@ -1641,12 +1855,19 @@ impl Factory {
                 if n.kind == Kind::Washer {
                     n.water -= 128;
                 }
+                if let Some((material, count)) = recipe.block_cost(size) {
+                    n.blocks.input[material.index()] -= count;
+                }
                 n.output[out] += yield_n;
+                if let Some((side, amount)) = recipe.byproduct {
+                    n.output[side] += amount;
+                }
                 n.progress = 0;
                 n.recipe = None;
             }
         }
         self.run_assemblers();
+        self.by_base.record(&self.nodes, &before, &energy_mark);
         for (p, input, output, stock) in before {
             let Some(n) = self.nodes.get(&p) else {
                 continue;
@@ -1659,20 +1880,24 @@ impl Factory {
                     self.stats.made(i, n.output[i] - output[i]);
                 }
             }
-            if n.stock > stock {
+            if n.stock > stock && matches!(assembler::stock_item(n), Some(super::inventory::Item::Block(b)) if Kind::from_block(b).is_some()) {
                 self.stats.kits(n.stock - stock);
             }
         }
+        self.by_base.tick(&self.nodes, &mut self.bases, size);
         self.stats.tick();
+        if self.items.is_empty() || self.packets.len() >= transit::MAX_PACKETS {
+            return;
+        }
         #[cfg(test)]
         if self.reference_routing {
             self.reference_route(size);
             return;
         }
         let mut inbound = routes::Inbound::new(&self.packets);
-        self.run_extractors(size, &mut inbound);
+        self.run_extractors(size, &mut inbound, &stock_lines);
         self.run_distributors(size, &mut inbound);
-        self.route_outputs(size, &mut inbound);
+        self.route_outputs(size, &mut inbound, &stock_lines);
     }
 }
 
@@ -1682,23 +1907,14 @@ pub fn conduit_bounds(world: &World, cell: IVec3) -> Option<Vec<(Vec3, Vec3)>> {
     let size = step(world);
     let p = anchor(cell, size);
     let n = world.factory.nodes.get(&p)?;
-    if !matches!(n.kind, Kind::Pipe | Kind::Cable | Kind::FluidPipe) {
+    if !sides::is_conduit(n.kind) {
         return None;
     }
     let c = p.as_vec3() + Vec3::splat(size as f32 * 0.5);
-    let r = if n.kind == Kind::Cable { 0.10 } else { 0.19 } * size as f32;
+    let r = if n.kind == Kind::Cable { 0.10 } else if n.kind == Kind::ExhaustDuct {0.25} else { 0.19 } * size as f32;
     let mut bounds = vec![(c - Vec3::splat(r), c + Vec3::splat(r))];
     for (side, d) in DIRS.into_iter().enumerate() {
-        if world
-            .factory
-            .nodes
-            .get(&(p + d * size))
-            .is_some_and(|other| {
-                other.kind == n.kind
-                    || !matches!(other.kind, Kind::Pipe | Kind::Cable | Kind::FluidPipe)
-            })
-            && world.factory.link_open(p, side, size)
-        {
+        if world.factory.conduit_join(p, side, size) {
             let end = c + d.as_vec3() * size as f32 * 0.5;
             let extent = Vec3::splat(r) * (Vec3::ONE - d.as_vec3().abs());
             bounds.push((c.min(end) - extent, c.max(end) + extent));
@@ -1791,7 +2007,10 @@ pub fn fixture_place(world: &mut World, cell: IVec3, kind: Kind) -> Option<&mut 
         .map(|c| (c, kind.block()))
         .collect();
     world.set_many(&edits);
-    world.factory.nodes.insert(p, Node::new(kind));
+    // Review fixtures face the camera (+z) so machine fronts are captured.
+    let mut node = Node::new(kind);
+    node.facing = IVec3::Z;
+    world.factory.nodes.insert(p, node);
     world.factory.topology = false;
     world.factory.nodes.get_mut(&p)
 }
@@ -1840,7 +2059,7 @@ impl Factory {
         if self.packets.is_empty() {
             return;
         }
-        let travel = transit::SPEED * dt.clamp(0.0, 0.25);
+        let travel = transit::SPEED * dt.clamp(0.0, TICK_SECONDS);
         let mut i = 0;
         while i < self.packets.len() {
             self.packets[i].progress += travel;
@@ -1855,6 +2074,10 @@ impl Factory {
 
     fn deliver(&mut self, packet: transit::Packet) {
         self.release(packet.dst, packet.item, packet.amount);
+        let workshop_metal = self.nodes.get(&packet.src).is_some_and(|n| {
+            matches!((n.kind, packet.item), (Kind::Furnace, 8) | (Kind::AlloyKiln | Kind::BlastFurnace, 15))
+        })
+            && self.nodes.get(&packet.dst).is_some_and(|n| n.kind == Kind::Storage);
         let leftover = match self.nodes.get_mut(&packet.dst) {
             Some(n) if n.accepts(packet.item) => {
                 if n.kind == Kind::Storage && n.mode == 2 && n.filter.is_none() {
@@ -1867,6 +2090,16 @@ impl Factory {
             }
             _ => packet.amount,
         };
+        self.workshop_delivery |= workshop_metal && leftover < packet.amount;
+        if packet.item == ETHANOL && leftover < packet.amount
+            && self.nodes.get(&packet.dst).is_some_and(|n| n.kind == Kind::Storage)
+            && let Some(source) = self.nodes.get_mut(&packet.src).filter(|n| n.kind == Kind::Cultivator)
+        {
+            if fuel_order::is_batch(source) && source.target > 1 {
+                source.target = fuel_order::after_delivery(source.target, packet.amount - leftover);
+            }
+            self.workshop_delivery = true;
+        }
         if leftover > 0 {
             self.refunds.push((packet.item, leftover));
         }
@@ -1928,7 +2161,7 @@ impl Factory {
     }
 
     /// Extractor pipes pull from adjacent crates and machine outputs.
-    fn run_extractors(&mut self, size: i32, inbound: &mut routes::Inbound) {
+    fn run_extractors(&mut self, size: i32, inbound: &mut routes::Inbound, stock_lines: &HashMap<IVec3, stock_order::Line>) {
         let mut extractors: Vec<IVec3> = self
             .nodes
             .iter()
@@ -1960,6 +2193,8 @@ impl Factory {
                     continue;
                 }
                 let from_crate = src.kind == Kind::Storage;
+                let order = stock_order::read(src.kind, src.mode, src.target);
+                let fuel_batch = fuel_order::is_batch(src);
                 for i in 0..RESOURCE_COUNT {
                     if filter.is_some_and(|f| f != i) {
                         continue;
@@ -1980,6 +2215,13 @@ impl Factory {
                         if q == s {
                             continue;
                         }
+                        if i == ETHANOL && fuel_batch && !to_storage {
+                            continue;
+                        }
+                        let reserve = order.filter(|order| order.item == i);
+                        if reserve.is_some() && !stock_lines.get(&s).is_some_and(|line| line.dest == q) {
+                            continue;
+                        }
                         let dest = &self.nodes[&q];
                         if (dest.kind == Kind::Storage) != to_storage
                             || !dest.enabled
@@ -1988,11 +2230,11 @@ impl Factory {
                         {
                             continue;
                         }
-                        let room = CAPACITY.saturating_sub(
-                            dest.input[i] + self.reserved.get(&(q, i)).copied().unwrap_or(0),
-                        );
+                        let reserved = self.reserved.get(&(q, i)).copied().unwrap_or(0);
+                        let room = reserve.map_or_else(|| CAPACITY.saturating_sub(dest.input[i] + reserved),
+                            |order| stock_order::room(order, dest, reserved));
                         let amount = available.min(room);
-                        if amount == 0 {
+                        if amount == 0 || (i == ETHANOL && fuel_batch && amount < available) {
                             continue;
                         }
                         let Some(path) = self.routes.path(ni, network, size, s, q, Some(p)) else {
@@ -2120,7 +2362,7 @@ impl Factory {
     /// Material filters make the processing graph acyclic: feeder -> crusher
     /// -> furnace -> crate, and feeder -> generator. One unit per source per
     /// pass; backpressure retains everything at source.
-    fn route_outputs(&mut self, size: i32, inbound: &mut routes::Inbound) {
+    fn route_outputs(&mut self, size: i32, inbound: &mut routes::Inbound, stock_lines: &HashMap<IVec3, stock_order::Line>) {
         let mut moved = HashSet::new();
         // Storage sorts after processors, then by distance, then by rotated
         // port order; the keys never tie.
@@ -2139,15 +2381,20 @@ impl Factory {
             let port_count = net.len() as i32;
             for k in 0..net.len() {
                 let p = net[(k + self.cursor) % net.len()];
-                if moved.contains(&p) || !self.nodes[&p].enabled {
+                let source = &self.nodes[&p];
+                if moved.contains(&p) || (!source.enabled && source.kind != Kind::Assembler) {
                     continue;
                 }
-                'items: for i in 0..RESOURCE_COUNT {
-                    let source = &self.nodes[&p];
-                    if source.kind == Kind::Feeder && source.filter.is_some_and(|filter| filter != i) {
+                let filter = if source.kind == Kind::Feeder { source.filter } else { None };
+                let fuel_request = fuel_order::is_batch(source);
+                let order = stock_order::read(source.kind, source.mode, source.target);
+                // Snapshot the small buffer once; do not hash the same source
+                // for every resource, including empty slots.
+                'items: for (i, stock) in source.output.into_iter().enumerate() {
+                    if filter.is_some_and(|filter| filter != i) {
                         continue;
                     }
-                    let available = source.output[i].min(64);
+                    let available = stock.min(64);
                     if available == 0 {
                         continue;
                     }
@@ -2159,10 +2406,28 @@ impl Factory {
                             .collect()
                     });
                     near.clear();
+                    let reserve = order.filter(|order| order.item == i);
                     for &(offset, storage) in list.iter() {
+                        if fuel_request && i == ETHANOL && storage == 0 {
+                            continue;
+                        }
                         let q = net[offset as usize];
                         if q == p || !self.open_for(q, i, inbound) {
                             continue;
+                        }
+                        if let Some(order) = reserve {
+                            let reserved = self.reserved.get(&(q, i)).copied().unwrap_or(0);
+                            if !stock_lines.get(&p).is_some_and(|line| line.dest == q)
+                                || stock_order::room(order, &self.nodes[&q], reserved) == 0
+                            {
+                                continue;
+                            }
+                        }
+                        if fuel_request && i == ETHANOL {
+                            let reserved = self.reserved.get(&(q, i)).copied().unwrap_or(0);
+                            if CAPACITY.saturating_sub(self.nodes[&q].input[i].saturating_add(reserved)) < available {
+                                continue;
+                            }
                         }
                         let dist = (q.x - p.x).abs() + (q.y - p.y).abs() + (q.z - p.z).abs();
                         let tie = (offset as i32 + self.cursor as i32) % port_count;
@@ -2184,8 +2449,10 @@ impl Factory {
                     let Some((q, path)) = chosen else {
                         continue;
                     };
-                    let room = CAPACITY
-                        .saturating_sub(self.nodes[&q].input[i] + self.reserved.get(&(q, i)).copied().unwrap_or(0));
+                    let reserved = self.reserved.get(&(q, i)).copied().unwrap_or(0);
+                    let dest = &self.nodes[&q];
+                    let room = reserve.map_or_else(|| CAPACITY.saturating_sub(dest.input[i] + reserved),
+                        |order| stock_order::room(order, dest, reserved));
                     let amount = available.min(room);
                     if let Some(n) = self.nodes.get_mut(&p) {
                         n.output[i] -= amount;
@@ -2213,46 +2480,5 @@ impl Factory {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod machine_table {
-    use super::*;
-
-    /// Serialising the loaded table reproduces the file (minus its comment
-    /// header), so the file is the single source of truth.
-    fn assert_round_trip<T: serde::Serialize>(rows: &T, file: &str) {
-        let text = ron::ser::to_string_pretty(rows, ron::ser::PrettyConfig::new()).unwrap().replace('\r', "");
-        let file = file.replace('\r', "");
-        let body = match file.find("\n[\n") {
-            Some(i) => &file[i + 1..],
-            None => file.as_str(),
-        };
-        let (a, b) = (text.trim_end(), body.trim_end());
-        if a != b {
-            let i = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
-            let lo = i.saturating_sub(60);
-            panic!(
-                "table file differs from the loaded rows at byte {i}; rerun the ignored dump test to rewrite it.\n table: {:?}\n  file: {:?}",
-                &a[lo..(i + 60).min(a.len())],
-                &b[lo..(i + 60).min(b.len())]
-            );
-        }
-    }
-
-    #[test]
-    fn machines_ron_round_trips() {
-        assert_round_trip(&*MACHINES, MACHINES_RON);
-    }
-
-    /// Rewrites assets/machines.ron from the loaded table (keeps the header).
-    #[test]
-    #[ignore = "writes assets/machines.ron"]
-    fn dump_machines_ron() {
-        let header = MACHINES_RON.split("[").next().unwrap_or("");
-        let text = ron::ser::to_string_pretty(&*MACHINES, ron::ser::PrettyConfig::new()).unwrap();
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/machines.ron");
-        std::fs::write(path, format!("{header}{text}")).unwrap();
     }
 }

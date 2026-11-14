@@ -70,6 +70,7 @@ pub(in crate::world::adventure) fn strike_nodes(e: &mut Enemy, world: &mut World
             if e.glass.nodes[i].health <= 0.0 {
                 e.glass.nodes[i].health = 0.0;
                 e.glass.breaks += 1;
+                motion::fracture(e, c, shot.velocity);
                 sound(sounds, Cue::Shatter, Some(c), 0.9);
                 world.expedition.say("A prism shatters; its strands go dark.");
             } else {
@@ -103,6 +104,7 @@ fn discharge(e: &mut Enemy, bolt: Bolt, shots: &mut Vec<Projectile>, sounds: &mu
             mods: wands::ShotMods { damage_mul: 1.3, ..Default::default() },
             bore_budget: 0,
             trail_timer: 0.0,
+            flight: None,
             splashed: false,
             follow: None,
         });

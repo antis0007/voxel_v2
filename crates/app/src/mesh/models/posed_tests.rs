@@ -5,7 +5,7 @@ use crate::{
     player::Player,
     world::{self, DayNightCycle, World, WorldType},
 };
-use glam::IVec2;
+use glam::{IVec2, IVec3};
 
 fn bits(v: &Vertex3) -> [u32; 14] {
     bytemuck::cast(*v)
@@ -26,9 +26,9 @@ fn posed_scene_matches_cpu_scene() {
         player.pos = Vec3::new(site.x + 400.0, 120.0, site.z - 300.0) / world.voxel_scale.meters();
         player.precise_pos = player.pos.as_dvec3();
         set_enabled(false);
-        let cpu = models::build(&world, &player, &day, 0.0005);
+        let cpu = models::build(&world, &player, &day, 0.0005, &crate::render::ChunkCache::new(IVec3::ZERO));
         set_enabled(true);
-        let mut deferred = models::build(&world, &player, &day, 0.0005);
+        let mut deferred = models::build(&world, &player, &day, 0.0005, &crate::render::ChunkCache::new(IVec3::ZERO));
         set_enabled(false);
         let placed: Vec<Vertex3> = with_frame(|placements, pool, _| {
             placements

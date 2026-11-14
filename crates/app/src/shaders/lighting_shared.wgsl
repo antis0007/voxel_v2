@@ -6,7 +6,7 @@ struct Lighting {
     ambient_exposure : vec4<f32>,
     sky_top_saturation : vec4<f32>,
     sky_horizon_reserved : vec4<f32>,
-    fog_color_density : vec4<f32>,
+    fog_color_density : vec4<f32>, // rgb: fog, w: Manyfold environment fill
     fog_params : vec4<f32>,
     weather_globals : array<vec4<f32>, 4>,
     cloud_authoring : array<vec4<f32>, 2>,
@@ -28,4 +28,5 @@ struct Lighting {
     // SkyArt (render/atmosphere_params.rs): [disc cos radius, glare, sky grade,
     // sunset saturation], [cloud contrast, exposure gain, -, -].
     sky_art: array<vec4<f32>,2>,
+    torch_group_bounds: array<vec4<f32>,16>,
 };

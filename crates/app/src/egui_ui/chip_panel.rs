@@ -25,7 +25,6 @@ pub(super) fn section(ui: &mut egui::Ui, view: &View, pos: IVec3, action: &mut U
         super::semiconductor::section(ui, view, action);
     }
     socket(ui, view, pos, action);
-    chip_editor::window(ui.ctx(), view, action);
 }
 
 fn socket(ui: &mut egui::Ui, view: &View, pos: IVec3, action: &mut UiAction) {

@@ -1,13 +1,17 @@
 //! Cloud shell coverage bake, night-light splats and the volumetric march handoff.
 
 use super::chart::{self, HALF_M, PITCH_M};
-use crate::world::{CloudControls, World, coverage_at};
+use crate::world::{CloudControls, World, WeatherClock, coverage_at};
 use engine_core::hash::{hash01, hash_u32};
 use glam::{DVec3, IVec2, Vec2};
 
 /// Shell height above `chart::RADIUS_M`; `GLOBE_SHELL_M` in globe_shader.wgsl.
-pub const SHELL_HEIGHT_M: f64 = 1_600.0;
+pub const SHELL_HEIGHT_M: f64 = 980.0;
+/// Planet altitude band where the march fades out and the shell fades in.
+pub const HANDOFF_M: (f64, f64) = (3_200.0, 6_000.0);
 pub const MAX_LIGHTS: usize = 256;
+/// Reuse each expensive weather bake while the GPU blends between snapshots.
+pub const SHELL_REFRESH_S: f64 = 8.0;
 const ANCHORAGE_INTENSITY: f32 = 3.0;
 const ANCHORAGE_RADIUS_M: f32 = 1_500.0;
 const FACTORY_INTENSITY: f32 = 0.6;
@@ -16,8 +20,6 @@ const NODES_PER_LIGHT: u32 = 64;
 const MIN_CLUSTER_NODES: u32 = 8;
 /// The march's own cutoff margin above the top slab.
 const MARCH_MARGIN_M: f64 = 500.0;
-/// `CLOUD_ADVECTION_SPEED_SCALE * cloud_layer_speed_mult(low)` in cloud_shader.wgsl.
-const LOW_LAYER_WIND_MULT: f32 = 8.0 * 1.65;
 
 /// Texels per shell face edge: 512, or 256 on the lean tier.
 pub fn shell_resolution() -> u32 {
@@ -30,6 +32,8 @@ pub struct ShellConfig {
     pub resolution: u32,
     pub controls: CloudControls,
     pub weather_seed: u32,
+    /// Synced weather day, `synoptic::days`.
+    pub days: f64,
 }
 
 /// One night light; 32 bytes, `GlobeLight` in globe_shader.wgsl.
@@ -43,32 +47,82 @@ pub struct Light {
 }
 const _: [(); 32] = [(); std::mem::size_of::<Light>()];
 
-/// World-space offset the low cloud deck has drifted by at `time_s`, as the march applies it.
-pub fn wind_offset(controls: &CloudControls, time_s: f32) -> Vec2 {
-    let angle = controls.wind_dir_angle.to_radians();
-    Vec2::new(angle.cos(), angle.sin()) * time_s * controls.advection * controls.wind_speed.max(0.0) * LOW_LAYER_WIND_MULT
-}
-
 /// Chart metres of texel centre `i` on a face edge of `resolution` texels.
 pub(crate) fn texel_chart_m(i: u32, resolution: u32) -> f64 {
     -HALF_M + (f64::from(i) + 0.5) * 2.0 * HALF_M / f64::from(resolution)
 }
 
 /// Coverage 0..255 for one face, rows along chart z; chart metres equal world metres.
+///
+/// Each texel is the clipmap's own sample (`coverage_at`) for the ground point
+/// under it, so the shell and the march show one weather state where they hand over.
 pub fn bake_shell(cfg: &ShellConfig, time_s: f32, face: u8) -> Vec<u8> {
     let res = cfg.resolution;
-    let drift = wind_offset(&cfg.controls, time_s);
-    let face_x = f64::from(face) * PITCH_M;
+    let clock = WeatherClock::new(&cfg.controls, time_s, cfg.days);
     let mut out = Vec::with_capacity((res * res) as usize);
     for j in 0..res {
-        let z = texel_chart_m(j, res) as f32;
         for i in 0..res {
-            let x = (face_x + texel_chart_m(i, res)) as f32;
-            let c = coverage_at(Vec2::new(x, z) + drift, cfg.controls, cfg.weather_seed);
-            out.push((c.clamp(0.0, 1.0) * 255.0).round() as u8);
+            out.push(shell_texel(cfg, clock, face, i, j));
         }
     }
     out
+}
+
+/// Coverage 0..255 of texel `(i, j)` on `face`.
+pub(crate) fn shell_texel(cfg: &ShellConfig, clock: WeatherClock, face: u8, i: u32, j: u32) -> u8 {
+    let x = (f64::from(face) * PITCH_M + texel_chart_m(i, cfg.resolution)) as f32;
+    let z = texel_chart_m(j, cfg.resolution) as f32;
+    let c = coverage_at(Vec2::new(x, z) + clock.drift_m, clock, cfg.controls, cfg.weather_seed);
+    (c * 255.0).round() as u8
+}
+
+/// Recovered pressure circulation supplies broad fronts and clearing highs;
+/// the existing field retains the local weather grain and preset coverage.
+pub(super) fn shell_weather_texel(cfg: &ShellConfig, clock: WeatherClock,
+    face: u8, i: u32, j: u32, field: &super::shell_sim::ShellField, hint: &mut usize) -> u8 {
+    let x = f64::from(face)*PITCH_M + texel_chart_m(i,cfg.resolution);
+    let z = texel_chart_m(j,cfg.resolution);
+    // The shared cloud-flow shader warps both the march and orbital lookup;
+    // baking the same warp here would apply Karman streets twice in orbit.
+    let q = Vec2::new(x as f32,z as f32);
+    let (local, storm) = crate::world::cloud_shell_sample_raw(q+clock.drift_m,clock,cfg.controls,cfg.weather_seed);
+    let dir = chart::to_body(DVec3::new(x,0.0,z)).normalize();
+    let cover = field.cover_at(dir,hint);
+    let c = front_coverage(local, storm, cover, cfg.controls.coverage, clock.planet.is_some());
+    (c*255.0).round() as u8
+}
+
+/// Coverage 0..1 of the local field inside the pressure solver's fronts; the
+/// shell bakes it and, on planets, the march clipmap stores it too.
+pub(crate) fn front_coverage(local: f32, _storm: f32, cover: f32, preset: f32, planet: bool) -> f32 {
+    // Keep the surface weather as texture within regional systems. Letting
+    // it set the coverage on its own produces thousands of similar specks.
+    // Leave optical headroom for fine structure: saturating most of a front
+    // at opacity one turned the entire shield into an unbroken white plate.
+    // Preserve dense frontal shields, dry slots and clear gaps before adding
+    // fine texture. A weak linear cover map made every system translucent.
+    // The pressure catalogue owns system placement; don't overlay a second,
+    // unrelated set of synthetic cyclone cores from the local weather noise.
+    let front = ((cover - 0.12) / 0.66).clamp(0.0, 1.0);
+    let organised = front * front * (3.0 - 2.0 * front);
+    let regional = 0.30 * organised + 0.07 * cover - 0.055;
+    let local_gain = if planet { 0.035 } else { 0.05 };
+    let c = regional + local_gain * (local - 0.5) + 0.16 * (preset - 0.5);
+    let area = ((c - 0.025) / 0.265).clamp(0.0, 1.0);
+    let enabled = (preset / 0.12).clamp(0.0, 1.0);
+    // Store occupied area in 0..1 for BOTH renderers. Previously the surface
+    // read a 0.58-biased density as coverage, while orbit thresholded it again.
+    area * area * (3.0 - 2.0 * area) * enabled * enabled * (3.0 - 2.0 * enabled)
+}
+
+/// Extinction of the authored cloud column, shared by every orbital texel.
+/// Coverage controls occupied area; density/thickness and layer amounts set
+/// opacity. Setting all layers (or density) to zero cannot leave orbital fog.
+pub(super) fn column_opacity(c: &CloudControls) -> f32 {
+    let low = c.cumulus + 1.6 * c.stratus + 2.4 * c.cumulonimbus * (0.5 + c.storm_thickness);
+    let tau = c.density * (6.0 * c.layer_thickness * low
+        + 1.8 * c.altostratus + 0.9 * c.altocumulus + 0.45 * c.cirrus);
+    1.0 - (-tau.max(0.0)).exp()
 }
 
 /// Top of the highest cloud slab in metres; mirrors `cloud_layer_bounds().high_top`.
@@ -99,6 +153,7 @@ pub fn night_lights_from(seed: u32, sites: &[(DVec3, IVec2)], factory_clusters: 
     let mut out: Vec<(f64, Light)> = Vec::with_capacity(sites.len() + factory_clusters.len());
     let mut push = |body: DVec3, radius_m, intensity| {
         let b = body.as_vec3();
+        if !engine_gpu::spatial::above_spherical_horizon(b.to_array(), radius_m, eye_body.to_array(), chart::RADIUS_M) { return; }
         out.push((body.distance_squared(eye_body), Light { body: [b.x, b.y, b.z], radius_m, intensity, pad: [0.0; 3] }));
     };
     for (body, site) in sites {

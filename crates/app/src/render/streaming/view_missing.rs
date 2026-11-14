@@ -49,8 +49,8 @@ mod tests {
         cache.gpu_meshes.insert(IVec3::new(-2, 0, -5), ChunkGpuMesh::test_mesh(6, 0, true, 64));
         // Camera in chunk (-2, 0, -2) looking down -Z: (-2,0,2) is behind it.
         let eye = Vec3::new(-1.5, 0.5, -1.5) * CHUNK_SIZE as f32;
-        let view = Mat4::look_at_rh(eye, eye - Vec3::Z, Vec3::Y);
-        let proj = Mat4::perspective_rh(1.2, 1.0, 0.05, 1.0e6);
+        let view = glam::camera::rh::view::look_at_mat4(eye, eye - Vec3::Z, Vec3::Y);
+        let proj = glam::camera::rh::proj::directx::perspective(1.2, 1.0, 0.05, 1.0e6);
         assert_eq!(cache.missing_in_view(proj * view), (2, 1));
     }
 }

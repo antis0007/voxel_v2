@@ -35,8 +35,12 @@ static STUDIO: LazyLock<Mutex<Studio>> = LazyLock::new(|| {
     })
 });
 pub fn snapshot() -> Palette {
-    STUDIO.lock().unwrap().palette
+    preview_palette().unwrap_or_else(|| STUDIO.lock().unwrap().palette)
 }
+// Engine workbench overrides are transient; never enter per-world autosave.
+static PREVIEW: Mutex<Option<Palette>> = Mutex::new(None);
+pub fn preview_palette() -> Option<Palette> { *PREVIEW.lock().unwrap() }
+pub fn set_preview_palette(palette: Option<Palette>) { *PREVIEW.lock().unwrap() = palette; }
 const FAMILIES: &[(usize, &str)] = &[
     (1, "Meadow"),
     (2, "Earth / clay"),
@@ -56,6 +60,7 @@ const FAMILIES: &[(usize, &str)] = &[
     (19, "Red cap"),
     (22, "Crystal"),
 ];
+pub fn families() -> &'static [(usize, &'static str)] { FAMILIES }
 static WORLD_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 fn path() -> std::path::PathBuf {
     WORLD_PATH

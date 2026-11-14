@@ -3,8 +3,8 @@
 use engine_core::cube_sphere::{Face, Projection, local_frame};
 use glam::{DMat3, DVec3};
 
-pub const HALF_M: f64 = 16_000.0;
-pub const RADIUS_M: f64 = 20_371.0;
+pub const HALF_M: f64 = engine_core::cube_sphere::atlas::HALF_M;
+pub const RADIUS_M: f64 = engine_core::cube_sphere::atlas::RADIUS_M;
 pub const PITCH_M: f64 = 65_536.0;
 
 /// Face and face-local position of a chart point.

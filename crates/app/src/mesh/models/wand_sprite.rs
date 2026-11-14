@@ -6,6 +6,7 @@ use glam::Vec3;
 pub(super) fn enabled() -> bool { crate::viewmodel_review::selected().is_none() }
 pub(super) fn muzzle(style: WandStyle) -> Vec3 { super::wand_kit::muzzle(style) }
 pub(super) fn draw(m: &mut Model, v: &WandView, style: WandStyle) {
-    let cast = super::wand_pose::pose(v).cast;
-    super::wand_kit::draw(m, super::wayfarer::attachment(v), style, style.clamped().glow_colour(v.spell), cast, super::wand_kit::BODY_KIND);
+    let pose = super::wand_pose::pose(v);
+    super::wand_kit::draw_cast(m, super::wayfarer::attachment(v), style,
+        style.clamped().glow_colour(v.spell), pose.cast, pose.cast_left);
 }

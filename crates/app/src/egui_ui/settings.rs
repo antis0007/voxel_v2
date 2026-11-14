@@ -41,7 +41,7 @@ impl TerrainPreset {
 const TERRAIN_PRESETS: [TerrainPreset; 3] = [
     TerrainPreset {
         name: "Fast",
-        hint: "Draws at 70% resolution with a short view and no bounce lighting. Clouds stay on.",
+        hint: "256 m · 85% Resolution",
         view_m: 256.0,
         full_detail_m: 128.0,
         min_view_chunks: 8,
@@ -49,23 +49,23 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
         lod_levels: 2,
         cloud_scale: 4,
         clouds: true,
-        render_scale: 70,
+        render_scale: 85,
         indirect: false,
-        horizon_m: 4096,
+        horizon_m: 2048,
     },
     TerrainPreset {
         name: "Balanced",
-        hint: "Default view distance and lighting.",
-        view_m: 896.0,
-        full_detail_m: 320.0,
-        min_view_chunks: 16,
-        min_full_chunks: 6,
-        lod_levels: 4,
-        cloud_scale: 3,
+        hint: "384 m · Native Resolution",
+        view_m: 384.0,
+        full_detail_m: 160.0,
+        min_view_chunks: 12,
+        min_full_chunks: 5,
+        lod_levels: 3,
+        cloud_scale: 4,
         clouds: true,
         render_scale: 100,
-        indirect: true,
-        horizon_m: 12288,
+        indirect: false,
+        horizon_m: 4096,
     },
     TerrainPreset {
         name: "Far view",
@@ -85,6 +85,23 @@ const TERRAIN_PRESETS: [TerrainPreset; 3] = [
 
 pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, voxel_meters: f32) {
     let chunk_meters = 32.0 * voxel_meters;
+    if ui.button("Reset Graphics").clicked() {
+        let preset = &TERRAIN_PRESETS[1];
+        state.settings = preset.settings(chunk_meters);
+        state.fxaa_enabled = true;
+        state.vsync = true;
+        state.debug_view = RenderDebugView::default();
+        state.atmosphere_mode = AtmosphereMode::default();
+        crate::render::set_cloud_render_scale(preset.cloud_scale);
+        crate::render::set_clouds_enabled(preset.clouds);
+        crate::render::set_scene_scale_percent(preset.render_scale);
+        crate::render::set_indirect_lighting_enabled(preset.indirect);
+        crate::render::set_horizon_range_m(preset.horizon_m);
+        crate::render::set_world_residency_budgets_mib(256, 0);
+        crate::render::set_mesh_budget_mib(256);
+        crate::render::shadow::set_enabled(true);
+        crate::quality::set_auto_enabled(true);
+    }
     ui.label("Quality");
     ui.horizontal_wrapped(|ui| {
         for preset in TERRAIN_PRESETS {
@@ -173,7 +190,7 @@ pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, vo
                 }
             });
     });
-    ui.collapsing("Developer", |ui| {
+    ui.collapsing("Memory", |ui| {
         let (mut cpu, effective_gpu) = crate::render::world_residency_budgets_mib();
         let mut gpu = crate::render::gpu_residency_limit_mib();
         let mut automatic = gpu == 0;
@@ -220,12 +237,33 @@ pub(super) fn graphics_settings(ui: &mut egui::Ui, state: &mut RenderUiState, vo
     });
 }
 
+/// Changes the open world's difficulty. The world saves it.
+pub(super) fn difficulty_settings(
+    ui: &mut egui::Ui,
+    world_difficulty: crate::world::adventure::difficulty::Difficulty,
+    action: &mut UiAction,
+) {
+    use crate::world::adventure::difficulty::Difficulty;
+    ui.label("Difficulty");
+    ui.horizontal_wrapped(|ui| {
+        for level in Difficulty::ALL {
+            let selected = world_difficulty == level;
+            if ui.add(egui::Button::selectable(selected, level.label())).on_hover_text(level.hint()).clicked() && !selected {
+                *action = UiAction::SetDifficulty(level);
+            }
+        }
+    });
+    ui.small(world_difficulty.hint());
+}
+
 pub(super) fn environment_settings(
     ui: &mut egui::Ui,
     time_state: &mut TimeUiState,
     physics_state: &mut PhysicsUiState,
+    world_difficulty: crate::world::adventure::difficulty::Difficulty,
     action: &mut UiAction,
 ) {
+    difficulty_settings(ui, world_difficulty, action);
     saving_settings(ui);
     ui.label(format!("Time: {}", format_clock(time_state.time_of_day)));
     ui.add(egui::Slider::new(&mut time_state.time_of_day, 0.0..=1.0).show_value(false));

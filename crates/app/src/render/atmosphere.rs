@@ -14,8 +14,9 @@
 
 pub(crate) use crate::shader_sources::{
     ATMOSPHERE_LUT_GENERATION_WGSL, cloud_composite_shader_source,
-    cloud_shader_source_for_filtering, cloud_temporal_shader_source, sky_shader_source,
-    world_shader_source,
+    cloud_shader_source_for_filtering, cloud_temporal_shader_source,
+    sky_shader_source_for_filtering,
+    world_shader_source_for_filtering,
 };
 
 use bytemuck::{Pod, Zeroable};
@@ -103,6 +104,20 @@ fn active_preset() -> &'static AtmospherePreset {
     ACTIVE.get_or_init(AtmosphereConfig::shipped_active)
 }
 
+/// `preset` with today's aerosol regime applied to its coefficients.
+fn with_air(preset: &AtmospherePreset, air: crate::world::sky_air::SkyAir) -> AtmospherePreset {
+    let mut p = preset.clone();
+    let [r, g, b] = air.spectral_mie();
+    p.mie_scattering = (p.mie_scattering.0 * r, p.mie_scattering.1 * g, p.mie_scattering.2 * b);
+    let a = air.absorption;
+    p.mie_absorption = (p.mie_absorption.0 + a[0], p.mie_absorption.1 + a[1], p.mie_absorption.2 + a[2]);
+    p.mie_scale_height_m *= air.height;
+    p.mie_g = air.g;
+    let o = air.ozone;
+    p.ozone_absorption = (p.ozone_absorption.0 * o, p.ozone_absorption.1 * o, p.ozone_absorption.2 * o);
+    p
+}
+
 impl AtmosphereLutGenerationUniform {
     fn from_parameters(params: AtmosphereParameters) -> Self {
         Self {
@@ -144,12 +159,12 @@ impl AtmosphereLutGenerationUniform {
                 TRANSMITTANCE_LUT_MAX_ALTITUDE_M,
             ],
             art: [
-                SkyArt::active().haze_extinction,
+                SkyArt::active().haze_extinction * if params.hell { 1.0 } else { params.air.density },
                 SkyArt::active().haze_scale_height,
                 SkyArt::active().fog_seam,
                 0.0,
             ],
-            physics: active_preset().uniform_words(),
+            physics: if params.hell { AtmospherePreset::hell().uniform_words() } else { with_air(active_preset(), params.air).uniform_words() },
         }
     }
 }
@@ -229,6 +244,7 @@ struct AtmosphereLuts {
 }
 
 pub struct AtmosphereRuntime {
+    _planet_depth: engine_gpu::atmosphere::OpticalDepthLut,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
     sky_probe: SkyProbe,
@@ -242,6 +258,9 @@ pub struct AtmosphereRuntime {
     pending_parameters: AtmosphereParameters,
     last_sky_altitude: f32,
     last_aerial: Option<(f32, f32, AtmosphereParameters)>,
+    transport_hell: bool,
+    /// Aerosol regime the transport tables were last solved with.
+    transport_air: crate::world::sky_air::SkyAir,
 }
 
 impl AtmosphereRuntime {
@@ -312,6 +331,18 @@ impl AtmosphereRuntime {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: wgpu::BufferSize::new(SKY_PROBE_BYTES),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float {
+                            filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
+                        },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -499,18 +530,18 @@ impl AtmosphereRuntime {
 
         let lut_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("atmosphere lut pipeline layout"),
-            bind_group_layouts: &[&generation_layout, camera_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&generation_layout), Some(camera_bind_group_layout)],
+            immediate_size: 0,
         });
 
         let ap_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ap pipeline layout"),
             bind_group_layouts: &[
-                &generation_layout,
-                camera_bind_group_layout,
-                &ap_generation_layout,
+                Some(&generation_layout),
+                Some(camera_bind_group_layout),
+                Some(&ap_generation_layout),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let generation_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -521,14 +552,14 @@ impl AtmosphereRuntime {
         let transmittance_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("transmittance pipeline layout"),
-                bind_group_layouts: &[&transmittance_generation_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&transmittance_generation_layout)],
+                immediate_size: 0,
             });
         let multiscatter_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("atmosphere transport pipeline layout"),
-                bind_group_layouts: &[&multiscatter_generation_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&multiscatter_generation_layout)],
+                immediate_size: 0,
             });
         let compute = |label: &str, layout: &wgpu::PipelineLayout, entry_point: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -668,6 +699,8 @@ impl AtmosphereRuntime {
         });
 
         let sky_probe_uniform = SkyProbe::create_uniform(device);
+        let mut planet_depth = engine_gpu::atmosphere::OpticalDepthLut::new(device, super::planet_air::model());
+        planet_depth.upload_once(queue);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("atmosphere bind group"),
             layout: &bind_group_layout,
@@ -700,6 +733,10 @@ impl AtmosphereRuntime {
                     binding: 6,
                     resource: sky_probe_uniform.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&planet_depth.view),
+                },
             ],
         });
         let sky_probe = SkyProbe::new(
@@ -707,9 +744,11 @@ impl AtmosphereRuntime {
             camera_bind_group_layout,
             lighting_bind_group_layout,
             &bind_group_layout,
+            pipeline_cache,
         );
 
-        let mut runtime = Self {
+        let runtime = Self {
+            _planet_depth: planet_depth,
             bind_group,
             uniform_buffer,
             sky_probe,
@@ -723,48 +762,17 @@ impl AtmosphereRuntime {
             pending_parameters: last_parameters,
             last_sky_altitude: f32::NEG_INFINITY,
             last_aerial: None,
+            transport_hell: false,
+            transport_air: last_parameters.air,
         };
 
-        // Both transport tables depend only on atmospheric coefficients. The
-        // multiple-scattering table spans all solar elevations and altitudes,
-        // so camera/time/weather changes only rebuild sky view and AP.
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("atmosphere transmittance encoder"),
+            label: Some("initial atmosphere LUTs"),
         });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("atmosphere transmittance generation pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&runtime.generation.transmittance_pipeline);
-            pass.set_bind_group(0, &runtime.generation.transmittance_bind_group, &[]); // Only bind group 0 is needed for transmittance
-            pass.dispatch_workgroups(
-                div_ceil_u32(TRANSMITTANCE_LUT_WIDTH, ATMOSPHERE_LUT_WORKGROUP_SIZE_X),
-                div_ceil_u32(TRANSMITTANCE_LUT_HEIGHT, ATMOSPHERE_LUT_WORKGROUP_SIZE_Y),
-                1,
-            );
-        }
+        runtime.record_transport(&mut encoder);
+        runtime.record_sky_view(&mut encoder, camera_bind_group);
         queue.submit(Some(encoder.finish()));
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("atmosphere transport encoder"),
-        });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("atmosphere multiscatter generation pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&runtime.generation.multiscatter_pipeline);
-            pass.set_bind_group(0, &runtime.generation.multiscatter_bind_group, &[]);
-            pass.dispatch_workgroups(
-                div_ceil_u32(MULTISCATTER_LUT_WIDTH, ATMOSPHERE_LUT_WORKGROUP_SIZE_X),
-                div_ceil_u32(MULTISCATTER_LUT_HEIGHT, ATMOSPHERE_LUT_WORKGROUP_SIZE_Y),
-                1,
-            );
-        }
-        queue.submit(Some(encoder.finish()));
-
-        runtime.regenerate_dynamic_sky_luts(device, queue, last_parameters, camera_bind_group);
         runtime
     }
 
@@ -779,6 +787,7 @@ impl AtmosphereRuntime {
         encoder: &mut wgpu::CommandEncoder,
         camera_bind_group: &wgpu::BindGroup,
         lighting_bind_group: &wgpu::BindGroup,
+        timestamps: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
         self.sky_probe.record(
             encoder,
@@ -786,6 +795,7 @@ impl AtmosphereRuntime {
             lighting_bind_group,
             &self.bind_group,
             &self.sky_probe_uniform,
+            timestamps,
         );
     }
 
@@ -827,105 +837,51 @@ impl AtmosphereRuntime {
         queue: &wgpu::Queue,
         camera_bind_group: &wgpu::BindGroup,
         camera_altitude: f32,
-    ) {
-        if !self.needs_dynamic_sky_luts() {
-            return;
-        }
-
-        let params = self.pending_parameters;
-        if self.last_parameters.approximately_matches(params)
-            && (self.last_sky_altitude - camera_altitude).abs() < 1.0
-        {
-            return;
-        }
-
-        self.regenerate_dynamic_sky_luts(device, queue, params, camera_bind_group);
-        self.last_parameters = params;
-        self.last_sky_altitude = camera_altitude;
-    }
-
-    /// Sky-view generation is only worth doing when the renderer
-    /// can actually sample or inspect those textures this frame.
-    fn needs_dynamic_sky_luts(&self) -> bool {
-        matches!(self.state.mode, AtmosphereMode::SkyViewLut)
-            || matches!(
-                self.state.debug_view,
-                RenderDebugView::AtmosphereSkyView | RenderDebugView::AtmosphereMultiscatter
-            )
-    }
-
-    fn regenerate_dynamic_sky_luts(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        params: AtmosphereParameters,
-        camera_bind_group: &wgpu::BindGroup,
-    ) {
-        queue.write_buffer(
-            &self.generation.uniform_buffer,
-            0,
-            bytemuck::bytes_of(&AtmosphereLutGenerationUniform::from_parameters(params)),
-        );
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("atmosphere lut generation encoder"),
-        });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("atmosphere sky-view generation pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.generation.sky_view_pipeline);
-            pass.set_bind_group(0, &self.generation.sky_view_bind_group, &[]);
-            pass.set_bind_group(1, camera_bind_group, &[]);
-            pass.dispatch_workgroups(
-                div_ceil_u32(SKY_VIEW_LUT_WIDTH, ATMOSPHERE_LUT_WORKGROUP_SIZE_X),
-                div_ceil_u32(SKY_VIEW_LUT_HEIGHT, ATMOSPHERE_LUT_WORKGROUP_SIZE_Y),
-                1,
-            );
-        }
-        queue.submit(Some(encoder.finish()));
-    }
-
-    /// Reuse the froxel volume while its camera and lighting inputs are stable.
-    /// Camera motion always invalidates; time/daylight accumulates against the
-    /// last solve using the same tolerance as sky-view generation.
-    pub fn update_aerial_perspective(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        camera_bind_group: &wgpu::BindGroup,
-        camera_altitude: f32,
         world_extent: f32,
     ) {
         let params = self.pending_parameters;
-        // The LUT spans world directions, not screen pixels. Rotation, lateral
-        // translation and voxel scale do not affect the atmospheric transport.
-        // Match the generator's physical altitude and distance clamps exactly.
+        // Keep the existing transport, sky-view and aerial invalidation thresholds.
+        let transport = params.hell != self.transport_hell
+            || params.air.differs(self.transport_air);
+        let sky_view = self.needs_dynamic_sky_luts()
+            && (transport
+                || !self.last_parameters.approximately_matches(params)
+                || (self.last_sky_altitude - camera_altitude).abs() >= 1.0);
         let altitude = camera_altitude.max(1.0);
         let extent = (world_extent * 0.82).max(16000.0);
-        if self
-            .last_aerial
-            .is_some_and(|(previous_altitude, previous_extent, lighting)| {
+        let aerial = self.needs_aerial_perspective()
+            && (transport || !self.last_aerial.is_some_and(|(previous_altitude, previous_extent, lighting)| {
                 (previous_altitude - altitude).abs() < 0.5
                     && previous_extent == extent
                     && lighting.approximately_matches(params)
-            })
-        {
+            }));
+        if !transport && !sky_view && !aerial {
             return;
         }
-        // Transmittance-only mode can skip the sky-view solve, but AP still
-        // needs current weather and solar inputs in the generation uniform.
+
+        // Every pass reads the same parameters. Record producer passes first
+        // so their dependent LUT reads are ordered within one submission.
         queue.write_buffer(
             &self.generation.uniform_buffer,
             0,
             bytemuck::bytes_of(&AtmosphereLutGenerationUniform::from_parameters(params)),
         );
-        self.last_aerial = Some((altitude, extent, params));
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("ap generation encoder"),
+            label: Some("atmosphere LUT updates"),
         });
-        {
+        if transport {
+            self.record_transport(&mut encoder);
+            self.transport_hell = params.hell;
+            self.transport_air = params.air;
+            self.last_sky_altitude = f32::NEG_INFINITY;
+            self.last_aerial = None;
+        }
+        if sky_view {
+            self.record_sky_view(&mut encoder, camera_bind_group);
+            self.last_parameters = params;
+            self.last_sky_altitude = camera_altitude;
+        }
+        if aerial {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("ap generation pass"),
                 timestamp_writes: None,
@@ -939,8 +895,55 @@ impl AtmosphereRuntime {
                 div_ceil_u32(self._luts.aerial_perspective.height, 8),
                 div_ceil_u32(self._luts.aerial_perspective.depth, 4),
             );
+            self.last_aerial = Some((altitude, extent, params));
         }
         queue.submit(Some(encoder.finish()));
+    }
+
+    fn needs_dynamic_sky_luts(&self) -> bool {
+        matches!(self.state.mode, AtmosphereMode::SkyViewLut)
+            || matches!(
+                self.state.debug_view,
+                RenderDebugView::AtmosphereSkyView | RenderDebugView::AtmosphereMultiscatter
+            )
+    }
+
+    fn record_transport(&self, encoder: &mut wgpu::CommandEncoder) {
+        for (pipeline, group, width, height) in [
+            (&self.generation.transmittance_pipeline, &self.generation.transmittance_bind_group, TRANSMITTANCE_LUT_WIDTH, TRANSMITTANCE_LUT_HEIGHT),
+            (&self.generation.multiscatter_pipeline, &self.generation.multiscatter_bind_group, MULTISCATTER_LUT_WIDTH, MULTISCATTER_LUT_HEIGHT),
+        ] {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("atmosphere transport LUT"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, group, &[]);
+            pass.dispatch_workgroups(
+                div_ceil_u32(width, ATMOSPHERE_LUT_WORKGROUP_SIZE_X),
+                div_ceil_u32(height, ATMOSPHERE_LUT_WORKGROUP_SIZE_Y),
+                1,
+            );
+        }
+    }
+
+    fn record_sky_view(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        camera_bind_group: &wgpu::BindGroup,
+    ) {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("atmosphere sky-view generation pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.generation.sky_view_pipeline);
+        pass.set_bind_group(0, &self.generation.sky_view_bind_group, &[]);
+        pass.set_bind_group(1, camera_bind_group, &[]);
+        pass.dispatch_workgroups(
+            div_ceil_u32(SKY_VIEW_LUT_WIDTH, ATMOSPHERE_LUT_WORKGROUP_SIZE_X),
+            div_ceil_u32(SKY_VIEW_LUT_HEIGHT, ATMOSPHERE_LUT_WORKGROUP_SIZE_Y),
+            1,
+        );
     }
 
     fn write_uniform(&self, queue: &wgpu::Queue) {

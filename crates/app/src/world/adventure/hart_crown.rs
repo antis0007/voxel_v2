@@ -16,6 +16,7 @@ const NEIGHBORS: [IVec3; 6] = [
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Phase {
     #[default]
     Seek,
@@ -27,6 +28,7 @@ pub(super) enum Phase {
 }
 
 #[derive(Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Crown {
     pub phase: Phase,
     pub clock: f32,

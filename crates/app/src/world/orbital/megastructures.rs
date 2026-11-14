@@ -37,11 +37,14 @@ impl Kind {
         Self::DeadRelay=>"Derelict relay station",
     }}
     pub fn description(self)->&'static str {match self {
-        Self::Foundry=>"64 km orbital fabrication truss · sealed industrial districts",
-        Self::TwinHabitat=>"Paired 36 km pressure cylinders · 4.8 km diameter · counter-rotating living drums",
-        Self::MirrorArray=>"34 km solar mirror ring · a few petals still turn to the sun",
-        Self::DeadRelay=>"14 km relay truss · tumbling, one wing snapped, unpowered",
+        Self::Foundry=>"9.6 km fabrication truss · sealed industrial districts",
+        Self::TwinHabitat=>"Paired 7.6 km pressure cylinders · counter-rotating living drums",
+        Self::MirrorArray=>"10 km solar mirror ring · surviving tracking petals",
+        Self::DeadRelay=>"2.8 km relay truss · one wing snapped, unpowered",
     }}
+    /// Stations are free-floating. Tethers belong to ground corridors and
+    /// skyhooks, so no orbital station hangs from a cable.
+    pub fn tethered(self)->bool {false}
     /// Overhead sweep on the default day (480 s, orbital clock x180): the foundry
     /// at 110 km crosses the sky at ~34 deg/s, the habitat at 130 km at ~28.
     /// Shells above ~200 km read as static from the ground; the smooth clock in
@@ -50,10 +53,10 @@ impl Kind {
         Self::Foundry=>440_000.0,Self::TwinHabitat=>520_000.0,
         Self::MirrorArray=>800_000.0,Self::DeadRelay=>600_000.0,
     })/SKY_SCALE}
-    /// Authored-to-sky scale. The ring and the wreck are drawn larger than the
-    /// working stations so they read as shapes, not specks, at their distance.
-    pub fn scale(self)->f32 {match self {Self::MirrorArray=>14.0,Self::DeadRelay=>20.0,_=>10.0}}
-    pub fn bound_m(self)->f64 {match self {Self::Foundry=>40_000.0,Self::TwinHabitat=>24_000.0,Self::MirrorArray=>20_000.0,Self::DeadRelay=>14_000.0}}
+    /// Physical hardware scale. Keep the largest overhead silhouette around five
+    /// degrees rather than filling half the sky on the compressed orbital chart.
+    pub fn scale(self)->f32 {match self {Self::Foundry=>1.5,Self::TwinHabitat=>2.0,Self::MirrorArray=>3.0,Self::DeadRelay=>4.0}}
+    pub fn bound_m(self)->f64 {match self {Self::Foundry=>5_500.0,Self::TwinHabitat=>4_500.0,Self::MirrorArray=>5_500.0,Self::DeadRelay=>3_000.0}}
 }
 #[derive(Clone,Copy,Debug)]
 pub struct Site {pub key:u32,pub kind:Kind,pub position:Vec3,pub orientation:Quat,pub sunlight:f32}
@@ -163,6 +166,13 @@ mod tests {
         for kind in [Kind::MirrorArray, Kind::DeadRelay] {
             let sweep = overhead_sweep_deg_per_real_s(kind);
             assert!((8.0..20.0).contains(&sweep), "{kind:?} sweeps {sweep:.1} deg/s");
+        }
+    }
+
+    #[test]
+    fn stations_are_free_floating() {
+        for kind in [Kind::Foundry, Kind::TwinHabitat, Kind::MirrorArray, Kind::DeadRelay] {
+            assert!(!kind.tethered(), "{kind:?} must not hang from a tether");
         }
     }
 

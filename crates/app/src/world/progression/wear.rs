@@ -13,7 +13,9 @@ pub enum Slot {
     Hotbar(u8),
     Pack(u8),
     Equipment(u8),
+    Offhand,
     Cursor,
+    CraftGrid(u8),
 }
 
 impl Slot {
@@ -22,17 +24,21 @@ impl Slot {
             Self::Hotbar(i) => i,
             Self::Pack(i) => 32 + i,
             Self::Equipment(i) => 96 + i,
+            Self::Offhand => 120,
             Self::Cursor => 121,
+            Self::CraftGrid(i) => 122 + i,
         }
     }
 
     pub fn from_code(code: u8) -> Option<Self> {
-        use crate::world::inventory::{EQUIP_SLOTS, HOTBAR_SLOTS, PACK_SLOTS};
+        use crate::world::inventory::{CRAFT_SLOTS, EQUIP_SLOTS, HOTBAR_SLOTS, PACK_SLOTS};
         Some(match code {
             c if (c as usize) < HOTBAR_SLOTS => Self::Hotbar(c),
             c if (32..32 + PACK_SLOTS as u8).contains(&c) => Self::Pack(c - 32),
             c if (96..96 + EQUIP_SLOTS as u8).contains(&c) => Self::Equipment(c - 96),
+            120 => Self::Offhand,
             121 => Self::Cursor,
+            c if (122..122 + CRAFT_SLOTS as u8).contains(&c) => Self::CraftGrid(c - 122),
             _ => return None,
         })
     }
@@ -43,6 +49,8 @@ impl Slot {
             A::Hotbar(i) => Self::Hotbar(u8::try_from(i).ok()?),
             A::Pack(i) => Self::Pack(u8::try_from(i).ok()?),
             A::Equipment(i) => Self::Equipment(u8::try_from(i).ok()?),
+            A::Offhand => Self::Offhand,
+            A::CraftGrid(i) => Self::CraftGrid(u8::try_from(i).ok()?),
             _ => return None,
         })
     }
@@ -52,7 +60,9 @@ impl Slot {
             Self::Hotbar(i) => inv.hotbar.get(i as usize).copied().flatten(),
             Self::Pack(i) => inv.pack.get(i as usize).copied().flatten(),
             Self::Equipment(i) => inv.equipment.get(i as usize).copied().flatten(),
+            Self::Offhand => inv.offhand,
             Self::Cursor => inv.cursor,
+            Self::CraftGrid(i) => inv.craft_grid.get(i as usize).copied().flatten(),
         }
     }
 
@@ -61,18 +71,21 @@ impl Slot {
             Self::Hotbar(i) => inv.hotbar.get_mut(i as usize),
             Self::Pack(i) => inv.pack.get_mut(i as usize),
             Self::Equipment(i) => inv.equipment.get_mut(i as usize),
+            Self::Offhand => Some(&mut inv.offhand),
             Self::Cursor => Some(&mut inv.cursor),
+            Self::CraftGrid(i) => inv.craft_grid.get_mut(i as usize),
         }
     }
 }
 
 fn slots() -> impl Iterator<Item = Slot> {
-    use crate::world::inventory::{EQUIP_SLOTS, HOTBAR_SLOTS, PACK_SLOTS};
+    use crate::world::inventory::{CRAFT_SLOTS, EQUIP_SLOTS, HOTBAR_SLOTS, PACK_SLOTS};
     (0..HOTBAR_SLOTS as u8)
         .map(Slot::Hotbar)
         .chain((0..PACK_SLOTS as u8).map(Slot::Pack))
         .chain((0..EQUIP_SLOTS as u8).map(Slot::Equipment))
-        .chain([Slot::Cursor])
+        .chain([Slot::Offhand, Slot::Cursor])
+        .chain((0..CRAFT_SLOTS as u8).map(Slot::CraftGrid))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

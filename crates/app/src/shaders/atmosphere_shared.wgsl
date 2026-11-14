@@ -209,13 +209,14 @@ fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>, haze: f32) -> 
     let day = smoothstep(0.04, 0.30, sun.y);
     let night = 1.0 - smoothstep(-0.16, 0.02, sun.y);
     let sun_az = safe_normalize2(sun.xz, vec2<f32>(1.0, 0.0));
-    let view_az = safe_normalize2(dir.xz, sun_az);
-    let toward = saturate1(dot(sun_az, view_az) * 0.5 + 0.5);
+    // Unnormalised xz: the azimuth term fades to neutral at the zenith, where a
+    // normalised direction is undefined and split the sky into a seam point.
+    let toward = saturate1(dot(sun_az, dir.xz) * 0.5 + 0.5);
     let elev = dir.y;
     let above = max(elev, 0.0);
 
-    let zenith = max(light.sky_top_saturation.rgb, vec3<f32>(0.02, 0.05, 0.12));
-    let horizon_col = max(light.sky_horizon_reserved.rgb, vec3<f32>(0.20, 0.28, 0.36));
+    let zenith = max(light.sky_top_saturation.rgb, mix(vec3<f32>(0.02, 0.05, 0.12), vec3<f32>(0.001), night));
+    let horizon_col = max(light.sky_horizon_reserved.rgb, mix(vec3<f32>(0.20, 0.28, 0.36), vec3<f32>(0.001), night));
     let cover = saturate1(light.weather_clip_summaries[0].y);
     let storm = saturate1(light.weather_clip_summaries[0].z);
     let open_sky = saturate1(1.0 - cover * 0.70 - storm * 0.40);
@@ -256,8 +257,9 @@ fn photographic_sky_radiance(physical: vec3<f32>, dir: vec3<f32>, haze: f32) -> 
 
     // Night keeps a deep zenith and a faint horizon airglow, so it does not
     // collapse to a flat navy disc.
-    let airglow = mix(vec3<f32>(0.06, 0.08, 0.16), horizon_col, 0.22);
-    grade = mix(grade, mix(airglow, ozone * 0.20, zenith_w), night * (1.0 - cover * 0.45));
+    let airglow = mix(vec3<f32>(0.028, 0.040, 0.085), horizon_col, 0.22);
+    // Overcast dims night; it must not preserve the daylight weather grade.
+    grade = mix(grade, mix(airglow, zenith, zenith_w), night);
 
     let luminance = max(sky_luma(physical), 0.0);
     // Twilight leans on the physical sky-view chroma (warm toward the sun,

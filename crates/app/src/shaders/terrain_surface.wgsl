@@ -9,6 +9,7 @@ struct TerrainSurfaceRelief {
 }
 
 fn terrain_surface_relief(n: vec3<f32>, p: vec3<f32>, footprint_m: f32) -> TerrainSurfaceRelief {
+    if dot(natural_relief_strength, vec4<f32>(1.0)) <= 0.0 { return TerrainSurfaceRelief(n,0.0); }
     // A fixed oblique world field gives cliffs vertical variation too. Do not
     // choose projection axes from the view or a changing triangle normal.
     let uv = p.xz + p.y * vec2<f32>(0.31, 0.23);
@@ -59,6 +60,22 @@ fn terrain_climate_regional(xz: vec2<f32>, seed: u32, fp: f32) -> vec2<f32> {
 fn terrain_surface_climate(p: vec3<f32>, fp: f32) -> vec2<f32> {
     let seed = cam.scene_seed.x;
     let version = cam.scene_seed.y;
+    if version >= 142u && cam.planet[0].w > 0.5 {
+        // Surface tint must not restart its climate at each atlas face. The
+        // generator owns biome/material selection; this is continuous visual modulation.
+        let pitch = cam.planet[0].z;
+        let face = u32(clamp(floor((p.x + pitch * 0.5) / pitch), 0.0, 5.0));
+        let local = vec2<f32>(p.x - f32(face) * pitch, p.z) / cam.planet[0].y;
+        let q = tan(local * 0.7853981634);
+        let d = normalize(planet_basis(face) * vec3<f32>(q.x, 1.0, q.y));
+        let latitude = abs(d.y);
+        let y2 = latitude * latitude;
+        let heat = (52.0 - 30.0 * y2 - 12.0 * y2 * y2 - max(p.y - 12.0, 0.0) * 0.03) / 52.0;
+        let regional = (climate_noise_filtered(d.xy * 7.0, seed + 29u, fp / 4000.0)
+            + climate_noise_filtered(d.yz * 7.0, seed + 36u, fp / 4000.0)
+            + climate_noise_filtered(d.zx * 7.0, seed + 41u, fp / 4000.0)) / 3.0;
+        return clamp(vec2<f32>(heat, 0.25 + regional * 0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+    }
     var heat: f32;
     var wet: f32;
     if version >= 53u {

@@ -1,5 +1,6 @@
 //! Bounded local tactics; attacks commit to their telegraphed target.
 use super::*;
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Hazard {
     pub pos: Vec3,
     pub radius: f32,
@@ -8,6 +9,8 @@ pub(super) struct Hazard {
     pub pulse: f32,
     pub damage: f32,
     pub spores: bool,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub(super) fire: bool,
 }
 pub(super) fn heading(
     e: &Enemy,
@@ -21,7 +24,26 @@ pub(super) fn heading(
 ) -> Vec3 {
     let toward = ((goal - e.pos) * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
     // Change approach after each committed attack, rather than orbiting forever.
-    let side = Vec3::new(-toward.z, 0.0, toward.x) * if (e.slot + e.attacks / 2).is_multiple_of(2) { 1.0 } else { -1.0 };
+    let right = Vec3::new(-toward.z, 0.0, toward.x);
+    let mut pressure = 0.0;
+    let mut screened = false;
+    if chasing && e.visible {
+        for &(position, site) in neighbors {
+            let offset = position - e.pos;
+            if site != e.site || offset.length_squared() > 64.0 || offset.y.abs() > 1.5 {
+                continue;
+            }
+            let ahead = offset.dot(toward);
+            let lateral = offset.dot(right);
+            if ahead > 0.25 && ahead < distance {
+                pressure += lateral.clamp(-3.0, 3.0);
+                screened |= lateral.abs() < 0.85;
+            }
+        }
+    }
+    let right_side = if pressure.abs() > 0.5 { pressure < 0.0 }
+        else { e.slot.wrapping_add(e.attacks / 2).is_multiple_of(2) };
+    let side = right * if right_side { 1.0 } else { -1.0 };
     let mut direction = toward;
     if chasing && e.visible {
         if brawler(e.kind) && e.encounter.mechanic() != encounters::Mechanic::Hexer {
@@ -30,7 +52,15 @@ pub(super) fn heading(
                 direction = ((intercept-e.pos)*Vec3::new(1.0,0.0,1.0)).normalize_or_zero();
             }
             if distance > 3.0 {
-                direction += side * 0.65;
+                direction += side * if screened { 1.35 } else { 0.65 };
+            }
+            // Rushers withdraw during cooldown instead of circling inside the
+            // player's body. Their next crouch commits a straight, dodgeable run.
+            if folklore::charges(e.kind) && e.cooldown > 0.35 && distance < 4.5 {
+                direction = -toward + side * 0.35;
+            } else if e.health < e.max_health() * 0.32 && e.cooldown > 0.35 && distance < 4.5 {
+                // A wounded attacker gives ground while its next attack is unavailable.
+                direction = -toward + side * 0.8;
             }
         } else {
             let safe_range = if e.health < e.max_health() * 0.35 { 9.0 } else { 6.0 };
@@ -43,6 +73,9 @@ pub(super) fn heading(
                     0.0
                 }
                 + side * (0.6 + 0.2 * (time + e.slot as f32).sin());
+            if screened {
+                direction += side * 1.2;
+            }
         }
         if !brawler(e.kind) && e.cooldown > 0.35
             && shots.iter().any(|s| {
@@ -73,29 +106,34 @@ pub(super) fn heading(
     }
     direction.normalize_or_zero()
 }
-pub(super) fn release(e: &mut Enemy, shots: &mut Vec<Projectile>, hazards: &mut Vec<Hazard>) {
+pub(super) fn release(e: &mut Enemy, shots: &mut Vec<Projectile>, hazards: &mut Vec<Hazard>, kiln_fire: bool) {
     if e.attack == 2 {
         if hazards.len() < 16 {
             hazards.push(Hazard {
                 pos: e.aim,
-                radius: if e.kind == 9 {
+                radius: if e.kind == folklore::CORPSE_LIGHT { 1.7 }
+                else if e.kind == folklore::BOGGART { 2.0 }
+                else if e.kind == 9 {
                     4.4
                 } else if e.kind == 5 {
                     3.6
                 } else {
                     2.6
                 },
-                delay: 0.35,
-                life: if e.kind == 5 { 0.2 } else { 3.2 },
+                delay: if e.kind == folklore::CORPSE_LIGHT { 0.6 } else { 0.35 },
+                life: if e.kind == folklore::CORPSE_LIGHT { 1.8 } else if e.kind == 5 { 0.2 } else { 3.2 },
                 pulse: 0.0,
-                damage: (if e.kind == 9 {
+                damage: (if e.kind == folklore::BOGGART { 11.0 }
+                else if e.kind == folklore::CORPSE_LIGHT { 12.0 }
+                else if e.kind == 9 {
                     28.0
                 } else if e.kind == 5 {
                     22.0
                 } else {
                     8.0
                 }) * (1.0 + e.menace as f32 * 0.25),
-                spores: matches!(e.kind, 1 | 12 | 15),
+                spores: !kiln_fire && matches!(e.kind, 1 | 12 | 15 | folklore::BOGGART),
+                fire: kiln_fire,
             });
         }
         return;
@@ -106,12 +144,13 @@ pub(super) fn release(e: &mut Enemy, shots: &mut Vec<Projectile>, hazards: &mut 
         5
     } else if e.kind == 4 || e.kind == 1 && e.attacks.is_multiple_of(2) {
         3
-    } else if e.kind == 2 {
+    } else if e.kind == 2 || e.kind == folklore::IMP {
         2
     } else {
         1
     };
-    let speed = if e.encounter.mechanic() == encounters::Mechanic::Suppressor { 7.5 }
+    let speed = if e.kind == folklore::IMP { 9.0 }
+    else if e.encounter.mechanic() == encounters::Mechanic::Suppressor { 7.5 }
     else if e.kind == 1 && count == 1 {
         16.0
     } else if tall(e.kind) {
@@ -141,6 +180,7 @@ pub(super) fn release(e: &mut Enemy, shots: &mut Vec<Projectile>, hazards: &mut 
             },
             bore_budget: 0,
             trail_timer: 0.0,
+            flight: None,
             splashed: false,
             follow: None,
         });
@@ -185,6 +225,7 @@ impl Adventure {
                 if Vec3::new(d.x, 0.0, d.z).length() < h.radius
                     && d.y.abs() < 1.8
                     && line(world, h.pos + Vec3::Y * 0.3, eye)
+                    && !(h.fire && world.progression.effects.fire_immune())
                 {
                     incoming += h.damage;
                     direction += h.pos - eye;
@@ -192,7 +233,7 @@ impl Adventure {
                 // The same field can be turned against a pack by baiting its caster.
                 for enemy in &mut self.enemies {
                     let delta = enemy.pos - h.pos;
-                    if enemy.health <= 0.0 || delta.y.abs() >= 1.8
+                    if enemy.health <= 0.0 || (h.fire && enemy.kind == rewards::KILN_CRAWLER) || delta.y.abs() >= 1.8
                         || Vec3::new(delta.x,0.0,delta.z).length() >= h.radius
                         || !line(world,h.pos+Vec3::Y*0.3,enemy.center()) { continue; }
                     let reaction = if h.spores {
@@ -212,6 +253,10 @@ impl Adventure {
     }
     pub(super) fn danger_models(&self, m: &mut Model) {
         for e in &self.enemies {
+            if vault_fight::lead(e) {
+                vault_fight::telegraph(e, m);
+            }
+            super::aberrations::telegraph(e, m, self.time);
             if e.kind == 8 {
                 hart::telegraph(e, m);
             }
@@ -222,7 +267,9 @@ impl Adventure {
                 ring(
                     m,
                     e.aim,
-                    if e.kind == 9 {
+                    if e.kind == folklore::CORPSE_LIGHT { 1.7 }
+                    else if e.kind == folklore::BOGGART { 2.0 }
+                    else if e.kind == 9 {
                         4.4
                     } else if e.kind == 5 {
                         3.6
@@ -235,7 +282,9 @@ impl Adventure {
             }
         }
         for h in &self.hazards {
-            let color = if h.spores {
+            let color = if h.fire {
+                [1.0, 0.28, 0.07]
+            } else if h.spores {
                 [0.75, 0.32, 0.15]
             } else {
                 [1.0, 0.52, 0.18]

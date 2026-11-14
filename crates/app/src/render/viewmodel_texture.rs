@@ -2,12 +2,11 @@
 use wgpu::util::DeviceExt;
 
 pub(super) fn atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
-    // Length is checked by Rust; no decoder, I/O or allocation during presentation.
-    let review=crate::viewmodel_review::selected().is_some();
+    // The embedded atlases decode once, when the renderer creates their texture.
     let wand=if crate::viewmodel_review::current().name == crate::viewmodel_review::DEFAULT.name {
-        crate::viewmodel_review::DEFAULT_ATLAS
-    } else {crate::viewmodel_review::ATLAS};
-    let hand=if review {crate::viewmodel_review::HAND_ATLAS} else {crate::viewmodel_review::DEFAULT_HAND_ATLAS};
+        crate::viewmodel_review::DEFAULT_ATLAS.as_ref()
+    } else {crate::viewmodel_review::ATLAS.as_ref()};
+    let hand=crate::viewmodel_review::DEFAULT_HAND_ATLAS.as_ref();
     let mut combined=Vec::with_capacity(512*256*4);
     for y in 0..256 {
         combined.extend_from_slice(&hand[y*1024..(y+1)*1024]);

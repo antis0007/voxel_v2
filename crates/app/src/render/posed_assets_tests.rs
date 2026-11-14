@@ -47,7 +47,7 @@ fn gpu_posed_vertices_match_cpu_pose() {
     device
         .poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(std::time::Duration::from_secs(10)) })
         .unwrap();
-    let gpu: Vec<Vertex3> = bytemuck::cast_slice(&readback.slice(..).get_mapped_range()).to_vec();
+    let gpu: Vec<Vertex3> = bytemuck::cast_slice(&readback.slice(..).get_mapped_range().expect("GPU readback range")).to_vec();
     let mut i = 0;
     for p in &placements {
         for source in &pool[p.first as usize..(p.first + p.count) as usize] {

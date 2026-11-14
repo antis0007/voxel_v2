@@ -1,5 +1,27 @@
 use super::*;
 
+fn restore_core(a:&Adventure) -> anyhow::Result<Adventure> {
+    let mut bytes=Vec::new();a.encode(&mut bytes);
+    let mut words=bytes.chunks_exact(4).map(|b|u32::from_le_bytes(b.try_into().unwrap()));
+    Adventure::decode(&mut || words.next().ok_or_else(||anyhow::anyhow!("truncated fixture")),true,true)
+}
+
+#[test]
+fn ordinary_hotbar_and_empty_decks_survive_core_save_roundtrip() {
+    let mut a=Adventure::default();a.wand=0;a.spell=2;
+    assert_eq!(restore_core(&a).unwrap().spell,0);
+    a.wand=1;a.spell=wands::EMPTY;
+    a.loadout.slots=[wands::EMPTY;4];a.loadout.aux_slots=[wands::EMPTY;4];
+    let restored=restore_core(&a).unwrap();
+    assert_eq!(restored.spell,wands::EMPTY);assert_eq!(restored.loadout.slots,a.loadout.slots);
+}
+
+#[test]
+fn corrupt_wand_and_spell_ids_still_fail_save_validation() {
+    let mut a=Adventure::default();a.wand=4;assert!(restore_core(&a).is_err());
+    a.wand=1;a.spell=MAX_SPELL_ID+1;assert!(restore_core(&a).is_err());
+}
+
 fn wand_ids(inv: &SurvivalInventory) -> Vec<u16> {
     inv.hotbar
         .iter()
@@ -70,17 +92,22 @@ fn a_bench_wand_becomes_an_item_and_wands_swap_without_losing_decks() {
     assert_eq!(a.loadout.seed, generate(77, 3).loadout.seed);
     // The first wand kept the edit.
     assert_eq!(a.wand_bank[0].loadout.slot(1), 4);
-    // Selecting a block slot keeps the last wand in hand.
+    // Selecting a block slot stows the wand without discarding its deck.
+    inv.hotbar[5] = Some(ItemStack::new(Item::Block(crate::world::BlockId::Dirt), 1));
     a.sync_wands(&mut inv, 5, Vec3::ZERO);
-    assert_eq!(a.active_wand, Some(1));
+    assert_eq!((a.wand, a.active_wand), (0, None));
     // Spells on the found wand were learned.
     let first = a.wand_bank[1].loadout.slot(0);
     assert!(a.spell_log.has(first));
-    // Dropping the held wand hands control to the remaining one.
-    inv.hotbar[3] = None;
-    a.sync_wands(&mut inv, 5, Vec3::ZERO);
+    // Selecting the first wand again restores its working copy and edited deck.
+    a.sync_wands(&mut inv, 0, Vec3::ZERO);
     assert_eq!(a.active_wand, Some(0));
     assert_eq!(a.wand, 1);
+    assert_eq!(a.loadout.slot(1), 4);
+    // Dropping every selected wand leaves the hand empty on an ordinary slot.
+    inv.hotbar = Default::default();
+    a.sync_wands(&mut inv, 5, Vec3::ZERO);
+    assert_eq!((a.wand, a.active_wand), (0, None));
 }
 
 #[test]

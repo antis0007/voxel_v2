@@ -51,8 +51,5 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let key = vec2<i32>(i32(in.pos.x), i32(in.pos.y));
     let noise_dims = vec2<i32>(textureDimensions(blue_noise_tex));
     let noise = textureLoad(blue_noise_tex, key % noise_dims, 0).r - 0.5;
-    var s = srgb_encode(clamp(hdr, vec3<f32>(0.0), vec3<f32>(1.0)));
-    s = clamp(s + vec3<f32>(noise * (1.0 / 255.0)),
-        vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(srgb_decode(s), 1.0);
+    return vec4<f32>(dithered_surface_write(hdr, noise), 1.0);
 }

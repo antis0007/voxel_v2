@@ -16,7 +16,7 @@ impl BlueprintTool {
                 out.push(LineVertex { pos: p.to_array(), color });
             }
         };
-        if tool == ToolKind::AreaTool
+        if (tool == ToolKind::AreaTool || self.survival_selection)
             && let Some(region) = self.selection()
         {
             for [a, b] in box_edges(region.min.as_vec3(), (region.max + IVec3::ONE).as_vec3()) {
@@ -35,7 +35,7 @@ impl BlueprintTool {
     }
 }
 
-fn box_edges(min: Vec3, max: Vec3) -> [[Vec3; 2]; 12] {
+pub(crate) fn box_edges(min: Vec3, max: Vec3) -> [[Vec3; 2]; 12] {
     let c = |x: bool, y: bool, z: bool| Vec3::new(if x { max.x } else { min.x }, if y { max.y } else { min.y }, if z { max.z } else { min.z });
     let mut out = [[Vec3::ZERO; 2]; 12];
     let mut i = 0;

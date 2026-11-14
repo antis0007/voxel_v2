@@ -33,10 +33,49 @@ const _: [(); 10320] = [(); std::mem::size_of::<ResidentCoverage>()];
 const _: [(); 16] = [(); std::mem::offset_of!(ResidentCoverage, words)];
 const _: [(); 2112] = [(); std::mem::offset_of!(ResidentCoverage, sparse_header)];
 const _: [(); 2128] = [(); std::mem::offset_of!(ResidentCoverage, sparse_keys)];
-const _: [(); 10672] = [(); std::mem::size_of::<super::CameraUniform>()];
+const _: [(); 15024] = [(); std::mem::size_of::<super::CameraUniform>()];
+const _: [(); 10864] = [(); std::mem::offset_of!(super::CameraUniform, sky_axes)];
+const _: [(); 10816] = [(); std::mem::offset_of!(super::CameraUniform, planet_flat)];
+const _: [(); 10800] = [(); std::mem::offset_of!(super::CameraUniform, portal_clip)];
+const _: [(); 10672] = [(); std::mem::offset_of!(super::CameraUniform, planet)];
 const _: [(); 320] = [(); std::mem::offset_of!(super::CameraUniform, resident_coverage)];
 const _: [(); 10640] = [(); std::mem::offset_of!(super::CameraUniform, render_origin)];
 const _: [(); 10656] = [(); std::mem::offset_of!(super::CameraUniform, eye_from_origin)];
+
+/// Bounded lookup for the brief handoff from a drawn parent to resident terrain.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct TerrainArrival {
+    count: [u32; 4],
+    slots: [[i32; 4]; 256],
+}
+
+impl Default for TerrainArrival {
+    fn default() -> Self {
+        Self { count: [0; 4], slots: [[0; 4]; 256] }
+    }
+}
+
+impl TerrainArrival {
+    pub fn insert(&mut self, (x, z): (i32, i32), phase: u32) {
+        let slot = self.probe(x, z);
+        self.slots[slot] = [x, z, phase as i32 + 1, 0];
+        self.count[0] += 1;
+    }
+
+    pub fn phase(&self, x: i32, z: i32) -> u32 {
+        if self.count[0] == 0 { return 0; }
+        self.slots[self.probe(x, z)][2] as u32
+    }
+
+    fn probe(&self, x: i32, z: i32) -> usize {
+        let mut slot = column_hash(x, z) & 255;
+        while self.slots[slot][2] != 0 && self.slots[slot][..2] != [x, z] {
+            slot = (slot + 1) & 255;
+        }
+        slot
+    }
+}
 
 impl Default for ResidentCoverage {
     fn default() -> Self {

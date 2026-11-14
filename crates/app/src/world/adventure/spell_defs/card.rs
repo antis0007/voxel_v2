@@ -12,6 +12,16 @@ pub struct Card {
     pub details: Vec<(&'static str, String)>,
 }
 
+fn element_note(element: Element) -> String {
+    match element {
+        Element::Fire => "Burning".into(),
+        Element::Frost => "Chill, longer if Wet".into(),
+        Element::Shock => "Stagger, conducted if Wet".into(),
+        Element::Toxic => "Poison".into(),
+        Element::Wet => "Wet".into(),
+    }
+}
+
 pub fn amount(value: f32) -> String {
     if value.fract().abs() < 0.001 { format!("{value:.0}") } else { format!("{value:.1}") }
 }
@@ -39,6 +49,10 @@ pub fn read(spell: u32, discoveries: u32, rank: u32) -> Card {
         card.cost.clear();
         return card;
     }
+    if let Some((upkeep, lesson)) = super::super::concentration::requirements(spell) {
+        card.cost.push_str(&format!(" + {} mana/s", amount(upkeep)));
+        card.details.push(("Concentration", format!("Grimoire · Hold Cast · {}", lesson.title())));
+    }
     if spell == 22 {
         card.cost = format!("{cost_text} mana · up to {:.0} mana discount", rules::RAPID_MANA_REFUND);
     }
@@ -51,15 +65,49 @@ pub fn read(spell: u32, discoveries: u32, rank: u32) -> Card {
             if innate.bounces > 0 {
                 card.details.push(("Wall ricochets", innate.bounces.to_string()));
             }
+            if let Some(element) = innate.element {
+                card.details.push(("Status on hit", element_note(element)));
+            }
         }
         match spell {
             1 => card.stats = format!("Heals {:.0}", rules::mend_health(rank)),
             3 => card.details.push(("Crater radius", format!("{:.1} m", rules::RESONANT_CRATER))),
             4 => card.stats = format!("{} reflections · {:.0} s", rules::ward_hits(discoveries), rules::ward_duration(discoveries)),
             9 => card.stats = format!("{:.1} m beam reach", rules::DRILL_REACH),
-            11 => card.details.push(("Plasma blades", super::super::spells::PLASMA_DIRECTIONS.len().to_string())),
+            14 | super::super::spells::STORM_SURGE => {
+                use super::super::spells::{STORM_SURGE, SURGE_CELLS, SURGE_DAMAGE_BONUS};
+                let mut damage = rules::CONDUCTIVE_DAMAGE + (rank + 1) as f32 * rules::CONDUCTIVE_DAMAGE_PER_RANK;
+                let mut cells = rules::CONDUCTIVE_CELLS;
+                if spell == STORM_SURGE {
+                    damage += SURGE_DAMAGE_BONUS;
+                    cells = SURGE_CELLS;
+                }
+                card.details.push(("Discharge damage", format!("{damage:.0} per target")));
+                card.details.push(("Connected water", format!("{cells} cells max")));
+                card.details.push(("Water contact reach", format!("{:.1} m", rules::CONDUCTIVE_REACH)));
+                card.details.push(("Machine charge budget", format!("{} shared", rules::CONDUCTIVE_ENERGY)));
+            }
+            11 => card.stats = format!("{:.0} m placement reach", super::super::concentration::PLASMA_REACH),
+            33 => card.stats = format!("{:.0} m barrier radius", super::super::concentration::AEGIS_RADIUS),
             30 => card.stats = format!("{:.1} s enemy slow", rules::TIME_SNAG_DURATION),
             31 => card.stats = format!("{:.0} m reach", rules::GRAPPLE_REACH),
+            95 => {
+                card.stats = format!("{:.0} m reach", super::super::water_transfer::REACH);
+                card.details.push(("Maximum water per cast", format!("{:.2} m³",
+                    super::super::water_transfer::LIMIT as f32 / 512.0)));
+                card.cost.push_str(" on transfer; selection free");
+            }
+            super::super::fieldcraft::RECALL => card.stats = format!("Quick return · {:.0} m · {:.0} s",
+                super::super::fieldcraft::RECALL_RANGE, super::super::fieldcraft::RECALL_SECONDS),
+            97 => card.stats = format!("{:.0} m reach", super::super::fieldcraft::SALVAGE_RANGE),
+            super::super::spells::DONT_PANIC => {
+                card.stats = format!("{} s", amount(super::super::spells::DONT_PANIC_SECONDS));
+            }
+            super::super::snapline::SPELL => {
+                card.stats = format!("{:.0} base damage · {:.1} m reach",
+                    spell_hit_damage(spell), super::super::snapline::REACH);
+                card.cost = format!("{cost_text} mana on miss · refunded on hit");
+            }
             74 => card.details.push(("Poison radius", format!("{:.1} m", rules::VENOM_NOVA_RADIUS))),
             75 => card.stats = format!("{:.1} × {:.1} m barrier", rules::ICE_WALL_WIDTH, rules::ICE_WALL_HEIGHT),
             84 => card.details.push(("Maximum flight time", format!("{:.1} s", super::super::arcana::LODESTONE_MAX_LIFE))),
@@ -100,6 +148,12 @@ pub fn read(spell: u32, discoveries: u32, rank: u32) -> Card {
     if mods.pierce > 0 { stats.push(format!("{} enemy passes", mods.pierce)); }
     if mods.gravity != 0.0 {
         stats.push(format!("{:.0} m/s² downward", mods.gravity * rules::GRAVITY_ACCELERATION));
+    }
+    match mods.path {
+        1 => stats.push(format!("{:.1} m curve radius", super::super::trajectory::CURVE_RADIUS)),
+        2 => stats.push(format!("{:.0}° weave · {:.0} m cycle", super::super::trajectory::WEAVE_ANGLE.to_degrees(), super::super::trajectory::WEAVE_LENGTH)),
+        3 => stats.push(format!("{:.2} m orbit radius", super::super::trajectory::ORBIT_RADIUS)),
+        _ => {}
     }
     match spell {
         16 | 17 | 91 => stats.push(format!("{} spells per draw", eval.actions.len())),

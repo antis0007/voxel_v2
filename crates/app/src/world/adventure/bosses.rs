@@ -16,6 +16,8 @@ pub fn name(kind: u32) -> &'static str {
         matron::KIND => "The Orchard Matron",
         thunderhen::KIND => "Old Copper, the Thunderhen",
         tollkeeper::KIND => "The Last Tollkeeper",
+        hall_warden::FURNACE => hall_warden::name(hall_warden::FURNACE),
+        hall_warden::ASTRONOMER => hall_warden::name(hall_warden::ASTRONOMER),
         engine::KIND => "The Ossuary Engine",
         glassweaver::KIND => "The Glassweaver",
         _ => "The Prism Hart",
@@ -43,12 +45,12 @@ pub(super) fn variant_title(kind: u32, variant: usize) -> &'static str {
         "The Glassweaver — Smoked",
         "The Glassweaver — Aurora",
     ];
-    const HART: [&str; 3] = ["Rime Hart · Sentinel", "Amethyst Hart · Sentinel", "Verdant Hart · Sentinel"];
     const HEN: [&str; 3] = [
         "Old Copper — Copper",
         "Old Copper — Rust",
         "Old Copper — Verdigris",
     ];
+    const HART: [&str; 3] = ["Rime Hart · Sentinel", "Amethyst Hart · Sentinel", "Verdant Hart · Sentinel"];
     let v = variant.min(2);
     match kind {
         tollkeeper::KIND => TOLL[v],
@@ -61,6 +63,9 @@ pub(super) fn variant_title(kind: u32, variant: usize) -> &'static str {
 }
 /// The name shown on the boss bar for this particular guardian.
 pub(super) fn title(e: &Enemy) -> &'static str {
+    if e.kind == hall_warden::FURNACE || e.kind == hall_warden::ASTRONOMER {
+        return hall_warden::name(e.kind);
+    }
     if e.kind == 8 {
         hart::name(e)
     } else {
@@ -69,6 +74,8 @@ pub(super) fn title(e: &Enemy) -> &'static str {
 }
 pub(super) fn health(kind: u32) -> f32 {
     match kind {
+        hall_warden::FURNACE => 220.0,
+        hall_warden::ASTRONOMER => 200.0,
         tollkeeper::KIND => 240.0,
         engine::KIND => 360.0,
         glassweaver::KIND => 280.0,
@@ -89,6 +96,7 @@ pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
         thunderhen::KIND => thunderhen::model(e, m, time),
         engine::KIND => engine::model(e, m, time),
         tollkeeper::KIND => tollkeeper::model(e, m, time),
+        hall_warden::FURNACE | hall_warden::ASTRONOMER => hall_warden::model(e, m, time),
         glassweaver::KIND => glassweaver::model(e, m, time),
         _ => hart::model(e, m, time),
     }
@@ -111,6 +119,7 @@ pub(super) fn tick(
         thunderhen::KIND => thunderhen::tick(e, world, feet, eye, dt, sounds, dirty),
         engine::KIND => engine::tick(e, world, feet, eye, dt, shots, sounds, dirty, navigation_budget),
         tollkeeper::KIND => tollkeeper::tick(e, world, feet, eye, dt, sounds, dirty),
+        hall_warden::FURNACE | hall_warden::ASTRONOMER => hall_warden::tick(e, world, feet, eye, dt, shots, hazards, sounds, dirty, navigation_budget),
         glassweaver::KIND => glassweaver::tick(e, world, feet, eye, dt, shots, sounds, navigation_budget),
         _ => hart::tick(e, world, feet, eye, dt, shots, hazards, sounds, dirty),
     }

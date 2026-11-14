@@ -6,6 +6,7 @@ use crate::world::{
 use glam::{IVec3, Vec2, Vec3};
 use std::collections::HashSet;
 const HORIZONTAL: [IVec3; 4] = [IVec3::X, IVec3::Z, IVec3::NEG_X, IVec3::NEG_Z];
+mod drainage;
 #[cfg(test)]
 #[path = "water_tests.rs"]
 mod water_tests;
@@ -145,26 +146,42 @@ fn transfer(
 // A bounded hydraulic connection search lets a submerged outlet push water
 // upward below the source column's free surface. No mass is created, no solid
 // is crossed, and unavailable source data postpones the rule.
-fn pressure_outlet(sources: &mut Residency, world: &mut World, p: IVec3) -> Option<IVec3> {
+fn pressure_outlet(
+    sources: &mut Residency,
+    world: &mut World,
+    p: IVec3,
+    resting_head: i64,
+) -> Option<(IVec3, IVec3, u64)> {
     let owner = chunk_coord_from_world_block(p);
-    let mut head = p.y * 8;
-    for rise in 1..=8 {
+    let mut surface = p;
+    let exact = crate::world::environment::State::enabled(world.generator_version);
+    let volume = if exact { world.environment.quantum() as i64 * 8 } else { 8 };
+    let read = |sources: &Residency, world: &World, q| {
+        if exact {
+            sources.water_cell(world, q).map(|(id, fill)| (id, fill as i64))
+        } else {
+            sources.read(world, q).map(|(id, fill)| (id, i64::from(fill)))
+        }
+    };
+    let mut head = i64::from(p.y) * volume;
+    for rise in 1..=9 {
         let q = p + IVec3::Y * rise;
         if !sources.request_for(world, chunk_coord_from_world_block(q), owner) {
             world.activity.wake(p);
             return None;
         }
-        match sources.read(world, q) {
-            Some((B::Water, amount)) => {
-                head = q.y * 8 + amount as i32;
-                if amount < 8 {
-                    break;
+        match read(sources, world, q)? {
+            (B::Water, fill) => {
+                if rise > 8 {
+                    return None;
                 }
+                surface = q;
+                head = i64::from(q.y) * volume + fill;
             }
             _ => break,
         }
     }
-    if head <= (p.y + 1) * 8 {
+    if surface == p {
         return None;
     }
     let mut queue = [IVec3::ZERO; 48];
@@ -182,7 +199,8 @@ fn pressure_outlet(sources: &mut Residency, world: &mut World, p: IVec3) -> Opti
             IVec3::Y,
         ] {
             let q = from + d;
-            if q.y * 8 >= head
+            let base = i64::from(q.y) * volume;
+            if base >= head
                 || (q - p).abs().max_element() > 8
                 || queue[..len].contains(&q)
                 || !allowed(world, q)
@@ -193,15 +211,16 @@ fn pressure_outlet(sources: &mut Residency, world: &mut World, p: IVec3) -> Opti
                 world.activity.wake(p);
                 return None;
             }
-            let (id, amount) = sources.read(world, q)?;
+            let (id, fill) = read(sources, world, q)?;
             if !matches!(id, B::Air | B::Water) {
                 continue;
             }
-            if amount < 8 && head - (q.y * 8 + amount as i32) >= 2 {
-                return Some(q);
+            let difference = head - (base + fill);
+            if fill < volume && difference > resting_head {
+                return Some((surface, q, difference as u64));
             }
             // Only filled water transmits pressure. Never jump an air gap.
-            if id == B::Water && amount == 8 && len < queue.len() {
+            if id == B::Water && fill == volume && len < queue.len() {
                 queue[len] = q;
                 len += 1;
             }
@@ -225,9 +244,19 @@ pub(super) fn step(
         world.activity.wake(p);
         return 0;
     };
+    if b == B::Water && world.is_steady_surface_water(p) {
+        return 0;
+    }
+    if b == B::SulfuricAcid {
+        return super::thermal::step_acid(sources, world, p, visited, blocks, chunks);
+    }
     if b == B::RigidCore {
         super::rigid::capture(sources, world, p);
         return 0;
+    }
+    if super::rigid::fragment_material(b) {
+        super::rigid::capture(sources, world, p);
+        // Construction still participates in heat and combustion below.
     }
     if super::thermal::active(b)
         || world
@@ -258,20 +287,24 @@ pub(super) fn step(
         p + IVec3::Z,
         p - IVec3::Z,
     ];
+    let owner = chunk_coord_from_world_block(p);
+    let mut requested = [owner; 6];
+    let mut count = 0;
     let mut ready = true;
     for q in positions {
-        ready &= sources.request_for(
-            world,
-            chunk_coord_from_world_block(q),
-            chunk_coord_from_world_block(p),
-        );
+        let coord = chunk_coord_from_world_block(q);
+        if !requested[..count].contains(&coord) {
+            requested[count] = coord;
+            count += 1;
+            ready &= sources.request_for(world, coord, owner);
+        }
     }
     if !ready {
         world.activity.wake(p);
         return 0;
     }
-    let (below, _) = sources.read(world, down).unwrap();
     if matches!(b, B::Sand | B::Gravel | B::Ash) {
+        let (below, _) = sources.read(world, down).unwrap();
         let mut target = None;
         if matches!(below, B::Air | B::Water) {
             target = Some(down);
@@ -344,6 +377,9 @@ pub(super) fn step(
     if b != B::Water {
         return 0;
     }
+    if crate::world::environment::State::enabled(world.generator_version) {
+        return drainage::step(sources, world, p, visited, blocks, chunks);
+    }
     let mut updates = match sources.read(world, down) {
         Some((down_block, down_volume)) => commit_transfer(
             sources,
@@ -361,11 +397,8 @@ pub(super) fn step(
             0
         }
     };
-    // Water has horizontal inertia for a few ticks. Equalisation alone made
-    // basins fill like a staircase and never slosh; this decaying momentum
-    // lets a pulse overshoot, return, and run up a shallow beach.
-    let mut motion = world.water_velocity(p) * 0.94;
-    world.set_water_velocity(p, motion);
+    // Current is presentation data. It cannot move water against its head.
+    world.set_water_velocity(p, world.water_velocity(p) * 0.75);
     // Decorrelate neighbouring columns. A global rotating order made entire
     // sheets prefer the same axis on each tick.
     let phase = (p.x as u32).wrapping_mul(73856093)
@@ -384,18 +417,7 @@ pub(super) fn step(
         if source_block != B::Water {
             break;
         }
-        let deficit = if source > target + 1 {
-            (source - target) as f32 * 0.5
-        } else {
-            0.0
-        };
-        let axis = Vec2::new((to.x - p.x) as f32, (to.z - p.z) as f32);
-        let inertia = motion.dot(axis.normalize_or_zero()) * 0.82;
-        let wanted = (deficit + inertia)
-            .clamp(0.0, 4.0)
-            .min(source as f32)
-            .min((8 - target) as f32);
-        let moved = wanted.round() as u8;
+        let moved = source.saturating_sub(target) / 2;
         if moved > 0 {
             updates += commit_transfer(
                 sources,
@@ -408,7 +430,6 @@ pub(super) fn step(
                 moved,
                 visited,
             );
-            motion = world.water_velocity(p);
         } else if source == 1
             && target == 0
             && sources.read(world, to).is_some_and(|(id, _)| id == B::Air)
@@ -439,24 +460,21 @@ pub(super) fn step(
                 .wrapping_add(p.z as usize).is_multiple_of(8))
         && sources
             .read(world, p)
-            .is_some_and(|(id, v)| id == B::Water && v > 1)
+            .is_some_and(|(id, v)| id == B::Water && v == 8)
     {
         // A still pool can contain thousands of water cells. Searching for a
         // hydraulic outlet from every one of them on every tick was the most
         // expensive part of deep-water scenes. The lookup is staggered; each
         // cell is still revisited regularly, but not eight times per second.
-        if let Some(outlet) = pressure_outlet(sources, world, p) {
+        if let Some((surface, outlet, head)) = pressure_outlet(sources, world, p, 1) {
             // A hydraulic connection is expensive to find, so move a useful
             // packet once found. Two units left deep outlets visibly starved;
             // four still cannot exceed the recipient's remaining capacity.
-            updates += transfer(sources, world, p, outlet, 4, visited);
+            updates += transfer(sources, world, surface, outlet, (head / 2).min(4) as u8, visited);
         }
     }
-    // Momentum outlives the transfer that created it. Keep the cell in the
-    // active set until the pulse has visibly decayed; otherwise the scheduler
-    // sleeps it after one tick and a slosh cannot return.
-    if world.water_velocity(p).length_squared() > 0.0025 {
-        world.activity.wake(p);
+    if updates == 0 {
+        world.remove_water_velocity(p);
     }
     updates
 }

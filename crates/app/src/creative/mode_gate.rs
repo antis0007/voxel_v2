@@ -11,6 +11,8 @@ impl CreativeState {
         }
         if self.tool != ToolKind::Hand {
             self.tool = ToolKind::Hand;
+        }
+        if self.pending.as_ref().is_some_and(|e| e.creative_only) {
             self.cancel_edits();
         }
         self.show_panel = false;

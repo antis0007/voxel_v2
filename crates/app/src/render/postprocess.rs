@@ -12,9 +12,16 @@ pub(super) struct PostProcess {
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     pipeline: wgpu::RenderPipeline,
+    native_pipeline: wgpu::RenderPipeline,
+    reference_resolve: bool,
     params: wgpu::Buffer,
+    last_settings: Option<[f32; 32]>,
+    // Scene and depth views share the resize lifetime. Uniform writes do not
+    // change their bindings, nor does the acquired swapchain target.
+    inputs: Option<wgpu::BindGroup>,
     present_layout: wgpu::BindGroupLayout,
     present_params: wgpu::Buffer,
+    last_present: Option<[f32; 4]>,
     blue_noise_view: wgpu::TextureView,
     present_pipeline: wgpu::RenderPipeline,
     output_tex: Option<wgpu::Texture>,
@@ -28,6 +35,7 @@ impl PostProcess {
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
         blue_noise_view: &wgpu::TextureView,
+        pipeline_cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene antialiasing layout"),
@@ -69,6 +77,16 @@ impl PostProcess {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -83,10 +101,14 @@ impl PostProcess {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene antialiasing pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let reference_offset = std::env::args().any(|arg| arg == "--benchmark-reference-pixel-centres");
+        let resolve_constants = [
+            ("REFERENCE_RESOLVE_OFFSET", if reference_offset { 1.0 } else { 0.0 }),
+        ];
+        let make_pipeline = |entry, format| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("scene antialiasing pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -97,13 +119,16 @@ impl PostProcess {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &resolve_constants,
+                    ..Default::default()
+                },
                 targets: &[Some(wgpu::ColorTargetState {
                     // Keep the stylistic grade in linear 16-bit float. The
                     // present pass owns the only 8-bit write and dither, at
                     // native resolution.
-                    format: SCENE_FORMAT,
+                    format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -111,12 +136,14 @@ impl PostProcess {
             primitive: Default::default(),
             depth_stencil: None,
             multisample: Default::default(),
-            multiview: None,
-            cache: None,
+            multiview_mask: None,
+            cache: pipeline_cache,
         });
+        let pipeline = make_pipeline("fs_main", SCENE_FORMAT);
+        let native_pipeline = make_pipeline("fs_native", config.format);
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("HDR resolve exposure saturation AA debug + pixel style + magic"),
-            size: 112,
+            size: 128,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -175,8 +202,8 @@ impl PostProcess {
         let present_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("pixel resolve present pipeline layout"),
-                bind_group_layouts: &[&present_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&present_layout)],
+                immediate_size: 0,
             });
         let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("pixel resolve present pipeline"),
@@ -200,8 +227,8 @@ impl PostProcess {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
+            multiview_mask: None,
+            cache: pipeline_cache,
         });
 
         Self {
@@ -212,9 +239,14 @@ impl PostProcess {
             layout,
             sampler,
             pipeline,
+            native_pipeline,
+            reference_resolve: std::env::args().any(|arg| arg == "--benchmark-reference-resolve"),
             params,
+            last_settings: None,
+            inputs: None,
             present_layout,
             present_params,
+            last_present: None,
             blue_noise_view: blue_noise_view.clone(),
             present_pipeline,
             output_tex: None,
@@ -286,6 +318,7 @@ impl PostProcess {
     }
 
     pub fn resize(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
+        self.inputs = None;
         self.scene = Self::target(device, config);
         self.size = super::scene_dims(config.width, config.height);
         self.surface_size = (config.width.max(1), config.height.max(1));
@@ -304,30 +337,38 @@ impl PostProcess {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         depth: &wgpu::TextureView,
-        mut settings: [f32; 28],
+        mut settings: [f32; 32],
+        timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) {
         let debug = settings[3] > 0.5;
         // `render_scale` is the art-pixel size in window pixels (1 = off). The scene
         // may also be smaller than the window; `ratio` is scene / window, so one
         // output texel covers `art * ratio` scene texels (below 1 means upscaling).
         let render_scale = if debug { 1.0 } else { settings[4].max(1.0) };
+        let native = render_scale == 1.0 && !self.reference_resolve;
         let ratio = self.size.0 as f32 / self.surface_size.0.max(1) as f32;
         settings[4] = render_scale * ratio;
-        queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&settings));
-        queue.write_buffer(
-            &self.present_params,
-            0,
-            bytemuck::cast_slice(&[render_scale, settings[3], 0.0, 0.0]),
-        );
-
-        let output_size = (
-            (self.surface_size.0 as f32 / render_scale).round().max(1.0) as u32,
-            (self.surface_size.1 as f32 / render_scale).round().max(1.0) as u32,
-        );
-        self.ensure_output(device, output_size);
-        let resolved = self.output_view.as_ref().expect("resolve target");
-        // Built per frame: the depth view is recreated whenever the surface is.
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        // Scene dimensions round independently. Reusing X for Y subtly shifts
+        // vertical sampling at odd window sizes and fractional render scales.
+        settings[31] = render_scale * self.size.1 as f32 / self.surface_size.1.max(1) as f32;
+        if self.last_settings != Some(settings) {
+            queue.write_buffer(&self.params, 0, bytemuck::cast_slice(&settings));
+            self.last_settings = Some(settings);
+        }
+        if !native {
+            let present = [render_scale, settings[3], 0.0, 0.0];
+            if self.last_present != Some(present) {
+                queue.write_buffer(&self.present_params, 0, bytemuck::cast_slice(&present));
+                self.last_present = Some(present);
+            }
+            self.ensure_output(device, (
+                (self.surface_size.0 as f32 / render_scale).ceil().max(1.0) as u32,
+                (self.surface_size.1 as f32 / render_scale).ceil().max(1.0) as u32,
+            ));
+        }
+        let resolved = if native { target } else { self.output_view.as_ref().expect("resolve target") };
+        if self.inputs.is_none() {
+            self.inputs = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scene antialiasing inputs"),
             layout: &self.layout,
             entries: &[
@@ -347,11 +388,17 @@ impl PostProcess {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(depth),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&self.blue_noise_view),
+                },
             ],
-        });
-
+            }));
+        }
+        let bind_group = self.inputs.as_ref().expect("resolve inputs");
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("scene antialiasing pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: resolved,
@@ -363,15 +410,22 @@ impl PostProcess {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: timestamps.as_ref().map(|t| wgpu::RenderPassTimestampWrites {
+                    query_set: t.query_set,
+                    beginning_of_pass_write_index: t.beginning_of_pass_write_index,
+                    end_of_pass_write_index: if native { t.end_of_pass_write_index } else { None },
+                }),
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_pipeline(if native { &self.native_pipeline } else { &self.pipeline });
+            pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
 
+        if native { return; }
+
         let mut present = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("pixel resolve present pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
@@ -383,7 +437,11 @@ impl PostProcess {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: timestamps.as_ref().map(|t| wgpu::RenderPassTimestampWrites {
+                query_set: t.query_set,
+                beginning_of_pass_write_index: None,
+                end_of_pass_write_index: t.end_of_pass_write_index,
+            }),
             occlusion_query_set: None,
         });
         present.set_pipeline(&self.present_pipeline);

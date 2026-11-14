@@ -54,13 +54,15 @@ pub const SHAFTS: [Shaft; 6] = [
 ];
 
 /// Family names of `assets/wands.ron` styles, in head order (a test keeps them equal).
-pub const HEADS: [&str; 6] = [
+pub const HEADS: [&str; 8] = [
     "Witchwood switch",
     "Shard cluster",
     "Bifurcated focus",
     "Astral filament",
     "Cinder rod",
     "Bone needle",
+    "Runic key",
+    "Rootbound scepter",
 ];
 pub const TRAILS: [&str; 5] = [
     "None",

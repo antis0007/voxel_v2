@@ -23,6 +23,7 @@ struct Built {
 
 static KIT: LazyLock<Vec<Option<Built>>> = LazyLock::new(|| {
     if let Err(error) = TABLE.validate() { eprintln!("[wand-kit] assets/wands.ron: {error}"); }
+    eprintln!("[wand-kit] authored catalog: {}", TABLE.styles.join(", "));
     let pixel = table::pixel_m();
     TABLE.families.iter().map(|f| f.sprite(TABLE.width, pixel).ok().map(|s| build(f, s, pixel))).collect()
 });
@@ -148,15 +149,18 @@ fn palette(b: &Built, style: WandStyle) -> [[f32; 3]; 128] {
     let shaft = &SHAFTS[style.shaft as usize];
     let grip = GRIPS[style.grip as usize].1;
     let mut p = b.fixed;
-    let ramp = [shaft.dark.map(|c| c * 0.6), shaft.dark, shaft.base, mix(shaft.base, shaft.accent, 0.45)];
+    // Keep carved shadows inside the material ramp; lighting supplies occlusion.
+    // Multiplying the darkest stripe by 0.6 painted a black trench down every shaft.
+    let ramp = [mix(shaft.dark, shaft.base, 0.22), mix(shaft.dark, shaft.base, 0.48), shaft.base, mix(shaft.base, shaft.accent, 0.35)];
     for (k, c) in SHAFT_KEYS.iter().zip(ramp) { p[*k as usize] = c; }
-    let grips = [grip.map(|c| c * 0.55), grip, grip.map(|c| (c * 1.35 + 0.04).min(1.0))];
+    let grips = [grip.map(|c| c * 0.78), grip, grip.map(|c| (c * 1.15 + 0.025).min(1.0))];
     for (k, c) in GRIP_KEYS.iter().zip(grips) { p[*k as usize] = c; }
     p
 }
 
 /// Casting origin in the local frame.
 pub(crate) fn muzzle(style: WandStyle) -> Vec3 {
+    if style.head >= 6 { return super::reference_sprites::muzzle((style.clamped().head-5) as usize); }
     built(style.clamped().head).map_or(Vec3::Y * 0.4, |b| {
         let s = &b.sprite;
         Vec3::new((s.muzzle[0] - s.width as f32 * 0.5) * b.pixel, (s.grip_row - s.muzzle[1]) * b.pixel, 0.0)
@@ -165,11 +169,28 @@ pub(crate) fn muzzle(style: WandStyle) -> Vec3 {
 
 /// Appends the wand in `frame` (metres). Emitters take `glow` and emit with `energy`.
 pub(crate) fn draw(m: &mut Model, frame: Mat4, style: WandStyle, glow: [f32; 3], energy: f32, kind: f32) {
+    draw_dynamic(m, frame, style, glow, energy, kind, 0.0);
+}
+
+/// The held kit charges from socket to tip, then releases and settles.
+/// Inventory and dropped wands retain their unlit, authored appearance.
+pub(crate) fn draw_cast(m: &mut Model, frame: Mat4, style: WandStyle, glow: [f32; 3], release: f32, cast_left: f32) {
+    draw_dynamic(m, frame, style, glow, release, BODY_KIND, cast_left);
+}
+
+fn draw_dynamic(m: &mut Model, frame: Mat4, style: WandStyle, glow: [f32; 3], energy: f32, kind: f32, cast_left: f32) {
+    let style = style.clamped();
+    if style.head >= 6 { super::reference_sprites::draw(m,frame,(style.head-5) as usize,kind); return; }
     let Some(b) = built(style.clamped().head) else { return };
     let palette = palette(b, style);
     let transform = Mat4::from_scale(Vec3::splat(1.0 / m.scale)) * frame;
     let normal = frame.inverse().transpose();
-    let lit = energy > QUIET;
+    let energy = if energy.is_finite() { energy.clamp(0.0, 1.0) } else { 0.0 };
+    let cast_left = if cast_left.is_finite() { cast_left.clamp(0.0, 1.0) } else { 0.0 };
+    let progress = 1.0 - cast_left;
+    let charging = cast_left > 0.0 && progress < 0.40;
+    let charge = if charging { (progress / 0.40).clamp(0.0, 1.0) } else { 0.0 };
+    let tip = muzzle(style).y.max(b.pixel);
     m.vertices.reserve(b.vertices.len());
     m.vertices.extend(b.vertices.iter().zip(&b.keys).map(|(s, &k)| {
         let mut out = *s;
@@ -177,25 +198,43 @@ pub(crate) fn draw(m: &mut Model, frame: Mat4, style: WandStyle, glow: [f32; 3],
         out.normal = normal.transform_vector3(Vec3::from_array(s.normal)).normalize_or_zero().to_array();
         out.surface[2] = kind;
         out.color = palette[k as usize];
+        let height = (s.pos[1] / tip).clamp(0.0, 1.0);
+        // The energy front advances along the existing surfaces, never moving
+        // geometry or changing the socket that also drives the casting origin.
+        let front = ((charge * 1.25 - height) * 5.0).clamp(0.0, 1.0);
+        let local_energy = energy.max(charge * front * 0.45);
+        let lit = local_energy > QUIET;
         if b.emitter[k as usize] {
             // Idle emitters lean toward the spell colour without lighting up.
             out.color = mix(out.color, glow, if lit { 1.0 } else { 0.25 });
             if lit {
                 out.surface[2] = GLOW_KIND;
-                out.surface[3] = energy * 1.6;
+                out.surface[3] = local_energy * 1.6;
+            }
+        } else if style.runes > 0 && k == SHAFT_KEYS[3]
+            && s.pos[1] > b.pixel * 3.0 {
+            // Reuse carved highlight texels for sparse beads or etched bands.
+            let row = (s.pos[1] / b.pixel).floor() as i32;
+            let spacing = if style.runes == 1 { 8 } else { 4 };
+            if row.rem_euclid(spacing) == 0 && lit {
+                out.color = mix(out.color, glow, 0.70);
+                out.surface[2] = GLOW_KIND;
+                out.surface[3] = local_energy * 0.35;
             }
         }
+        // Palettes are linear for mixing; the vertex shader expects sRGB input.
+        out.color = out.color.map(|v| if v <= 0.0031308 { v * 12.92 } else { 1.055 * v.max(0.0).powf(1.0 / 2.4) - 0.055 });
         out
     }));
 }
 
-/// Style carried in an item's look bits (see `wand_items::look`). The save
-/// rejects bits above 11, so items carry no grip and draw the default binding.
+/// Style carried in an item's look bits. Legacy items have zero grip bits.
 pub(crate) fn style_from_look(look: u16) -> WandStyle {
     WandStyle {
         shaft: ((look >> 2) & 7) as u8,
         head: ((look >> 5) & 7) as u8,
         glow: ((look >> 8) & 7) as u8,
+        grip: ((look >> 12) & 7) as u8,
         ..WandStyle::default()
     }
     .clamped()
@@ -211,7 +250,7 @@ pub(crate) fn draw_dropped(m: &mut Model, centre: Vec3, rotation: Quat, look: u1
     let style = style_from_look(look);
     let Some(b) = built(style.head) else { return };
     let rotation = rotation * Quat::from_rotation_z(0.8);
-    let mid = (b.sprite.grip_row - b.sprite.height as f32 * 0.5) * b.pixel;
+    let mid = if style.head >= 6 { super::reference_sprites::midpoint((style.head-5) as usize) } else { (b.sprite.grip_row - b.sprite.height as f32 * 0.5) * b.pixel };
     let frame = Mat4::from_rotation_translation(rotation, centre - rotation * Vec3::Y * mid);
     draw(m, frame, style, item_glow(style), 0.0, super::AUTHORED_SURFACE);
 }
@@ -219,6 +258,7 @@ pub(crate) fn draw_dropped(m: &mut Model, centre: Vec3, rotation: Quat, look: u1
 /// Front view at one texel per pixel, sRGB RGBA, for inventory icons.
 pub(crate) fn icon_rgba(look: u16) -> Option<([usize; 2], Vec<u8>)> {
     let style = style_from_look(look);
+    if style.head >= 6 { return Some(super::reference_sprites::icon((style.head-5) as usize)); }
     let b = built(style.head)?;
     let palette = palette(b, style);
     let glow = item_glow(style);

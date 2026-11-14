@@ -9,12 +9,22 @@ pub mod megastructures;
 pub mod skyhook;
 pub mod meteors;
 pub mod passes;
+pub mod dynamics;
+pub mod express;
+pub mod habitat;
+pub mod cargo;
 
 pub const CELL_M: f32 = 4096.0;
 pub const SIGHT_RANGE_M: f32 = 6000.0;
 /// Magically supported atmospheric infrastructure, not a ballistic orbit.
 pub const HOLD_CLEARANCE_M: f32 = 360.0;
 pub const UPPER_ANCHORAGE_OFFSET_M: f32 = 18_000.0;
+
+/// Keep chart infrastructure through the approach to the upper anchorage.
+/// Beyond that range the globe has its own body-space orbital models.
+pub fn draw_chart_hardware(planet: bool, altitude_m: f32) -> bool {
+    !planet || altitude_m <= UPPER_ANCHORAGE_OFFSET_M + SIGHT_RANGE_M
+}
 pub const PARKING_FRACTION: f32 = 0.38;
 const SERVICE_DAYS: f64 = 0.22;
 const NOTICE_DAYS: f64 = 0.025;
@@ -42,7 +52,7 @@ impl Class {
         }
     }
     pub fn upper_ring_radius_m(self) -> f32 {
-        match self {Self::Courier=>38.0,Self::Freight=>300.0,Self::Conservatory=>1200.0}
+        match self {Self::Courier=>38.0,Self::Freight=>220.0,Self::Conservatory=>480.0}
     }
     pub fn manifest(self) -> &'static str {
         match self {
@@ -107,11 +117,11 @@ impl Service {
     pub fn carriage_position(self, foot: Vec3, top: Vec3) -> Vec3 {
         let t = self.lowering.clamp(0.0, 1.0);
         let envelope = (std::f32::consts::PI * t).sin().powi(2);
+        // Wind bows the loaded suspension slightly; a kilometre-wide scripted
+        // corkscrew made a cable-guided lift look like a free-flying aircraft.
         let heading = (self.site.key >> 8) as f32 / 16777216.0 * std::f32::consts::TAU;
-        let sense = if self.site.key & 1 == 0 { 1.0 } else { -1.0 };
-        let azimuth = heading + sense * (t - 0.5) * 1.8;
         foot.lerp(top, (1.0 - t) * PARKING_FRACTION)
-            + Vec3::new(azimuth.cos(), 0.0, azimuth.sin()) * (1800.0 * envelope)
+            + Vec3::new(heading.cos(), 0.0, heading.sin()) * (24.0 * envelope)
     }
 
     /// Bounded analytic suspension response, not a collision simulation. The
@@ -135,6 +145,7 @@ impl Service {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Channel {
     Radio,
     Resonance,
@@ -150,10 +161,16 @@ pub struct Booking {
 
 #[derive(Default)]
 pub struct State {
+    /// Planet-system tick of the day clock, set each fixed step; never saved.
+    pub planet_tick: u64,
     pass_cache: std::cell::RefCell<Option<passes::Cache>>,
     booking: Option<Booking>,
     pub receiver: receiver::State,
     pub radio: radio::State,
+    pub dynamics: dynamics::State,
+    /// Transient express ride; never saved.
+    pub express: express::State,
+    pub habitats: habitat::State,
     // Small presentation cache only. Traversing the world never accumulates
     // terrain probes, and no cached values enter the save format.
     heights: std::cell::RefCell<Vec<(IVec2, f32)>>,
@@ -169,6 +186,8 @@ pub struct Contact {
 
 #[derive(Clone, Default)]
 pub struct View {
+    pub navigation: bool,
+    pub cargo: cargo::View,
     pub pass_forecasts: Vec<passes::Forecast>,
     pub pass_forecasts_pending: bool,
     pub calendar: f64,
@@ -181,11 +200,15 @@ pub struct View {
 
 pub fn view(world: &super::World, day: &DayNightCycle, player: &crate::player::Player) -> View {
     View {
+        navigation: world.world_type == super::WorldType::Planet,
+        cargo: cargo::view(world, player),
         calendar: calendar(day),
         pass_forecasts: if world.orbital.radio.level>0 {passes::forecast(world,day,player.pos*world.voxel_scale.meters())} else {Vec::new()},
         pass_forecasts_pending: world.orbital.radio.level>0 && passes::pending(world),
         megastructures: megastructures::contacts(world.seed, day, player.pos * world.voxel_scale.meters()),
-        skyhooks: skyhook::contacts(world.seed, day, player.pos * world.voxel_scale.meters()),
+        skyhooks: if skyhook::supported(world.sample_config().world_type) {
+            skyhook::physical_contacts(world.seed, day, player.pos * world.voxel_scale.meters(),&world.orbital.dynamics)
+        } else {Vec::new()},
         contacts: contacts(
             world.seed,
             day,
@@ -441,6 +464,7 @@ impl State {
             self.receiver.encode(bytes);
         }
         if version >= 28 { self.radio.encode(bytes); }
+        if version >= 39 { self.dynamics.encode(bytes); }
     }
 
     pub fn decode(
@@ -478,6 +502,7 @@ impl State {
             state.receiver = receiver::State::decode(read,version)?;
         }
         if version >= 28 { state.radio = radio::State::decode(read)?; }
+        if version >= 39 { state.dynamics = dynamics::State::decode(read)?; }
         Ok(state)
     }
 }
@@ -486,6 +511,9 @@ impl State {
 /// platform has no landing, collision or passenger transfer. Receiver shipments
 /// use their own small service capsule and persistent cargo ledger.
 pub fn hold_height(cfg: &WorldSampleConfig, state: &State, site: Site) -> f32 {
+    if site.cell==glam::IVec2::ZERO && engine_worldgen::meridian_terminal::enabled(cfg) {
+        return engine_worldgen::meridian_terminal::floor(cfg)+HOLD_CLEARANCE_M;
+    }
     if let Some((_, height)) = state
         .heights
         .borrow()
@@ -511,9 +539,35 @@ pub fn hold_height(cfg: &WorldSampleConfig, state: &State, site: Site) -> f32 {
     height
 }
 
+/// Height the braid's footing stands on: the terrain under the site centre.
+/// `hold_height` uses the highest nearby sample for carriage clearance, which
+/// left most footings tens of metres above or below the ground they stand on.
+pub fn footing_height(cfg: &WorldSampleConfig, state: &State, site: Site) -> f32 {
+    if site.cell == IVec2::ZERO && engine_worldgen::meridian_terminal::enabled(cfg) {
+        return hold_height(cfg, state, site) - HOLD_CLEARANCE_M;
+    }
+    let x = (site.x * cfg.inv_voxel_meters()).floor() as i32;
+    let z = (site.z * cfg.inv_voxel_meters()).floor() as i32;
+    cfg.world_y(terrain_height(cfg, x, z))
+}
+
+/// Crown anchorage directly above the site. Base, carriage and crown share one
+/// vertical line, so the braid cannot lean away from the base at distance.
+pub fn crown_position(site: Site, ground: f32) -> Vec3 {
+    Vec3::new(site.x, ground + UPPER_ANCHORAGE_OFFSET_M, site.z)
+}
+
 #[cfg(test)]
 mod far_corridor_tests {
     use super::*;
+
+    #[test]
+    fn chart_hardware_hides_above_the_cube_sphere() {
+        assert!(draw_chart_hardware(true, 40.0));
+        assert!(draw_chart_hardware(true, UPPER_ANCHORAGE_OFFSET_M));
+        assert!(!draw_chart_hardware(true, UPPER_ANCHORAGE_OFFSET_M * 2.0 + 1.0));
+        assert!(draw_chart_hardware(false, 200_000.0));
+    }
 
     #[test]
     fn distant_corridors_are_capped() {
@@ -529,6 +583,51 @@ mod far_corridor_tests {
             }
         }
     }
+    #[test]
+    fn braid_ends_sit_on_the_base_and_crown_line() {
+        for seed in [1_u32, 74, 9001] {
+            for cell in [IVec2::ZERO, IVec2::new(1, -1), IVec2::new(3, 0), IVec2::new(-4, 2)] {
+                let Some(s) = site(seed, cell) else { continue };
+                let foot = Vec3::new(s.x, 100.0, s.z);
+                let top = crown_position(s, 100.0 + HOLD_CLEARANCE_M);
+                assert!((top.x - foot.x).abs() < 1e-3 && (top.z - foot.z).abs() < 1e-3, "crown leans off the base");
+                for step in 0..=20 {
+                    let service = Service {
+                        site: s, phase: Phase::Holding, lowering: step as f32 / 20.0,
+                        minutes_to_change: 0, requested: false, handoff_day: 0.0,
+                    };
+                    // The sway is bounded wind bow, so the carriage stays within 24 m of the line.
+                    let p = service.carriage_position(foot, top);
+                    let off = Vec3::new(p.x - s.x, 0.0, p.z - s.z).length();
+                    assert!(off <= 24.0 + 1e-3, "seed {seed} cell {:?} lowering {}: carriage {off:.2} m off the line", s.cell, service.lowering);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn footings_stand_on_the_ground_under_their_site() {
+        use crate::fluid::VoxelScalePreset;
+        use crate::world::WorldType;
+        let state = State::default();
+        for seed in [1_u32, 74, 9001] {
+            let cfg = WorldSampleConfig {
+                planet: None,
+                generator_version: 65, seed, world_type: WorldType::Hills, voxel_scale: VoxelScalePreset::OneMeter,
+            };
+            for z in -4..=4 {
+                for x in -4..=4 {
+                    let Some(s) = site(seed, IVec2::new(x, z)) else { continue };
+                    // The monument stands on its built floor, not the natural ground.
+                    if s.cell == IVec2::ZERO && engine_worldgen::meridian_terminal::enabled(&cfg) { continue; }
+                    let ground = cfg.world_y(terrain_height(&cfg, (s.x * cfg.inv_voxel_meters()).floor() as i32, (s.z * cfg.inv_voxel_meters()).floor() as i32));
+                    let footing = footing_height(&cfg, &state, s);
+                    assert!((footing - ground).abs() < 0.5, "seed {seed} cell {:?}: footing {footing} on ground {ground}", s.cell);
+                }
+            }
+        }
+    }
+
     #[test]
     fn corridors_keep_their_distance() {
         for seed in [1_u32, 74, 9001, 0xdead_beef] {

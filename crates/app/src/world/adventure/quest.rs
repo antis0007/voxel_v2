@@ -1,4 +1,4 @@
-//! One expedition, three physical relics, and a home to return to.
+//! Authored quests, three physical relics, and a home to return to.
 use super::*;
 use reliquaries::{AWAKENED, CLAIMED, RelicFocus};
 
@@ -7,6 +7,41 @@ pub(super) const BYPASS: u32 = 1 << 14;
 pub(super) const RESTORED: u32 = 1 << 15;
 const ORDER: [usize; 3] = [2, 0, 1];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum QuestId {
+    Workshop,
+    Foundry,
+    Archive,
+    Cathedral,
+    Heart,
+    BuriedGate,
+    ReturnGate,
+}
+
+impl QuestId {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Workshop => "Workshop",
+            Self::Foundry => "Foundry Relic",
+            Self::Archive => "Archive Relic",
+            Self::Cathedral => "Cathedral Relic",
+            Self::Heart => "Workshop Heart",
+            Self::BuriedGate => "Buried Gate",
+            Self::ReturnGate => "Return Gate",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct QuestEntry {
+    pub id: QuestId,
+    pub stage: u8,
+    pub complete: bool,
+    pub available: bool,
+    pub objective: &'static str,
+}
+
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Station {
     site: IVec3,
     pos: Vec3,
@@ -25,15 +60,99 @@ pub(super) fn sealed(kind: u32, state: u32) -> bool {
     kind == 3 && state & (AWAKENED | CLAIMED | 8) == 0 && state & VALVES != VALVES
 }
 impl Adventure {
+    /// Quest status comes from saved gameplay facts, independently of tracking.
+    pub fn quest_entries(&self, cfg: &crate::world::WorldSampleConfig, workshop_prepared: bool) -> Vec<QuestEntry> {
+        use crate::world::{WorldType, workshop};
+        let mut entries = Vec::new();
+        if matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged)
+            && cfg.generator_version >= 4 && sites::workshop_heart(cfg).is_some() {
+            if cfg.generator_version >= 48 && workshop::home(cfg).is_some() {
+                let stage = if workshop::returned(self) && workshop::automated(self) { 4 }
+                    else if workshop::returned(self) { 3 }
+                    else if workshop::cleared(self) { 2 }
+                    else if workshop_prepared { 1 } else { 0 };
+                entries.push(QuestEntry {
+                    id: QuestId::Workshop, stage, complete: stage == 4, available: true,
+                    objective: ["Combat Equipment", "Guardian Vault · Free the Lanterncap",
+                        if self.companion.is_none() { "Free the Lanterncap or return to the workbench" } else { "Return to the workbench" }, "Iron, Steel or Bio-ethanol → Storage",
+                        "Workshop Complete"][stage as usize],
+                });
+            }
+            for (id, bit, objective) in [
+                (QuestId::Foundry, 1, "Claim the foundry relic"),
+                (QuestId::Archive, 2, "Claim the archive relic"),
+                (QuestId::Cathedral, 4, "Claim the cathedral relic"),
+            ] {
+                let complete = self.sigils & bit != 0;
+                entries.push(QuestEntry { id, stage: complete as u8, complete,
+                    available: true, objective });
+            }
+            entries.push(QuestEntry { id: QuestId::Heart, stage: self.heart_restored() as u8,
+                complete: self.heart_restored(), available: self.sigils == 7 || self.heart_restored(),
+                objective: if self.heart_restored() { "Heart Restored" }
+                    else if self.sigils == 7 { "Restore the workshop heart" }
+                    else { "Requires: 3 Relics" } });
+        }
+        if engine_worldgen::hell_gate::enabled(cfg) {
+            if cfg.world_type == WorldType::Nether {
+                entries.push(QuestEntry { id: QuestId::ReturnGate, stage: 0,
+                    complete: false, available: true, objective: "Return through the gate" });
+            } else if self.heart_restored() && self.knows(11) {
+                entries.push(QuestEntry { id: QuestId::BuriedGate, stage: self.knows(13) as u8,
+                    complete: self.knows(13), available: true, objective: "Reach the buried gate" });
+            }
+        }
+        entries
+    }
+
+    /// Resolve only the selected quest. The log keeps this position for its stage.
+    pub fn quest_destination(&self, id: QuestId,
+        cfg: &crate::world::WorldSampleConfig, origin: Vec3, workshop_prepared: bool) -> Option<QuestMarker> {
+        let (pos, kind) = match id {
+            QuestId::Workshop => return super::super::workshop::marker(self, cfg, origin, workshop_prepared),
+            QuestId::Foundry | QuestId::Archive | QuestId::Cathedral => {
+                let collected = match id { QuestId::Foundry => 0, QuestId::Archive => 1, _ => 3 };
+                let (kind, pos) = sites::next_relic(cfg, origin, collected)?;
+                (pos, kind)
+            }
+            QuestId::Heart => (sites::workshop_heart(cfg)?, 3),
+            QuestId::BuriedGate | QuestId::ReturnGate => {
+                if !engine_worldgen::hell_gate::enabled(cfg) { return None; }
+                let center = engine_worldgen::hell_gate::center(cfg, origin);
+                (center + Vec3::Y * engine_worldgen::hell_gate::floor(cfg, center), 3)
+            }
+        };
+        let delta = pos - origin;
+        Some(QuestMarker { pos, label: id.name(), kind,
+            bearing_deg: delta.x.atan2(-delta.z).to_degrees().rem_euclid(360.0),
+            distance_m: delta.x.hypot(delta.z), vertical_m: delta.y })
+    }
+
     /// Resolve the next authored expedition objective to a compass waypoint.
     /// This is derived from the same generator used by the relic trace, so the
     /// marker can never point at a fabricated or stale location.
+    #[cfg(test)]
     pub fn quest_marker(
         &self,
         cfg: &crate::world::WorldSampleConfig,
         origin: Vec3,
     ) -> Option<QuestMarker> {
-        if let Some(marker) = super::super::workshop::marker(self, cfg, origin) {
+        // A known lamp route leads onward after the heart is repaired; in
+        // the Nether the compass always offers a physical way back.
+        if engine_worldgen::hell_gate::enabled(cfg)
+            && (cfg.world_type == crate::world::WorldType::Nether
+                || self.heart_restored() && self.knows(11) && !self.knows(13)) {
+            let center = engine_worldgen::hell_gate::center(cfg, origin);
+            let pos = center + Vec3::Y * engine_worldgen::hell_gate::floor(cfg, center);
+            let delta = pos - origin;
+            return Some(QuestMarker {
+                pos, label: if cfg.world_type == crate::world::WorldType::Nether { "Return gate" } else { "Buried gate" },
+                kind: 3,
+                bearing_deg: delta.x.atan2(-delta.z).to_degrees().rem_euclid(360.0),
+                distance_m: Vec3::new(delta.x, 0.0, delta.z).length(), vertical_m: delta.y,
+            });
+        }
+        if let Some(marker) = super::super::workshop::marker(self, cfg, origin, false) {
             return Some(marker);
         }
         let (pos, label, kind) = if self.sigils == 7 && !self.heart_restored() {
@@ -72,7 +191,7 @@ impl Adventure {
         self.stations.clear();
         let cfg = world.sample_config();
         for r in &self.reliquaries {
-            if r.kind != 3 {
+            if r.kind != 3 || observatory::is_site(r.site) {
                 continue;
             }
             for (kind, center) in sites::foundry_stations(&cfg, r.site)
@@ -193,6 +312,7 @@ impl Adventure {
                         pulse: 0.0,
                         damage: 16.0,
                         spores: false,
+                        fire: false,
                     });
                     sound(&mut self.sounds, Cue::ForgeWindup, Some(pos), 0.7);
                 }
@@ -308,11 +428,10 @@ impl Adventure {
     /// an open line of sight.
     pub fn quest_beacon_models(
         &self,
-        cfg: &crate::world::WorldSampleConfig,
-        origin: Vec3,
+        marker: Option<&QuestMarker>,
         m: &mut Model,
     ) {
-        let Some(marker) = self.quest_marker(cfg, origin) else {
+        let Some(marker) = marker else {
             return;
         };
         let color = match marker.kind {
@@ -450,6 +569,7 @@ mod tests {
 
     fn cfg() -> WorldSampleConfig {
         WorldSampleConfig {
+            planet: None,
             generator_version: 18,
             seed: 424242,
             world_type: WorldType::Hills,

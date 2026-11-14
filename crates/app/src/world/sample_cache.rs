@@ -21,6 +21,15 @@ impl Default for SampleCache {
 
 impl SampleCache {
     pub fn get(&mut self, config: WorldSampleConfig, position: IVec3) -> BlockId {
+        self.get_or_sample(config, position, || sample_block(&config, position))
+    }
+
+    pub fn get_or_sample(
+        &mut self,
+        config: WorldSampleConfig,
+        position: IVec3,
+        sample: impl FnOnce() -> BlockId,
+    ) -> BlockId {
         if self.config != Some(config) {
             self.entries.fill(None);
             self.config = Some(config);
@@ -33,7 +42,7 @@ impl SampleCache {
             && cached == position {
                 return block;
             }
-        let block = sample_block(&config, position);
+        let block = sample();
         self.entries[slot] = Some((position, block));
         block
     }

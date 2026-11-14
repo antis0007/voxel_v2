@@ -1,28 +1,27 @@
-//! Waits for old frames before acquiring a swapchain image.
+//! Limits GPU work in flight before acquiring a swapchain image.
 //!
-//! wgpu 27-29 on Vulkan waits at most 1 s inside `get_current_texture` for the
-//! image's fence and maps `VK_TIMEOUT` there to `DeviceError::Unexpected`,
-//! which wgpu-core treats as a lost device. Any GPU backlog over a second
-//! (contention, a heavy upload frame) therefore ended the session with
-//! "Unexpected error variant" and no driver reset. The image being acquired
-//! is freed by the present of the frame `latency` frames back, so waiting for
-//! that submission first keeps wgpu's internal wait short without reducing
-//! the frames in flight.
+//! Queue completion bounds the backlog of our own submissions. The Vulkan
+//! acquire can still wait for the presentation engine to release an image.
+use std::cell::Cell;
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
-/// Longer than any frame we expect to finish; a real hang still ends the wait.
-const WAIT_LIMIT: Duration = Duration::from_secs(20);
+pub(crate) struct Completion(Arc<AtomicBool>);
 
-pub(crate) struct FramePacer<T = wgpu::SubmissionIndex> {
+pub(crate) struct FramePacer<T = Completion> {
     latency: usize,
     submitted: VecDeque<T>,
+    blocked_since: Cell<Option<Instant>>,
 }
 
 impl<T> FramePacer<T> {
     pub(crate) fn new(desired_maximum_frame_latency: u32) -> Self {
         let latency = desired_maximum_frame_latency.max(1) as usize;
-        Self { latency, submitted: VecDeque::with_capacity(latency + 1) }
+        Self { latency, submitted: VecDeque::with_capacity(latency + 1), blocked_since: Cell::new(None) }
     }
 
     /// Record the last submission of a presented frame.
@@ -41,18 +40,50 @@ impl<T> FramePacer<T> {
 }
 
 impl FramePacer {
-    /// `VOXEL_FRAME_PACER=0` turns the wait off for A/B runs.
-    pub(crate) fn wait_before_acquire(&self, device: &wgpu::Device) {
-        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if !*ENABLED.get_or_init(|| std::env::var("VOXEL_FRAME_PACER").map_or(true, |v| v != "0")) {
+    fn enabled() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var("VOXEL_FRAME_PACER").map_or(true, |v| v != "0"))
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.submitted.clear();
+        self.blocked_since.set(None);
+    }
+
+    pub(crate) fn track_submission(&mut self, queue: &wgpu::Queue) {
+        if !Self::enabled() {
             return;
         }
-        if let Some(index) = self.gate() {
-            let poll = wgpu::PollType::Wait { submission_index: Some(index.clone()), timeout: Some(WAIT_LIMIT) };
-            if let Err(error) = device.poll(poll) {
-                eprintln!("[frame-pacer] wait before acquire failed: {error:?}");
+        let done = Arc::new(AtomicBool::new(false));
+        let completion = Arc::clone(&done);
+        queue.on_submitted_work_done(move || completion.store(true, Ordering::Release));
+        self.submitted(Completion(done));
+    }
+
+    /// Service completion callbacks without waiting on a Vulkan fence on
+    /// the event thread. Acquiring still requires the same completed frame.
+    pub(crate) fn ready(&self, device: &wgpu::Device) -> bool {
+        let Some(Completion(done)) = self.gate() else { return true };
+        if !done.load(Ordering::Acquire) {
+            let now = Instant::now();
+            if let Err(error) = device.poll(wgpu::PollType::Poll) {
+                eprintln!("[frame-pacer] completion poll failed: {error:?}");
+                return false;
+            }
+            if !done.load(Ordering::Acquire) {
+                if self.blocked_since.get().is_none() {
+                    self.blocked_since.set(Some(now));
+                }
+                return false;
             }
         }
+        if let Some(started) = self.blocked_since.take() {
+            let elapsed = started.elapsed();
+            if elapsed >= Duration::from_millis(50) {
+                eprintln!("[frame-pacer] GPU backpressure_ms={:.2}", elapsed.as_secs_f64() * 1000.0);
+            }
+        }
+        true
     }
 }
 

@@ -29,7 +29,7 @@ pub(super) struct Frame {
 }
 
 fn projection(fov_deg: f32) -> Mat4 {
-    crate::render::REVERSE_Z * Mat4::perspective_infinite_rh(fov_deg.to_radians(), 1.0, NEAR_M)
+    crate::render::REVERSE_Z * glam::camera::rh::proj::directx::perspective_infinite(fov_deg.to_radians(), 1.0, NEAR_M)
 }
 
 fn render(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32) -> Frame {
@@ -37,12 +37,17 @@ fn render(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32) -> 
 }
 
 pub(super) fn render_masked(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32, mask: Option<super::band::GlobeMask>) -> Frame {
+    render_lit(tiles, eye_body, view_proj, size, mask, eye_body.normalize().as_vec3(), [0.0; 4])
+}
+
+/// `render_masked` with the sun direction and moon (`GlobeUniform::moon_body`) given.
+pub(super) fn render_lit(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Mat4, size: u32,
+    mask: Option<super::band::GlobeMask>, sun: Vec3, moon_body: [f32; 4]) -> Frame {
     let adapter = engine_gpu::test_adapter();
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
     let mut globe = Globe::new(&device, COLOR);
     let draw: Vec<TileId> = tiles.iter().map(|t| t.id).collect();
     let count = draw.len();
-    let sun = eye_body.normalize().as_vec3();
     let eye = eye_body.as_vec3();
     let mut keep = Vec::new();
     super::scheduler::keep_set(&draw, &mut keep);
@@ -53,7 +58,7 @@ pub(super) fn render_masked(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Ma
         sea_level_m: 0.0,
         focal_px: size as f32,
         flags: 0,
-        limb: [0.0; 4],
+        moon_body,
         view_proj: view_proj.to_cols_array_2d(),
     });
     assert_eq!((stats.uploaded, stats.dropped, stats.drawn, globe.resident()), (count, 0, count, count));
@@ -97,6 +102,7 @@ pub(super) fn render_masked(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Ma
             })
         };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("globe test"),
             color_attachments: &[attachment(&views[0]), attachment(&views[1])],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -127,7 +133,7 @@ pub(super) fn render_masked(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Ma
         .poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(std::time::Duration::from_secs(10)) })
         .unwrap();
     let rows = |buffer: &wgpu::Buffer| -> Vec<[u8; 4]> {
-        let mapped = buffer.slice(..).get_mapped_range();
+        let mapped = buffer.slice(..).get_mapped_range().expect("GPU readback range");
         (0..size)
             .flat_map(|y| (0..size).map(move |x| (y * row + x * 4) as usize))
             .map(|o| mapped[o..o + 4].try_into().unwrap())
@@ -141,7 +147,7 @@ pub(super) fn render_masked(tiles: Vec<TileData>, eye_body: DVec3, view_proj: Ma
 pub(super) fn look(eye_body: DVec3, target: DVec3, fov_deg: f32) -> Mat4 {
     let forward = (target - eye_body).normalize().as_vec3();
     let up = if forward.z.abs() < 0.9 { Vec3::Z } else { Vec3::X };
-    projection(fov_deg) * Mat4::look_to_rh(Vec3::ZERO, forward, up)
+    projection(fov_deg) * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, forward, up)
 }
 
 #[test]

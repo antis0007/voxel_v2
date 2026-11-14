@@ -15,7 +15,7 @@ impl State {
             .range((p.x, i32::MIN, i32::MIN)..=(p.x, i32::MAX, i32::MAX))
             .filter(|(k, _)| k.2 == p.z && k.1 < p.y && !self.scheduled.contains_key(*k))
             .count();
-        self.scheduled.len() + additional + 7 <= MAX_EVENTS
+        self.scheduled.len() + additional + 7 <= self.event_limit()
     }
     pub fn invalidate_light(&mut self, p: IVec3) {
         self.invalidate_sky(p);

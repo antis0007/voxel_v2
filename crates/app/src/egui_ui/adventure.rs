@@ -29,14 +29,15 @@ fn draw_hearts(
     trail: f32,
     preview_heal: f32,
     regen_active: bool,
+    poison: f32,
     time: f32,
     align_left: bool,
 ) {
     let count = (maximum / 10.0).ceil() as usize;
-    let icon_step = (width / 10.0).floor().clamp(8.0, 10.0);
+    let icon_step = (width / 10.0).floor().clamp(8.0, 18.0);
     let columns = (width / icon_step).floor().clamp(5.0, 10.0) as usize;
     let rows = count.div_ceil(columns);
-    let row_h = (icon_step + 1.0).max(9.0);
+    let row_h = (icon_step + 2.0).max(10.0);
     let (rect, resp) =
         ui.allocate_exact_size(vec2(width, rows as f32 * row_h), egui::Sense::hover());
     let unit = (icon_step / 8.5).floor().max(1.0);
@@ -88,13 +89,29 @@ fn draw_hearts(
                 let frac = (x as f32 + 0.5) / 7.0;
                 let active = frac <= fill;
                 let color = if active {
-                    if y < 2 && x < 3 {
+                    let red = if y < 2 && x < 3 {
                         Color32::from_rgb(255, 148, 134)
                     } else if y >= 4 {
                         Color32::from_rgb(158, 42, 52)
                     } else {
                         Color32::from_rgb(228, 66, 74)
+                    };
+                    if poison > 0.0 {
+                        // Mana poisoning: a violet glow travelling along the row.
+                        let glow = (time * 2.2 - heart as f32 * 0.5).sin() * 0.5 + 0.5;
+                        let violet = if y < 2 && x < 3 {
+                            Color32::from_rgb(214, 190, 255)
+                        } else if y >= 4 {
+                            Color32::from_rgb(84, 46, 168)
+                        } else {
+                            Color32::from_rgb(150, 96, 248)
+                        };
+                        red.lerp_to_gamma(violet, poison * (0.65 + glow * 0.35))
+                    } else {
+                        red
                     }
+                } else if poison > 0.0 && border {
+                    Color32::from_rgb(86, 52, 58).lerp_to_gamma(Color32::from_rgb(120, 92, 220), poison * 0.6)
                 } else if preview_heal > 0.0 && frac <= prev_fill {
                     Color32::from_rgba_unmultiplied(245, 142, 148, (pulse * 195.0) as u8)
                 } else if frac <= old {
@@ -140,8 +157,8 @@ fn draw_hunger(
         "  ####  ", " ###### ", "####### ", " ###### ", "  ####  ", "   ###  ", "    ### ",
         "     ## ",
     ];
-    let icon_step = (width / 10.0).floor().clamp(8.0, 10.0);
-    let row_h = (icon_step + 1.0).max(9.0);
+    let icon_step = (width / 10.0).floor().clamp(8.0, 18.0);
+    let row_h = (icon_step + 2.0).max(10.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, row_h), egui::Sense::hover());
     let unit = (icon_step / 8.8).floor().max(1.0);
     let group_width = 10.0 * icon_step;
@@ -258,9 +275,9 @@ fn draw_armor_row(ui: &mut egui::Ui, width: f32, armor_points: u32) {
         return;
     }
     const SHIELD: [&str; 6] = ["######", "######", "######", " #### ", "  ##  ", "  ##  "];
-    let icon_step = (width / 10.0).floor().clamp(8.0, 10.0);
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 9.0), egui::Sense::hover());
-    let unit = 1.0;
+    let icon_step = (width / 10.0).floor().clamp(8.0, 18.0);
+    let unit = (icon_step / 8.5).floor().max(1.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 9.0 * unit), egui::Sense::hover());
     let origin = egui::pos2(
         rect.left().round(),
         (rect.top() + 1.0).round(),
@@ -296,6 +313,90 @@ fn draw_armor_row(ui: &mut egui::Ui, width: f32, armor_points: u32) {
     resp.on_hover_text(format!("Armor protection: {} / 20", armor_points));
 }
 
+const POISON: Color32 = Color32::from_rgb(170, 120, 255);
+const ABSORB: Color32 = Color32::from_rgb(235, 199, 70);
+
+/// Plate behind the vitals, the health numeral and poisoning sparks.
+fn vitals_plate(ui: &egui::Ui, backdrop: egui::layers::ShapeIdx, view: &View, maximum: f32, half_w: f32, time: f32) {
+    let panel = ui.min_rect().expand2(vec2(6.0, 4.0));
+    let low = view.health <= maximum * 0.25;
+    let accent = if view.mana_poison > 0.0 {
+        Color32::from_rgb(120, 84, 220)
+    } else if low {
+        style::DANGER
+    } else {
+        style::MANA
+    };
+    let mut shapes = Vec::with_capacity(2);
+    if view.mana_poison > 0.0 {
+        // Steady glow that follows the poison level and fades with it; a fast
+        // pulse here competed with the hearts' own wave.
+        let breath = 0.85 + (time * 1.5).sin() * 0.15;
+        shapes.push(super::hud_style::glow(ui.ctx(), panel, POISON, 2, view.mana_poison * 0.55 * breath));
+    } else if low {
+        let pulse = 0.6 + (time * 4.0).sin() * 0.4;
+        shapes.push(super::hud_style::glow(ui.ctx(), panel, style::DANGER, 3, pulse));
+    }
+    shapes.push(super::hud_style::plate(ui.ctx(), panel, accent));
+    ui.painter().set(backdrop, egui::Shape::Vec(shapes));
+    let numeral = if view.mana_poison > 0.0 { POISON } else if low { style::DANGER } else { style::PAPER };
+    ui.painter().text(
+        egui::pos2(panel.left() - 6.0, panel.bottom()),
+        Align2::RIGHT_BOTTOM,
+        format!("{:.0}", view.health.max(0.0).ceil()),
+        FontId::monospace(22.0),
+        numeral,
+    );
+    if view.absorption > 0.0 {
+        // Absorption reads as a gold shield segment under the hearts, sized
+        // against full health, with its amount above the health numeral.
+        let width = (half_w.max(60.0) * (view.absorption / maximum.max(1.0)).min(1.0)).round();
+        let bar = Rect::from_min_size(egui::pos2(panel.left() + 6.0, panel.bottom() - 4.0), vec2(width, 2.0));
+        ui.painter().rect_filled(bar.translate(vec2(1.0, 1.0)), 0, style::INK);
+        ui.painter().rect_filled(bar, 0, ABSORB);
+        ui.painter().text(
+            egui::pos2(panel.left() - 6.0, panel.bottom() - 22.0),
+            Align2::RIGHT_BOTTOM,
+            format!("+{:.0}", view.absorption.ceil()),
+            FontId::monospace(12.0),
+            ABSORB,
+        );
+    }
+    if view.mana_poison > 0.0 {
+        // Sparks lift just off the heart row; taller emitters crossed the
+        // affinity text above it.
+        let hearts = Rect::from_min_max(
+            egui::pos2(panel.left() + 6.0, panel.bottom() - 24.0),
+            egui::pos2(panel.left() + 6.0 + half_w.max(60.0), panel.bottom() - 8.0),
+        );
+        super::hud_style::sparks(ui.painter(), hearts, POISON, time, (3.0 * view.mana_poison).round() as u32 + 1, 7);
+    }
+}
+
+/// Recovery and density are separate quantities: lush ground is safe at 6x recovery.
+fn mana_affinity(ui: &mut egui::Ui, view: &View) {
+    use crate::world::adventure::affinity::{BLIGHT_BELOW, POISON_AT};
+    let m = view.affinity;
+    let (state, color) = if m >= POISON_AT {
+        ("  ·  Mana poisoning", POISON)
+    } else if m < BLIGHT_BELOW {
+        ("  ·  Blight", Color32::from_rgb(150, 138, 120))
+    } else if m >= 1.25 {
+        ("  ·  Affinity", style::MANA)
+    } else {
+        ("", style::MUTED)
+    };
+    let recovery = crate::world::ambience::mana_recovery(m);
+    let health = crate::world::ambience::health_recovery(m);
+    ui.label(
+        egui::RichText::new(format!("Mana regen {recovery:.1}x{state}"))
+            .monospace()
+            .size(12.0)
+            .color(color),
+    ).on_hover_text(format!("{}\nMana density: {m:.2}x\nHealth regen: {health:.1}x · Well-fed",
+        view.location.unwrap_or("Still air")));
+}
+
 /// One instrument: a fixed mana field, cast-cost marker and recharge rail.
 fn mana_and_timers(
     ui: &mut egui::Ui,
@@ -310,8 +411,15 @@ fn mana_and_timers(
     icons::frame(p, rect, false);
     let gauge = rect.shrink(2.0);
     let mana_bar = Rect::from_min_size(gauge.min, vec2(gauge.width(), 15.0));
-    let low = view.mana < eval.mana_cost || view.mana_flash > 0.0;
-    let color = if low { style::DANGER } else { style::MANA };
+    let channel = view.concentration_upkeep;
+    let low = view.mana < channel.map_or(eval.mana_cost, |upkeep| upkeep * 0.5)
+        || view.mana_flash > 0.0;
+    let poisoned = view.affinity >= crate::world::adventure::affinity::POISON_AT;
+    let color = if low { style::DANGER } else if poisoned { POISON } else { style::MANA };
+    if view.mana >= maximum - 0.5 {
+        let time = ui.input(|i| i.time as f32);
+        p.add(super::hud_style::glow(ui.ctx(), mana_bar, color, 2, 0.55 + (time * 3.0).sin() * 0.25));
+    }
     let fill = (mana_bar.width() * (view.mana / maximum).clamp(0.0, 1.0)).floor();
     p.rect_filled(
         Rect::from_min_size(mana_bar.min, vec2(fill, 15.0)),
@@ -319,7 +427,7 @@ fn mana_and_timers(
         color.gamma_multiply(0.28),
     );
     p.rect_filled(Rect::from_min_size(mana_bar.min, vec2(fill, 1.0)), 0, color);
-    if eval.mana_cost > 0.0 {
+    if eval.mana_cost > 0.0 && channel.is_none() {
         let x = mana_bar.left()
             + (mana_bar.width() * (eval.mana_cost / maximum).clamp(0.0, 1.0)).floor();
         p.rect_filled(
@@ -341,7 +449,9 @@ fn mana_and_timers(
         style::PAPER,
     );
     let recharging = view.recharge_total > 0.01 && view.cooldown <= view.recharge_total + 0.01;
-    let state = if view.cooldown > 0.0 {
+    let state = if let Some(upkeep) = channel {
+        format!("Channel · {} mana/s", crate::world::adventure::spell_defs::card::amount(upkeep))
+    } else if view.cooldown > 0.0 {
         format!("{:.1} s", view.cooldown)
     } else if eval.actions.is_empty() {
         "Empty".to_owned()
@@ -357,7 +467,10 @@ fn mana_and_timers(
     );
     let rail = Rect::from_min_size(gauge.min + vec2(0.0, 18.0), vec2(gauge.width(), 2.0));
     p.rect_filled(rail, 0, super::grimoire::SILVER_DARK);
-    if view.cooldown > 0.0 {
+    if channel.is_some() {
+        let time = ui.input(|i| i.time as f32);
+        p.rect_filled(rail, 0, color.gamma_multiply(0.74 + 0.26 * (time * 5.0).sin()));
+    } else if view.cooldown > 0.0 {
         let total = if recharging {
             view.recharge_total
         } else {
@@ -420,14 +533,10 @@ fn spell_deck(ui: &mut egui::Ui, view: &View, width: f32, maximum: f32) {
                     );
                 }
                 if index == view.loadout.cursor && view.cooldown > 0.0 {
-                    let content = r.shrink(2.0);
-                    let h = (content.height()
-                        * (view.cooldown / view.cast_total.max(0.12)).clamp(0.0, 1.0))
-                    .floor();
-                    ui.painter().rect_filled(
-                        Rect::from_min_size(content.min, vec2(content.width(), h)),
-                        0,
-                        Color32::from_black_alpha(155),
+                    super::hud_style::sweep(
+                        ui.painter(),
+                        r.shrink(2.0),
+                        view.cooldown / view.cast_total.max(0.12),
                     );
                 }
                 if response.hovered() {
@@ -480,9 +589,10 @@ pub(super) fn hud(
     armor_points: u32,
     held_food: Option<crate::world::inventory::FoodKind>,
     cursor_free: bool,
+    creative: bool,
 ) -> Rect {
-    let maximum = 100.0 + view.rank as f32 * 20.0;
-    let max_mana = 100.0 + view.rank as f32 * 15.0;
+    let maximum = view.max_health.max(1.0);
+    let max_mana = view.mana_max.max(1.0);
     let dt = ctx.input(|i| i.predicted_dt).min(0.1);
     let time = ctx.input(|i| i.time as f32);
 
@@ -539,12 +649,16 @@ pub(super) fn hud(
     // Match the hotbar width when it fits, or clamp to available screen width.
     let bar_width = hotbar_rect.width().min(available).floor();
     let bottom = hotbar_rect.top() - 4.0;
-    let regen_active = view.hunger >= 75.0 && view.health < maximum && view.hurt <= 0.0;
+    let regen_active = view.health < maximum
+        && ((view.hunger >= 75.0 && view.hurt <= 0.0)
+            || super::progression_hud::active(ctx, crate::world::progression::Kind::Regeneration));
 
-    let result = egui::Area::new("adventurer_vitals".into())
+    let result = egui::Area::new(egui::Id::new("adventurer_vitals"))
         .anchor(Align2::CENTER_BOTTOM, [0.0, bottom - screen.bottom()])
         .interactable(cursor_free)
         .show(ctx, |ui| {
+            if creative { return; }
+            let backdrop = ui.painter().add(egui::Shape::Noop);
             ui.set_width(bar_width);
             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
             ui.spacing_mut().interact_size.y = 9.0;
@@ -573,7 +687,14 @@ pub(super) fn hud(
                 );
             }
 
-            if armor_points > 0 || view.respawn_point.is_some() {
+            if super::inventory::unlocks::mana_line_open(
+                view,
+                view.affinity >= crate::world::adventure::affinity::POISON_AT,
+            ) {
+                mana_affinity(ui, view);
+            }
+
+            if armor_points > 0 || (view.respawn_point.is_some() && ui.input(|i| i.modifiers.alt)) {
                 ui.horizontal(|ui| {
                     if armor_points > 0 {
                         draw_armor_row(ui, (bar_width * 0.46).floor(), armor_points);
@@ -600,6 +721,7 @@ pub(super) fn hud(
             if bar_width >= 160.0 {
                 ui.horizontal(|ui| {
                     ui.set_width(bar_width);
+                    ui.spacing_mut().item_spacing.x = 0.0;
                     draw_hearts(
                         ui,
                         half_w,
@@ -608,6 +730,7 @@ pub(super) fn hud(
                         hp_fb.trail,
                         preview_heal,
                         regen_active,
+                        view.mana_poison,
                         time,
                         true,
                     );
@@ -632,6 +755,7 @@ pub(super) fn hud(
                     hp_fb.trail,
                     preview_heal,
                     regen_active,
+                    view.mana_poison,
                     time,
                     false,
                 );
@@ -646,50 +770,66 @@ pub(super) fn hud(
                     false,
                 );
             }
+            vitals_plate(ui, backdrop, view, maximum, half_w, time);
         });
-    let mut bounds = result.response.rect;
+    let mut bounds = if creative { hotbar_rect } else { result.response.rect };
+    if !creative {
+        let poisoning = (view.affinity >= crate::world::adventure::affinity::POISON_AT).then_some(view.affinity);
+        if let Some(row) = super::progression_hud::effect_bar(ctx, bounds, poisoning, cursor_free) {
+            bounds = bounds.union(row);
+        }
+    }
     if view.wand > 0 && (view.cooldown > 0.0 || ctx.input(|i| i.modifiers.alt)) {
         let slots_width = wands::capacity(view.wand) as f32 * 20.0 - 2.0;
         let width = bar_width.max(slots_width + 84.0).min(available).floor();
-        let wand = egui::Area::new("wand_instrument".into())
+        let wand = egui::Area::new(egui::Id::new("wand_instrument"))
             .anchor(
                 Align2::CENTER_BOTTOM,
-                [0.0, bounds.top() - 6.0 - screen.bottom()],
+                // Clears the vitals plate (4 pt), its glow rings (6 pt) and this plate's own rim.
+                [0.0, bounds.top() - 14.0 - screen.bottom()],
             )
             .interactable(cursor_free)
             .show(ctx, |ui| {
                 ui.set_width(width);
                 ui.spacing_mut().interact_size.y = 9.0;
                 ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                let backdrop = ui.painter().add(egui::Shape::Noop);
                 spell_deck(ui, view, width, max_mana);
+                let plate = super::hud_style::plate(ui.ctx(), ui.min_rect().expand(4.0), style::MANA);
+                ui.painter().set(backdrop, plate);
             });
         bounds = bounds.union(wand.response.rect);
     }
     super::relics::reward(ctx, view);
     super::relics::encounter(ctx, view);
-    if ctx.input(|i| i.modifiers.alt) {
+    let alt = ctx.input(|i| i.modifiers.alt);
+    if alt {
         super::relics::site_modifier(ctx, view);
+    }
+    // Only explicit quest tracking adds a pointer; Alt shows the bare heading.
+    if alt || (view.quest.is_some() && view.boss.is_none()) {
         draw_compass(ctx, yaw, view.quest.as_ref());
     }
     combat_feedback(ctx, view, yaw);
     bounds
 }
 
-/// Pixel-art heading strip. The target marker is derived from the same
-/// `next_relic` route as the journal and is clamped to the edge with a chevron
+/// Pixel-art heading strip. The selected quest target is clamped to the edge with a chevron
 /// when it is outside the visible arc.
 fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
     let content = ctx.content_rect();
     let width = (content.width() - 96.0).clamp(200.0, 300.0).floor();
     // 34 px tall so the labels (at +15) clear the bottom frame line; the top edge
     // stays where it was at 28 px.
-    let bar = Rect::from_center_size(
-        egui::pos2(content.center().x.floor(), content.top() + 25.0),
+    let slot = super::hud_layout::place(ctx, "compass");
+    let bar = Rect::from_min_size(
+        egui::pos2((content.center().x + slot.offset.x - width * 0.5).floor(), slot.top(ctx).floor()),
         vec2(width, 34.0),
     );
+    super::hud_layout::claim(ctx, "compass", bar);
     let p = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        "compass_strip".into(),
+        egui::Id::new("compass_strip"),
     ));
     p.rect_filled(bar, 0, Color32::from_rgba_unmultiplied(18, 21, 25, 180));
     super::grimoire::binding(&p, bar, false);
@@ -841,13 +981,16 @@ fn draw_compass(ctx: &egui::Context, yaw: f32, target: Option<&QuestMarker>) {
             caption,
             style::PAPER,
         );
+        // The destination strip hangs below the bar; panels stacked under the
+        // compass must clear it too.
+        super::hud_layout::claim(ctx, "compass", bar.union(ribbon));
     }
 }
 
 fn combat_feedback(ctx: &egui::Context, view: &View, yaw: f32) {
     let p = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        "combat_feedback".into(),
+        egui::Id::new("combat_feedback"),
     ));
     let center = ctx.content_rect().center();
     if view.hit > 0.0 {
@@ -857,6 +1000,25 @@ fn combat_feedback(ctx: &egui::Context, view: &View, yaw: f32) {
                 Stroke::new(1.5, style::AMBER),
             );
         }
+    }
+    // Name the creature behind the last hit, with its health, so a bite from
+    // underground or off screen is never anonymous.
+    if let Some((kind, fraction)) = view.damage_source {
+        let name = crate::world::adventure::enemy_name(kind);
+        let galley = p.layout_no_wrap(name.to_owned(), FontId::proportional(13.0), style::PAPER);
+        let width = galley.size().x.max(120.0) + 16.0;
+        let plate = Rect::from_center_size(center + vec2(0.0, 74.0), vec2(width, 34.0));
+        p.rect_filled(plate, 0, Color32::from_rgba_unmultiplied(29, 31, 34, 225));
+        p.rect_stroke(plate, 0, Stroke::new(1.0, style::INK), egui::StrokeKind::Inside);
+        p.galley(egui::pos2(plate.center().x - galley.size().x * 0.5, plate.top() + 3.0), galley, style::PAPER);
+        let track = Rect::from_min_max(
+            egui::pos2(plate.left() + 8.0, plate.bottom() - 11.0),
+            egui::pos2(plate.right() - 8.0, plate.bottom() - 5.0),
+        );
+        p.rect_filled(track, 0, Color32::from_rgb(14, 12, 16));
+        let mut fill = track;
+        fill.set_width(track.width() * fraction.clamp(0.0, 1.0));
+        p.rect_filled(fill, 0, Color32::from_rgb(196, 62, 54));
     }
     if view.hurt <= 0.0 {
         return;

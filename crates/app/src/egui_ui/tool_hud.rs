@@ -3,6 +3,29 @@ use super::presentation;
 use crate::creative::{CreativeState, ToolKind};
 use egui::{Align2, Color32, FontId, Stroke, pos2, vec2};
 
+pub fn traversal(ctx: &egui::Context, player: &crate::player::Player, voxel_meters: f32) {
+    let t = &player.traversal;
+    let readout = if t.sling_charge > 0.0 {
+        Some((t.sling_charge, format!("Stretch: {:.0}%", t.sling_charge * 100.0)))
+    } else if t.thrust || t.hover {
+        if t.jet == 1 { Some((t.fuel_seconds / crate::player::traversal::BURN_SECONDS,
+            format!("Fuel: {:.1} s", t.fuel_seconds))) }
+        else { Some((t.charge_fe / crate::player::traversal::CHARGE_CAPACITY,
+            format!("Charge: {:.0} FE", t.charge_fe))) }
+    } else if t.attached {
+        let count = t.contacts.iter().flatten().count();
+        Some((count as f32 / 8.0, format!("Grip: {count}/8")))
+    } else if player.glide.deployed {
+        let speed=player.vel.length()*voxel_meters;
+        Some(((speed/45.0).clamp(0.0,1.0),format!("Glide: {speed:.1} m/s")))
+    } else { None };
+    if let Some((fraction, text)) = readout {
+        egui::Area::new(egui::Id::new("traversal_meter"))
+            .anchor(Align2::CENTER_BOTTOM, [0.0, -148.0]).interactable(false)
+            .show(ctx, |ui| { ui.add(egui::ProgressBar::new(fraction).desired_width(160.0).text(text)); });
+    }
+}
+
 #[derive(Default)]
 pub struct Feedback {
     pub material_budget: Option<u32>,
@@ -38,7 +61,7 @@ impl Feedback {
 
 /// `top` clears the compass label and, when shown, the minimap above.
 pub fn draw(ctx: &egui::Context, tool: &CreativeState, feedback: &Feedback, top: f32) {
-    egui::Area::new("tool_telemetry".into())
+    egui::Area::new(egui::Id::new("tool_telemetry"))
         .anchor(Align2::RIGHT_TOP, [-12.0, top])
         .interactable(false)
         .show(ctx, |ui| {
@@ -162,7 +185,7 @@ pub fn draw(ctx: &egui::Context, tool: &CreativeState, feedback: &Feedback, top:
 /// Break progress bar under the crosshair, shown only while a survival break is held.
 pub fn draw_break_progress(ctx: &egui::Context, feedback: &Feedback) {
     let Some(progress) = feedback.break_progress else { return };
-    egui::Area::new("break_progress".into())
+    egui::Area::new(egui::Id::new("break_progress"))
         .anchor(Align2::CENTER_CENTER, [0.0, 26.0])
         .interactable(false)
         .show(ctx, |ui| {
@@ -187,4 +210,26 @@ pub fn draw_break_progress(ctx: &egui::Context, feedback: &Feedback) {
                 );
             }
         });
+}
+
+/// Seconds the crosshair hit marker stays up after a connecting melee hit.
+const HIT_MARKER_SECONDS: f64 = 0.18;
+
+/// Four short diagonal ticks around the crosshair when `landed` changes.
+pub(super) fn hit_marker(ui: &egui::Ui, center: egui::Pos2, landed: u32) {
+    let id = egui::Id::new("melee_hit_marker");
+    let now = ui.input(|i| i.time);
+    let (seen, since) = ui.ctx().data(|d| d.get_temp::<(u32, f64)>(id)).unwrap_or((landed, f64::NEG_INFINITY));
+    let since = if seen != landed { now } else { since };
+    ui.ctx().data_mut(|d| d.insert_temp(id, (landed, since)));
+    let age = now - since;
+    if !(0.0..HIT_MARKER_SECONDS).contains(&age) { return; }
+    ui.ctx().request_repaint();
+    let fade = (1.0 - age / HIT_MARKER_SECONDS) as f32;
+    let stroke = Stroke::new(2.0, Color32::from_rgba_unmultiplied(255, 236, 214, (230.0 * fade) as u8));
+    let painter = ui.painter();
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        let d = vec2(x, y);
+        painter.line_segment([center + d * 5.0, center + d * 10.0], stroke);
+    }
 }

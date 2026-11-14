@@ -11,6 +11,9 @@ pub mod fishing;
 pub mod panning;
 pub(crate) mod sidecar;
 pub mod trades;
+pub mod residents;
+pub mod services;
+pub(crate) mod civilization;
 #[cfg(test)]
 mod tests;
 
@@ -19,10 +22,11 @@ pub const ROD: Item = Item::Tool(10);
 /// One default in-game day in fixed steps; trades restock when it turns over.
 pub const DAY_TICKS: u64 = 480 * 120;
 pub const MAX_BOATS: usize = 256;
+pub(crate) const MAX_GUARDS: usize = 8;
 const REACH_METRES: f32 = 4.0;
 const PLACE_METRES: f32 = 6.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Ride {
     /// A grown herd member, by herd identity.
     Mount(u32),
@@ -49,6 +53,49 @@ pub struct State {
     pub cast: Option<fishing::Cast>,
     /// Grade of the last pan scoop; session only, never saved.
     pub last_colour: Option<u32>,
+    /// Agreed homes and the last position of a travelling companion.
+    pub homes: BTreeMap<u32,Vec3>,
+    pub(crate) guard_posts: BTreeMap<u32, Vec3>,
+    pub following: Option<u32>,
+    pub(crate) follow_owner: Option<u32>,
+    pub(crate) riders: BTreeMap<u32, Ride>,
+    pub(crate) settlements: BTreeMap<u32, civilization::Ledger>,
+    pub(crate) politics: civilization::politics::State,
+    pub(crate) civilization_scan: u32,
+}
+
+pub(crate) fn toggle_guard_post(world: &mut World, id: u32) {
+    if world.travel.guard_posts.remove(&id).is_some() {
+        vehicle::set_guard_rank(world, id, 0);
+        world.expedition.say("Guard released");
+        return;
+    }
+    if super::farming::jobs::assigned(world, id) {
+        world.expedition.say("Release the resident from their current duty first");
+        return;
+    }
+    if world.travel.guard_posts.len() >= MAX_GUARDS {
+        world.expedition.say("Guard roster full");
+        return;
+    }
+    let Some(post) = vehicle::villager_feet(world, id) else {
+        return;
+    };
+    let following = world.travel.following == Some(id);
+    if !following
+        && !world.inventory.remove_item(Item::Food(super::inventory::FoodKind::Trailcake), 1)
+    {
+        world.expedition.say("Requires 1 Trailcake");
+        return;
+    }
+    if following {
+        world.travel.following = None;
+        world.travel.follow_owner = None;
+    }
+    world.travel.guard_posts.insert(id, post);
+    vehicle::set_guard_rank(world, id, 2);
+    world.sync_from_inventory();
+    world.expedition.say("Guard posted");
 }
 
 /// What a use action did.
@@ -64,6 +111,18 @@ pub fn day(world: &World) -> u64 {
 }
 
 impl State {
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn track_rider(&mut self, id: u32) {
+        if let Some(ride) = self.riding {
+            self.riders.insert(id, ride);
+        } else {
+            self.riders.remove(&id);
+        }
+    }
+    pub(crate) fn occupied(&self, ride: Ride) -> bool {
+        self.riding == Some(ride) || self.riders.values().any(|&occupied| occupied == ride)
+    }
+
     /// Clears spent uses and absences once the day turns over.
     pub fn restock(&mut self, day: u64) {
         if day != self.day {
@@ -97,17 +156,63 @@ pub enum Refusal {
     Unknown,
     OutOfStock,
     Missing,
+    Workplace,
 }
 
-/// Swaps the row's inputs for its output and spends one use.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub enum ResidentAction {
+    Trade(usize),
+    Donate(Item),
+    Service,
+    Accompany,
+}
+
+pub fn resident_action(world: &mut World, villager: u32, eye: Vec3, action: ResidentAction, actor: Option<u32>) {
+    if !world.rules.mode.interacts() || world.adventure.is_dead()
+        || vehicle::villager_centre(world, villager).is_none_or(|centre|
+            centre.distance(eye) > 6.0 || super::trace::opaque_between(world, eye, centre))
+    {
+        world.expedition.say("Resident Out of Reach");
+        return;
+    }
+    let result = match action {
+        ResidentAction::Trade(row) => trade(world, villager, row).map_err(|reason| match reason {
+            Refusal::Unknown => "Trade Unavailable",
+            Refusal::OutOfStock => "Out of Stock",
+            Refusal::Missing => "Items Missing",
+            Refusal::Workplace => "Workshop Unavailable",
+        }),
+        ResidentAction::Donate(item) => {
+            if villager != super::farming::freight::SELLER {
+                Err("Donation Unavailable")
+            } else {
+                super::farming::pantry::donate(world, item)
+            }
+        }
+        ResidentAction::Service => services::perform(world, villager, eye),
+        ResidentAction::Accompany => services::accompany_for(world, villager, eye, actor),
+    };
+    if let Err(reason) = result {
+        world.expedition.say(reason);
+    }
+}
+
+/// Swaps the row's inputs for its output and updates the stock that owns it.
 pub fn trade(world: &mut World, villager: u32, row: usize) -> Result<(), Refusal> {
     world.travel.restock(day(world));
-    let t = trades::page(villager).get(row).ok_or(Refusal::Unknown)?;
-    if world.travel.uses_left(villager, row, t) == 0 {
+    let t = trades::page_for(world, villager).get(row).ok_or(Refusal::Unknown)?;
+    let quote = trades::quote(world, villager, row, t).ok_or(Refusal::Unknown)?;
+    if quote.issue.is_some() {
+        return Err(Refusal::Workplace);
+    }
+    if quote.remaining == 0 {
         return Err(Refusal::OutOfStock);
     }
-    if t.give.iter().any(|s| world.inventory.count_item(s.item) < s.count) {
+    if !t.affordable(&world.inventory) {
         return Err(Refusal::Missing);
+    }
+    if super::farming::jobs::communities::exchange(world, villager, t) == Some(false) {
+        return Err(Refusal::OutOfStock);
     }
     for s in &t.give {
         world.inventory.remove_item(s.item, s.count);
@@ -117,7 +222,7 @@ pub fn trade(world: &mut World, villager: u32, row: usize) -> Result<(), Refusal
         let pos = vehicle::villager_centre(world, villager).unwrap_or(Vec3::ZERO);
         world.inventory.dropped.push(DroppedStack { pos, stack: ItemStack::new(t.get.item, left) });
     }
-    *world.travel.used.entry((villager, row as u16)).or_insert(0) += 1;
+    trades::settle(world, villager, row, t, quote.stock);
     world.sync_from_inventory();
     Ok(())
 }
@@ -182,20 +287,9 @@ pub fn interact(world: &mut World, eye_m: Vec3, forward: Vec3, slot: usize) -> U
         panning::use_pan(world, eye_m, forward);
         return Use::Taken;
     }
-    match vehicle::target(world, eye_m, forward, REACH_METRES) {
-        Some(vehicle::Target::Villager(id)) => return Use::OpenTrade(id),
-        Some(vehicle::Target::Mount(id)) if held.is_none() && world.travel.riding.is_none() => {
-            world.travel.riding = Some(Ride::Mount(id));
-            world.expedition.say("Riding");
-            return Use::Taken;
-        }
-        Some(vehicle::Target::Boat(id)) if held.is_none() && world.travel.riding.is_none() => {
-            world.travel.riding = Some(Ride::Boat(id));
-            world.expedition.say("Boat · Riding");
-            return Use::Taken;
-        }
-        _ => {}
-    }
+    let target = vehicle::target(world, eye_m, forward, REACH_METRES);
+    let object = interact_target(world, target);
+    if !matches!(object, Use::None) { return object; }
     if held == Some(BOAT)
         && let Some(cell) = water_along(world, eye_m, forward, PLACE_METRES)
         && let Some(y) = vehicle::float_y(world, (cell.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters())
@@ -220,6 +314,11 @@ pub fn step(world: &mut World, player: &mut Player, input: &Input, steer: bool, 
     world.travel.restock(day(world));
     vehicle::service(world, feet);
     fishing::tick(world, feet);
+    steer_rider(world, player, input, steer, dt)
+}
+
+pub(crate) fn steer_rider(world: &mut World, player: &mut Player, input: &Input, steer: bool, dt: f32) -> bool {
+    let scale = world.voxel_scale.meters();
     let Some(ride) = world.travel.riding else { return false };
     if steer && input.sneak {
         world.travel.riding = None;
@@ -238,4 +337,37 @@ pub fn step(world: &mut World, player: &mut Player, input: &Input, steer: bool, 
     player.on_ground = true;
     player.flying = false;
     true
+}
+
+/// World interaction never depends on either equipped item.
+pub(crate) fn interact_target(world: &mut World, target: Option<vehicle::Target>) -> Use {
+    match target {
+        Some(vehicle::Target::Villager(id)) => return Use::OpenTrade(id),
+        Some(vehicle::Target::Mount(id)) if world.travel.riding.is_none() => {
+            if world.travel.occupied(Ride::Mount(id)) { return Use::Taken; }
+            world.travel.riding = Some(Ride::Mount(id));
+            world.expedition.say("Riding");
+            return Use::Taken;
+        }
+        Some(vehicle::Target::Boat(id)) if world.travel.riding.is_none() => {
+            if world.travel.occupied(Ride::Boat(id)) { return Use::Taken; }
+            world.travel.riding = Some(Ride::Boat(id));
+            world.expedition.say("Boat · Riding");
+            return Use::Taken;
+        }
+        _ => {}
+    }
+    Use::None
+}
+
+pub(crate) fn target_distance(world: &World, eye: Vec3, forward: Vec3) -> Option<(f32, vehicle::Target)> {
+    vehicle::target_distance(world, eye, forward, REACH_METRES)
+}
+
+#[cfg(feature = "multiplayer")]
+pub(crate) fn trade_target(world: &World, player: &Player) -> Option<u32> {
+    match super::interaction::target(world, player)? {
+        super::interaction::Target::Resident(id) => Some(id),
+        _ => None,
+    }
 }

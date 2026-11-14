@@ -114,7 +114,7 @@ fn main(@builtin(global_invocation_id) id:vec3<u32>) {
     device.poll(wgpu::PollType::Wait {submission_index:Some(submission),
         timeout:Some(std::time::Duration::from_secs(10))}).unwrap();
     rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap().unwrap();
-    { let mapped=readback.slice(..).get_mapped_range();
+    { let mapped=readback.slice(..).get_mapped_range().expect("GPU readback range");
       let data:&[[f32;4]]=bytemuck::cast_slice(&mapped);
       let mut bit_differences=0usize;
       let mut max_absolute=0.0f32;

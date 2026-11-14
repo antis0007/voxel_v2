@@ -7,6 +7,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 static ARMED: AtomicBool = AtomicBool::new(false);
+mod furnishings;
+mod portals;
+mod storm;
 
 pub fn arm() {
     if mode() == "combat" && !ARMED.swap(true, Ordering::Relaxed) {
@@ -30,6 +33,18 @@ fn mode() -> &'static str {
     static MODE: OnceLock<String> = OnceLock::new();
     MODE.get_or_init(|| std::env::var("VOXEL_REVIEW_ENEMIES").unwrap_or_default())
 }
+/// `VOXEL_ENEMY_REVIEW_KINDS`: kind numbers or bestiary names separated by
+/// commas, so a species made in the dev panel lines up like an authored one.
+fn listed() -> Option<Vec<u32>> {
+    static KINDS: OnceLock<Option<Vec<u32>>> = OnceLock::new();
+    KINDS.get_or_init(|| {
+        let raw = std::env::var("VOXEL_ENEMY_REVIEW_KINDS").ok()?;
+        let kinds: Vec<u32> = raw.split(',').map(str::trim).filter(|w| !w.is_empty())
+            .filter_map(|w| w.parse().ok().or_else(|| super::species_named(w).map(|(kind, _)| kind)))
+            .collect();
+        (!kinds.is_empty()).then_some(kinds)
+    }).clone()
+}
 fn single() -> Option<u32> {
     static KIND: OnceLock<Option<u32>> = OnceLock::new();
     *KIND.get_or_init(|| {
@@ -47,6 +62,17 @@ pub fn install(world: &mut World, player: &mut Player) {
     if INSTALLED.swap(true, Ordering::Relaxed) {
         return;
     }
+    if std::env::var_os("VOXEL_ENEMY_REVIEW_SURVIVAL").is_some() {
+        world.rules.mode = super::super::rules::GameMode::Survival;
+        world.adventure.creative = false;
+        player.flying = false;
+        println!("[enemy-review] survival damage enabled");
+    }
+    if scenario() == "industry" { return super::super::industry::review::install(world, player); }
+    if scenario() == "furnishings" { return furnishings::install(world, player); }
+    if scenario() == "portals" { return portals::install(world, player); }
+    if scenario() == "flora" { return super::super::farming::review::install(world, player); }
+    if storm::enabled() { return storm::install(world); }
     let scale = world.voxel_scale.meters();
     let mut edits = Vec::new();
     for x in -10..=10 {
@@ -75,8 +101,21 @@ pub fn install(world: &mut World, player: &mut Player) {
     }
     world.set_many(&edits);
     world.adventure.enemies.clear();
-    let kinds: Vec<u32> = if scenario() == "wildlife" {
+    // New lineups space by body width; older scenes keep their captured layout.
+    let roster = listed().is_some() || matches!(scenario(), "fauna" | "bestiary");
+    let kinds: Vec<u32> = if let Some(kinds) = listed() {
+        kinds
+    } else if scenario() == "fauna" {
+        // The fowl leads: the held item hides the rightmost slot.
+        vec![super::fauna::FOWL, super::fauna::COW, super::fauna::BOAR, super::fauna::DEER]
+    } else if scenario() == "bestiary" {
+        (super::monsters::OWLBEAR..=super::monsters::YETI).collect()
+    } else if scenario() == "wildlife" {
         vec![super::wildlife::SHEEP, super::wildlife::GOAT]
+    } else if scenario() == "folklore" {
+        single().map_or_else(|| vec![18, 20, 21, 22, 23, 24, 25, 19], |kind| vec![kind])
+    } else if scenario() == "aberrations" {
+        single().map_or_else(|| vec![26, 27, 28, 29], |kind| vec![kind])
     } else if scenario() == "pack" {
         vec![12, 0, 11]
     } else if scenario() == "thunderhen" {
@@ -85,10 +124,13 @@ pub fn install(world: &mut World, player: &mut Player) {
         single().map_or_else(|| vec![5, 3, 2, 9], |kind| vec![kind])
     };
     let count = kinds.len();
+    let pitch = if roster { kinds.iter().filter_map(|&k| super::bestiary::species(k))
+        .map(|s| s.body_width + 1.2).fold(2.4f32, f32::max) } else { 2.4 };
     for (i, kind) in kinds.into_iter().enumerate() {
+        let flying = kind == 2 || roster && super::bestiary::species(kind).is_some_and(|s| s.flying);
         let p = Vec3::new(
-            (i as f32 - (count - 1) as f32 * 0.5) * 2.4,
-            if kind == 2 { 80.9 } else { 80.02 },
+            (i as f32 - (count - 1) as f32 * 0.5) * pitch,
+            if flying { 80.9 } else { 80.02 },
             0.0,
         );
         let site = if mode() == "progression" {
@@ -97,6 +139,8 @@ pub fn install(world: &mut World, player: &mut Player) {
             IVec3::new(0, 80, 0)
         };
         let mut e = Enemy::new(site, i as u32, kind, p, 0);
+        // Animals that fight back show their attack instead of grazing.
+        e.provoked = roster && super::wildlife::fights_back(kind);
         if std::env::var_os("VOXEL_ENEMY_REVIEW_ENRAGED").is_some() {
             e.health *= 0.45;
         }
@@ -126,7 +170,8 @@ pub fn install(world: &mut World, player: &mut Player) {
         single()
     );
 }
-pub(super) fn after(world: &mut World, player: &Player) {
+pub(super) fn after(world: &mut World, player: &mut Player) {
+    if storm::enabled() { return storm::after(world, player); }
     if scenario() == "wildlife" { super::wildlife::observe_review(world); }
     if super::super::habitats::review::enabled() {return super::super::habitats::review::observe(world,player);}
     if mode().is_empty() {
@@ -144,7 +189,9 @@ pub(super) fn after(world: &mut World, player: &Player) {
         return;
     }
     if mode() == "poses" || mode() == "materials" {
-        let t = if mode() == "materials" { 0.0 } else { world.adventure.time };
+        let fixed = std::env::var("VOXEL_ENEMY_REVIEW_POSE_TIME").ok()
+            .and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite() && *v >= 0.0);
+        let t = fixed.unwrap_or(if mode() == "materials" { 0.0 } else { world.adventure.time });
         let cycle = t % 4.0;
         for e in &mut world.adventure.enemies {
             e.pos = e.home;
@@ -157,12 +204,23 @@ pub(super) fn after(world: &mut World, player: &Player) {
             } else {
                 0.0
             };
-            e.recovery = if (2.0..2.24).contains(&cycle) {
-                2.24 - cycle
+            e.recovery = if (2.0..2.0 + super::enemy_presentation::RECOVERY_S).contains(&cycle) {
+                2.0 + super::enemy_presentation::RECOVERY_S - cycle
             } else {
                 0.0
             };
             e.lunge = Vec3::Z;
+            e.attack = if e.kind == super::mobs::CREEPER { super::mobs::ATTACK_FUSE }
+                else { super::folklore::attack(e.kind, 2).unwrap_or(3) };
+            if (2.7..3.3).contains(&cycle) {
+                e.flash = if cycle < 2.85 { 0.16 } else { 0.0 };
+                e.knock = Vec3::new(2.5, 0.0, 1.0);
+                if fixed.is_some() {
+                    e.reaction = super::enemy_presentation::Reaction::default();
+                    e.reaction.advance(0.16, e.knock, e.yaw, 0.0);
+                    e.reaction.advance(0.0, e.knock, e.yaw, cycle - 2.7);
+                }
+            }
         }
         world.adventure.projectiles.clear();
         world.adventure.hazards.clear();
@@ -216,13 +274,19 @@ pub fn camera(player: &mut Player, scale: f32) -> bool {
     if mode().is_empty() {
         return false;
     }
+    if scenario() == "industry" { return super::super::industry::review::camera(player, scale); }
+    if scenario() == "furnishings" { return furnishings::camera(player, scale); }
+    if scenario() == "portals" { return portals::camera(player, scale); }
+    if scenario() == "flora" { return super::super::farming::review::camera(player, scale); }
+    if storm::enabled() { return storm::camera(player, scale); }
     if automated() || manual() {
         static PLACED: AtomicBool = AtomicBool::new(false);
         if PLACED.swap(true, Ordering::Relaxed) {
             return false;
         }
     }
-    let z = if automated() || manual() {
+    let z = if matches!(scenario(), "folklore" | "aberrations") && single().is_none() { 14.0 }
+    else if automated() || manual() {
         7.0
     } else if single().is_some() {
         3.8
@@ -248,6 +312,13 @@ pub fn input(world: &World, player: &mut Player, input: &mut crate::player::Inpu
     let direction = (enemy.center() - player.eye(world.voxel_scale) * scale).normalize_or_zero();
     player.yaw = direction.x.atan2(-direction.z);
     player.pitch = direction.y.asin();
+    if scenario() == "hold" {
+        input.forward = false;
+        input.back = false;
+        input.left = false;
+        input.right = false;
+        return;
+    }
     let t = world.adventure.time;
     let target = if scenario() == "obstacle" {
         Vec3::new(0.0, 80.0, 7.0)

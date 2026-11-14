@@ -25,6 +25,7 @@ impl IndirectLighting {
         camera: &wgpu::BindGroupLayout,
         depth: &wgpu::TextureView,
         scene: &wgpu::TextureView,
+        pipeline_cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
         let layout = |name| {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -96,6 +97,9 @@ impl IndirectLighting {
         };
         let gather_group = group(&gather_layout, scene);
         let compose_group = group(&compose_layout, &field);
+        let refraction = std::env::var_os("VOXEL_WATER_SCENE_REFRACTION").as_deref()
+            != Some(std::ffi::OsStr::new("0"));
+        let gather_constants = [("WATER_SCENE_REFRACTION", if refraction { 1.0 } else { 0.0 })];
         let pipeline = |composite: bool, layout: &wgpu::BindGroupLayout| {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("diffuse exchange"),
@@ -105,8 +109,8 @@ impl IndirectLighting {
             });
             let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("diffuse layout"),
-                bind_group_layouts: &[camera, layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(camera), Some(layout)],
+                immediate_size: 0,
             });
             let blend = if composite {
                 Some(wgpu::BlendState {
@@ -136,7 +140,10 @@ impl IndirectLighting {
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
                     entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: if composite { &[] } else { &gather_constants },
+                        ..Default::default()
+                    },
                     targets: &[Some(wgpu::ColorTargetState {
                         format: SCENE_FORMAT,
                         blend,
@@ -146,8 +153,8 @@ impl IndirectLighting {
                 primitive: Default::default(),
                 depth_stencil: None,
                 multisample: Default::default(),
-                multiview: None,
-                cache: None,
+                multiview_mask: None,
+                cache: pipeline_cache,
             })
         };
         let gather = pipeline(false, &gather_layout);
@@ -254,6 +261,7 @@ impl IndirectLighting {
     ) {
         for composite in [false, true] {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some(if composite {
                     "diffuse resolve"
                 } else {

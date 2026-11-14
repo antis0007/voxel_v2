@@ -28,6 +28,20 @@ pub fn innate_mods(spell: u32, mods: &mut ShotMods) {
     if spell == 76 {
         mods.bounces = mods.bounces.max(card_rules::BOUNCE_ORB_RICOCHETS);
     }
+    // A coat card painted earlier wins. These only fill an empty element.
+    match spell {
+        2 | 13 | 81 => {
+            mods.element.get_or_insert(super::status::Element::Frost);
+        }
+        12 | 28 => {
+            mods.element.get_or_insert(super::status::Element::Fire);
+        }
+        14 | super::spells::STORM_SURGE => {
+            mods.element.get_or_insert(super::status::Element::Shock);
+            mods.chain = true;
+        }
+        _ => {}
+    }
     arcana::innate_mods(spell, mods);
 }
 
@@ -36,12 +50,14 @@ pub fn base_life(spell: u32) -> f32 {
         10 => 3.6,
         71 => 0.16,
         76 => 4.0,
+        super::snapline::SPELL => super::snapline::LIFE,
         _ => arcana::base_life(spell).unwrap_or(3.0),
     }
 }
 
 /// Accumulated projectile modifiers evaluated left-to-right across a cast block.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct ShotMods {
     pub damage_mul: f32,
     pub speed_mul: f32,
@@ -105,6 +121,10 @@ pub struct ShotMods {
     pub proximity: bool,
     /// Drags nearby foes toward the impact.
     pub pull: bool,
+    /// Handle of a native rune event child this bolt carries (0 = none). Copies made by
+    /// pellets or forks share it; the first accepted hit consumes the child for all.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub rune: u32,
 }
 
 impl Default for ShotMods {
@@ -145,6 +165,7 @@ impl Default for ShotMods {
             bounce_release: false,
             proximity: false,
             pull: false,
+            rune: 0,
         }
     }
 }
@@ -193,6 +214,7 @@ pub struct CastBlockEval {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Loadout {
     pub slots: [u32; 4],
     pub aux_slots: [u32; 4],
@@ -200,6 +222,17 @@ pub struct Loadout {
     pub mode: u32,
     /// Found wands roll their chassis from this; 0 is the plain crafted wand.
     pub seed: u32,
+}
+
+pub const RESERVOIR_BINDING: u32 = 4;
+pub const FOCUS_BINDING: u32 = 5;
+
+pub fn is_grimoire(mode: u32) -> bool {
+    matches!(mode, RESERVOIR_BINDING | FOCUS_BINDING)
+}
+
+pub fn fits_instrument(spell: u32, mode: u32) -> bool {
+    is_grimoire(mode) || super::concentration::requirements(spell).is_none()
 }
 
 impl Default for Loadout {
@@ -344,7 +377,7 @@ pub fn evaluate_cast_block(
 
 /// Stat modifiers. Control-flow cards (multicast, trigger, divide, conditions,
 /// alpha) return false so the caller can nest the next draw.
-fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
+pub(super) fn paint_shot(spell: u32, mods: &mut ShotMods, salt: u32) -> bool {
     match spell {
         19 => mods.homing = true,
         20 => {
@@ -435,7 +468,9 @@ pub fn evaluate_programmed(
     salt: u32,
 ) -> CastBlockEval {
     let cap = capacity(wand);
-    if !(0..cap).any(|i| spell_available(loadout.slot(i), wand, rare_spells)) {
+    let available = |spell| fits_instrument(spell, loadout.mode)
+        && spell_available(spell, wand, rare_spells);
+    if !(0..cap).any(|i| available(loadout.slot(i))) {
         return CastBlockEval {
             actions: Vec::new(),
             modifier_slots: Vec::new(),
@@ -451,12 +486,12 @@ pub fn evaluate_programmed(
     let find_next = |after: usize| -> usize {
         (1..=cap)
             .map(|n| (after + n) % cap)
-            .find(|&i| spell_available(loadout.slot(i), wand, rare_spells))
+            .find(|&i| available(loadout.slot(i)))
             .unwrap_or(after % cap)
     };
 
     let mut cur = start_cursor % cap;
-    if !spell_available(loadout.slot(cur), wand, rare_spells) {
+    if !available(loadout.slot(cur)) {
         cur = find_next(cur);
     }
     let first_slot = cur;
@@ -464,7 +499,7 @@ pub fn evaluate_programmed(
 
     // Preserve exact legacy behavior for non-modifier single slots in modes 0, 1, 2
     // so all existing acceptance & unit tests match bit-for-bit.
-    if !is_modifier(first_spell) && loadout.mode <= 2 {
+    if !is_modifier(first_spell) && (loadout.mode <= 2 || is_grimoire(loadout.mode)) {
         let next = find_next(first_slot);
         let payload = if loadout.mode == 2
             && projectile(first_spell)
@@ -532,7 +567,7 @@ pub fn evaluate_programmed(
     let mut skip_draw = false;
     let mut rejected_draw = false;
     let mut copy_alpha = false;
-    let alpha = (0..cap).map(|i| loadout.slot(i)).find(|s| projectile(*s));
+    let alpha = (0..cap).map(|i| loadout.slot(i)).find(|&s| available(s) && projectile(s));
     let mut modifier_slots = Vec::new();
     let mut actions = Vec::new();
     let mut last_slot = first_slot;
@@ -541,7 +576,7 @@ pub fn evaluate_programmed(
     while draws > 0 && steps < cap {
         steps += 1;
         let s = loadout.slot(cur);
-        if !spell_available(s, wand, rare_spells) {
+        if !available(s) {
             break;
         }
         last_slot = cur;
@@ -619,7 +654,7 @@ pub fn evaluate_programmed(
                 let mut guard = 0usize;
                 while guard < cap
                     && scan != cur
-                    && spell_available(loadout.slot(scan), wand, rare_spells)
+                    && available(loadout.slot(scan))
                 {
                     let wrapped = loadout.slot(scan);
                     if !paint_shot(wrapped, &mut payload_mods, salt) {
@@ -733,6 +768,27 @@ pub(super) fn crit_roll(time: f32, slot: u32) -> bool {
 /// Cast a ray from a position in metres. `raycast_block` works in voxel
 /// coordinates, so at any scale other than 1 m a raw metre origin would aim from
 /// the wrong place. Returns the struck cell and its face normal.
+/// Aim for action `idx` of `count`: a fan across the whole spread, or for a
+/// single shot a deterministic offset inside a cone of that width.
+fn spread_dir(forward: Vec3, up: Vec3, spread_rad: f32, idx: usize, count: usize, seed: u32) -> Vec3 {
+    if count > 1 {
+        // A floor keeps zero-spread multicasts from stacking on one line.
+        let step = (spread_rad / (count - 1) as f32).max(0.045);
+        let centered = idx as f32 - (count - 1) as f32 * 0.5;
+        return Quat::from_axis_angle(up, centered * step) * forward;
+    }
+    if spread_rad <= 1e-4 {
+        return forward;
+    }
+    let h = engine_core::hash::hash_u32(seed ^ (idx as u32).wrapping_mul(0x9e37_79b9));
+    let turn = engine_core::hash::hash01(h) * std::f32::consts::TAU;
+    let off = engine_core::hash::hash01(h ^ 0x5bd1_e995).sqrt() * spread_rad * 0.5;
+    let side = forward.cross(up).normalize_or_zero();
+    let lift = side.cross(forward).normalize_or_zero();
+    let axis = (side * turn.sin() + lift * turn.cos()).normalize_or_zero();
+    Quat::from_axis_angle(axis, off) * forward
+}
+
 pub(super) fn aim_cell(
     world: &World,
     eye_m: Vec3,
@@ -766,6 +822,9 @@ impl Adventure {
         }
         let sa = self.loadout.slot(ia);
         let sb = self.loadout.slot(ib);
+        if !fits_instrument(sa, self.loadout.mode) || !fits_instrument(sb, self.loadout.mode) {
+            return;
+        }
         self.loadout.set_slot(ia, sb);
         self.loadout.set_slot(ib, sa);
         self.loadout.cursor = ib;
@@ -812,19 +871,33 @@ impl Adventure {
         payload: Option<u32>,
         mods: ShotMods,
     ) {
-        if self.projectiles.len() >= 96 {
+        self.emit_spell_spread(spell, pos, dir, payload, mods, arcana::SCATTER_BASE_SPREAD, None);
+    }
+
+    /// Emits one cast; multi-pellet spells fan across `spread_rad`.
+    pub(super) fn emit_spell_spread(
+        &mut self,
+        spell: u32,
+        pos: Vec3,
+        dir: Vec3,
+        payload: Option<u32>,
+        mods: ShotMods,
+        spread_rad: f32,
+        base_speed: Option<f32>,
+    ) {
+        if self.projectiles.len() >= 96 || super::concentration::requirements(spell).is_some() {
             return;
         }
         let mut mods = mods;
         innate_mods(spell, &mut mods);
-        let speed = spell_base_speed(spell) * mods.speed_mul;
+        let speed = base_speed.unwrap_or_else(|| spell_base_speed(spell)) * mods.speed_mul;
         let arc_lift = match spell {
             5 => Vec3::Y * 2.0,
             12 => Vec3::Y * 1.6,
             28 => Vec3::Y * 1.2,
             _ => Vec3::ZERO,
         };
-        for dir in arcana::scatter_dirs(spell, dir) {
+        for dir in arcana::scatter_dirs(spell, dir, spread_rad) {
         if self.projectiles.len() >= 96 {
             return;
         }
@@ -849,6 +922,7 @@ impl Adventure {
                 0
             },
             trail_timer: 0.0,
+            flight: None,
             splashed: false,
             follow: None,
         });
@@ -863,10 +937,10 @@ impl Adventure {
             .map(|p| usize::from(p.spell == spell) + usize::from(p.payload == Some(spell)))
             .sum::<usize>();
         match spell {
+            9 => self.lasers.len() + incoming + count <= 16,
             3 | 29 => self.terrain_blasts.len() + incoming + count <= 4,
             5 => self.blooms.len() + incoming + count <= 6,
             6 | 10 => self.wells.len() + incoming + count <= 4,
-            11 => self.crosses.len() + incoming + count <= 4,
             _ => true,
         }
     }
@@ -878,6 +952,39 @@ impl Adventure {
         eye: Vec3,
         forward: Vec3,
     ) {
+        self.cast_wand_inner(world, player, eye, forward, None);
+    }
+
+    pub(crate) fn forge_cast_spark(world: &mut World, player: &mut Player, speed: f32) -> String {
+        let eye = player.eye(world.voxel_scale) * world.voxel_scale.meters();
+        let forward = player.forward_dir();
+        let mut adventure = std::mem::take(&mut world.adventure);
+        if adventure.concentration.is_some() || aberrations::antimagic(&adventure.enemies, world, eye, adventure.time) {
+            world.adventure = adventure;
+            return "Forge Spark: the caster is concentrating or under antimagic.".to_owned();
+        }
+        let mana = adventure.mana;
+        let first = adventure.projectiles.len();
+        adventure.cast_wand_inner(world, player, eye, forward, Some(speed));
+        let report = match adventure.projectiles.get(first).filter(|shot| shot.spell == 0) {
+            Some(shot) => format!(
+                "Forge Spark #0 | base {:.3} m/s | emitted {:.3} m/s | mana paid {:.3}",
+                speed, shot.velocity.length(), mana - adventure.mana
+            ),
+            None => "Forge Spark: no projectile emitted. Use a ready wand with only Spark, sufficient mana and a clear aim.".to_owned(),
+        };
+        world.adventure = adventure;
+        report
+    }
+
+    fn cast_wand_inner(
+        &mut self,
+        world: &mut World,
+        player: &mut Player,
+        eye: Vec3,
+        forward: Vec3,
+        spark_speed: Option<f32>,
+    ) {
         if self.wand == 0 {
             self.cast_cd = 0.7;
             world.expedition.say(
@@ -886,6 +993,10 @@ impl Adventure {
             return;
         }
         self.prepare_wand();
+        // A bound rune phrase runs on its own path, never through the deck evaluator.
+        if spark_speed.is_none() && self.cast_bound_runes(world, eye, forward) {
+            return;
+        }
         let rank = self.rank();
         let foe = self
             .enemies
@@ -893,7 +1004,7 @@ impl Adventure {
             .any(|e| e.health > 0.0 && (e.center() - eye).length() < 27.0);
         let eval = evaluate_programmed(
             self.wand,
-            self.rare_spells,
+            self.available_rare_spells(),
             self.discoveries,
             rank,
             &self.usable_loadout(),
@@ -902,8 +1013,48 @@ impl Adventure {
             foe,
             self.time.to_bits(),
         );
+        if spark_speed.is_some() && (self.cast_cd > 0.0
+            || eval.actions.len() != 1 || eval.actions[0].spell != 0
+            || eval.actions[0].payload.is_some() || eval.actions[0].follow.is_some()
+            || !eval.modifier_slots.is_empty())
+        {
+            return;
+        }
         if eval.actions.is_empty() {
+            self.concentration = None;
             self.cast_cd = 0.15;
+            return;
+        }
+        if self.start_concentration(world, &eval, eye, forward) {
+            return;
+        }
+        let standalone = |spell| matches!(spell,
+            super::fieldcraft::RECALL | super::fieldcraft::SALVAGE | super::snapline::SPELL
+            | super::spells::DONT_PANIC);
+        let utility = eval.actions[0].spell;
+        if eval.actions.iter().any(|a| standalone(a.spell) || a.payload.is_some_and(standalone) || a.follow.is_some_and(standalone))
+            && (eval.actions.len() != 1 || !standalone(utility) || eval.actions[0].payload.is_some()
+                || eval.actions[0].follow.is_some() || !eval.modifier_slots.is_empty())
+        {
+            self.cast_cd = 0.35;
+            world.expedition.say("Use a Single Spell Card");
+            return;
+        }
+        if utility == super::snapline::SPELL && self.projectiles.iter().any(|p| p.tether().is_some()) {
+            return;
+        }
+
+        // A two-endpoint utility owns one cast transaction. Keep multicasts
+        // from paying for unrelated actions before either endpoint is admitted.
+        if eval.actions.iter().any(|a| a.spell == water_transfer::SPELL)
+            && eval.actions.len() != 1 {
+            self.cast_cd = 0.35;
+            world.expedition.say("Separate cast required");
+            return;
+        }
+        if eval.actions[0].spell == water_transfer::SPELL
+            && (self.water_source.is_none() || player.crouch_t > 0.5) {
+            self.cast_water_transfer(world, player, eye, forward);
             return;
         }
 
@@ -918,25 +1069,28 @@ impl Adventure {
         // reason the caster dies.
         let blood_price = eval.actions.iter().any(|a| a.mods.blood_price);
         let health_cost = eval.mana_cost * card_rules::BLOOD_PRICE_FRACTION;
+        let mana_cost = eval.mana_cost * super::modifiers::mana_mul(self.site_modifier);
         if blood_price {
             if self.health <= health_cost + card_rules::BLOOD_PRICE_RESERVE {
                 self.cast_cd = 0.12;
                 self.mana_flash = 0.45;
                 return;
             }
-        } else if self.mana < eval.mana_cost * super::modifiers::mana_mul(self.site_modifier) {
+        } else if self.mana < mana_cost {
             self.cast_cd = 0.12;
             self.mana_flash = 0.45;
             return;
         }
 
-        let proj_count = eval.actions.iter().filter(|a| projectile(a.spell)).count();
+        let proj_count = eval.actions.iter()
+            .filter(|a| projectile(a.spell) || a.spell == super::snapline::SPELL)
+            .count();
         if proj_count > 0 && self.projectiles.len() + proj_count > 96 {
             self.cast_cd = 0.12;
             return;
         }
         for act in &eval.actions {
-            if projectile(act.spell) {
+            if projectile(act.spell) || act.spell == 9 {
                 let same_count = eval.actions.iter().filter(|a| a.spell == act.spell).count();
                 if !self.room_for_spell(act.spell, same_count)
                     || act.payload.is_some_and(|p| {
@@ -961,11 +1115,25 @@ impl Adventure {
             return;
         }
 
+        if eval.actions[0].spell == water_transfer::SPELL
+            && !self.cast_water_transfer(world, player, eye, forward) {
+            return;
+        }
+        let completed = match utility {
+            super::fieldcraft::RECALL => self.recall_thread(world, player),
+            super::fieldcraft::SALVAGE => self.salvage_draw(world, eye, forward),
+            _ => true,
+        };
+        if !completed {
+            self.cast_cd = 0.25;
+            return;
+        }
+
         if blood_price {
             self.health -= health_cost;
             self.spawn_voxel_burst(eye + forward * 0.4, [0.72, 0.16, 0.22], 8, 1.0, 0.03);
         } else {
-            self.mana = (self.mana - eval.mana_cost * super::modifiers::mana_mul(self.site_modifier)).clamp(0.0, self.max_mana());
+            self.mana = (self.mana - mana_cost).clamp(0.0, self.max_mana());
         }
         let forward = super::modifiers::wobble(self.site_modifier, forward, self.time);
         if eval.actions.iter().any(|a| a.mods.reckless) {
@@ -976,6 +1144,7 @@ impl Adventure {
         self.cast_pose = 0.4;
 
         let total_actions = eval.actions.len();
+        let spread_rad = eval.spread_deg.max(0.0).to_radians();
         let up_axis = if forward.y.abs() > 0.98 {
             Vec3::X
         } else {
@@ -987,6 +1156,43 @@ impl Adventure {
         for (idx, act) in eval.actions.iter().enumerate() {
             let spell = act.spell;
             match spell {
+                0 if !act.mods.reverse && crate::world::hell_gate::built::ignite(world, eye, forward) => {
+                    self.spawn_voxel_burst(eye + forward * 0.8, [1.0, 0.23, 0.04], 16, 1.8, 0.04);
+                    played_cue.get_or_insert(Cue::Rift);
+                }
+                water_transfer::SPELL => {
+                    // Committed before payment; selection and failed attempts
+                    // returned above without advancing the deck or consuming mana.
+                    played_cue.get_or_insert(Cue::Splash);
+                }
+                super::fieldcraft::RECALL | super::fieldcraft::SALVAGE => {
+                    played_cue.get_or_insert(spell_audio(spell).0);
+                }
+                super::spells::DONT_PANIC => {
+                    player.fall_ward_seconds = super::spells::DONT_PANIC_SECONDS;
+                    let at = eye + forward * 0.6;
+                    let color = spell_color(spell);
+                    self.effect(at, color, 0.65);
+                    self.spawn_voxel_burst(at, color, 12, 0.8, 0.035);
+                    let (cue, pitch) = spell_audio(spell);
+                    played_cue.get_or_insert(cue);
+                    played_pitch = pitch;
+                }
+                super::snapline::SPELL => {
+                    let first = self.projectiles.len();
+                    self.emit_spell_modified(spell, eye, forward, None, ShotMods::default());
+                    if let Some(shot) = self.projectiles.get_mut(first) {
+                        let mut flight = super::trajectory::Flight::new(forward);
+                        flight.snapline = Some(super::snapline::Tether::new(
+                            super::snapline::Tether::hand(eye, player),
+                            if blood_price { 0.0 } else { mana_cost },
+                        ));
+                        shot.flight = Some(flight);
+                    }
+                    let (cue, pitch) = spell_audio(spell);
+                    played_cue.get_or_insert(cue);
+                    played_pitch = pitch;
+                }
                 1 => {
                     self.health = (self.health + card_rules::MEND_BASE + rank as f32 * card_rules::MEND_PER_RANK).min(self.max_health());
                     if self.knows(6) {
@@ -1010,13 +1216,8 @@ impl Adventure {
                 }
                 9 => {
                     // Luminous Drill: instant 3D laser beam that carves rock/ore and slices enemies
-                    let angle = if total_actions > 1 {
-                        let centered = idx as f32 - (total_actions - 1) as f32 * 0.5;
-                        centered * eval.spread_deg.to_radians().max(0.045)
-                    } else {
-                        0.0
-                    };
-                    let dir = Quat::from_axis_angle(up_axis, angle) * forward;
+                    let dir = spread_dir(forward, up_axis, spread_rad, idx, total_actions, self.time.to_bits());
+                    let dir = if act.mods.reverse { -dir } else { dir };
                     self.cast_luminous_drill(world, eye, dir, act.mods, act.payload);
                     played_cue.get_or_insert(Cue::Spark);
                 }
@@ -1086,14 +1287,11 @@ impl Adventure {
                     {
                         Quat::from_axis_angle(up_axis, if idx == 0 { -0.055 } else { 0.055 })
                             * forward
-                    } else if total_actions > 1 {
-                        let step_rad = (eval.spread_deg.to_radians()
-                            / (total_actions as f32 - 1.0).max(1.0))
-                        .clamp(0.045, 0.14);
-                        let centered = idx as f32 - (total_actions - 1) as f32 * 0.5;
-                        Quat::from_axis_angle(up_axis, centered * step_rad) * forward
-                    } else {
+                    } else if spell == arcana::SCATTER_SHOT && total_actions == 1 {
+                        // The pellet pattern carries the spread itself.
                         forward
+                    } else {
+                        spread_dir(forward, up_axis, spread_rad, idx, total_actions, self.time.to_bits())
                     };
                     let dir = if act.mods.reverse { -dir } else { dir };
                     let (origin, dir) = if spell == 29 {
@@ -1101,8 +1299,12 @@ impl Adventure {
                     } else {
                         (eye, dir)
                     };
-                    self.emit_spell_modified(spell, origin, dir, act.payload, act.mods);
-                    if let Some(shot) = self.projectiles.last_mut() {
+                    let first = self.projectiles.len();
+                    self.emit_spell_spread(
+                        spell, origin, dir, act.payload, act.mods, spread_rad.max(0.02), spark_speed,
+                    );
+                    // Every pellet of a multi-shot spell carries the payload, not only the last.
+                    for shot in &mut self.projectiles[first..] {
                         shot.payload_mods = act.payload_mods;
                         if let Some(follow) = act.follow {
                             shot.follow = Some(follow);
@@ -1111,12 +1313,9 @@ impl Adventure {
                     if spell == 14 && !player.flying {
                         player.vel -= dir * 1.4;
                     }
-                    // The viewmodel already supplies the muzzle flash. The old
-                    // ten-orb burst at the aiming point covered distant tells.
-                    // Keep a few small departing sparks beside the wand instead.
-                    let muzzle = eye + forward * 0.65
-                        + forward.cross(up_axis).normalize_or_zero() * 0.22 - up_axis * 0.14;
-                    self.spawn_voxel_burst(muzzle, spell_color(spell), 4, 0.6, 0.02);
+                    // The held asset supplies the release at its animated socket.
+                    // A second camera-offset burst detached from shorter wands.
+                    // Projectile origins/collision remain on the gameplay path.
                     let (cue, pitch) = spell_audio(spell);
                     played_cue.get_or_insert(cue);
                     played_pitch = pitch;
@@ -1129,11 +1328,15 @@ impl Adventure {
         }
 
         self.loadout.cursor = eval.last_slot;
-        self.advance_wand();
-        self.cast_delay_total = eval.cast_delay;
-        self.recharge_total = eval.recharge_time;
-        self.cast_cd = eval.cast_delay + eval.recharge_time;
+        if utility != super::fieldcraft::RECALL || self.recall.is_none() {
+            self.advance_wand();
+        }
+        let slow = super::affinity::cast_slow(self.affinity);
+        self.cast_delay_total = eval.cast_delay * slow;
+        self.recharge_total = eval.recharge_time * slow;
+        self.cast_cd = self.cast_delay_total + self.recharge_total;
         self.cast_total = self.cast_cd;
+        world.goals.note(crate::world::goals::Event::SpellCast);
         if self.loadout.mode == 3 && eval.recharge_time > 0.0 {
             // The deck wrapped, so the Chaotic chassis deals a fresh order.
             self.shuffle_seed =
@@ -1400,6 +1603,7 @@ impl Adventure {
     pub fn cancel_cast_input(&mut self) {
         self.queued_cast = false;
         self.queued_cycle = false;
+        self.concentration = None;
     }
 
     pub fn blast_visual(&mut self, pos: Vec3, radius: f32, normal: Vec3, color: [f32; 3]) {
@@ -1426,6 +1630,40 @@ impl Adventure {
                 e.flash = 0.2;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod spread_tests {
+    use super::*;
+
+    #[test]
+    fn fan_width_follows_spread() {
+        let f = Vec3::NEG_Z;
+        let narrow = spread_dir(f, Vec3::Y, 0.1, 0, 3, 0).angle_between(f);
+        let wide = spread_dir(f, Vec3::Y, 0.6, 0, 3, 0).angle_between(f);
+        assert!((wide - 0.3).abs() < 1e-3, "outer shot sits at half the spread: {wide}");
+        assert!(wide > narrow * 2.0);
+    }
+
+    #[test]
+    fn single_shots_stay_inside_the_cone() {
+        let f = Vec3::NEG_Z;
+        let mut distinct = std::collections::HashSet::new();
+        for seed in 0..64 {
+            let d = spread_dir(f, Vec3::Y, 0.4, 0, 1, seed);
+            assert!(d.angle_between(f) <= 0.2 + 1e-4);
+            distinct.insert((d.x * 1e4) as i32);
+        }
+        assert!(distinct.len() > 8, "single shots vary with the seed");
+        assert_eq!(spread_dir(f, Vec3::Y, 0.0, 0, 1, 7), f);
+    }
+
+    #[test]
+    fn scatter_cone_scales() {
+        let f = Vec3::NEG_Z;
+        let spread = |r: f32| arcana::scatter_dirs(arcana::SCATTER_SHOT, f, r).iter().map(|d| d.angle_between(f)).fold(0.0, f32::max);
+        assert!(spread(0.6) > spread(arcana::SCATTER_BASE_SPREAD) * 2.0);
     }
 }
 
@@ -1622,10 +1860,47 @@ mod acceptance {
         assert_eq!(a.splashes.len(), 1);
         assert!(a.splashes[0].radius > 0.5);
         assert!(!a.particles.is_empty());
-        for _ in 0..40 {
-            a.splash(Vec3::new(2.0, 64.5, -3.0), 0.85);
+        for i in 0..40 {
+            a.splash(Vec3::new(2.0 + i as f32 * 2.0, 64.5, -3.0), 0.85);
         }
-        assert_eq!(a.splashes.len(), 24);
+        assert_eq!(a.splashes.len(), crate::world::adventure::spells::MAX_SPLASHES);
+    }
+
+    #[test]
+    fn repeated_contact_at_one_surface_coalesces() {
+        let mut a = Adventure::default();
+        let at = Vec3::new(2.0, 64.5, -3.0);
+        a.splash(at, 0.4);
+        let particles = a.particles.len();
+        a.splash(at + Vec3::X * 0.2, 0.8);
+        assert_eq!(a.splashes.len(), 1);
+        assert_eq!(a.particles.len(), particles);
+        assert!(a.splashes[0].strength >= 0.8);
+    }
+
+    #[cfg(feature = "multiplayer")]
+    #[test]
+    fn shared_splashes_are_deduplicated_and_capped() {
+        let mut a = Adventure::default();
+        for i in 0..12 {
+            let mut other = Adventure::default();
+            other.splashes.push(crate::tool_effects::Splash {
+                pos: Vec3::new(i as f32, 64.5, 0.0),
+                radius: 1.0,
+                age: 0.1,
+                life: 0.8,
+                strength: 0.8,
+            });
+            other.splashes.push(crate::tool_effects::Splash {
+                pos: Vec3::new(i as f32, 64.5, 0.0),
+                radius: 1.0,
+                age: 0.1,
+                life: 0.8,
+                strength: 0.8,
+            });
+            a.merge_multiplayer_visuals(other);
+        }
+        assert_eq!(a.splashes.len(), crate::world::adventure::spells::MAX_SPLASHES);
     }
 
     #[test]

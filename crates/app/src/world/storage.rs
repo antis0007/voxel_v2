@@ -3,6 +3,7 @@
 use super::{BlockId, CHUNK_SIZE, ChunkData, DayNightCycle, World, WorldType};
 use crate::fluid::VoxelScalePreset;
 use crate::player::{FlyMode, Player};
+use engine_core::cube_sphere::atlas;
 use anyhow::{Context, Result, ensure};
 use glam::{IVec3, Vec3};
 use std::collections::HashSet;
@@ -11,7 +12,23 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const MAGIC: &[u8; 8] = b"VXWSAV38";
+// The header and footer must use the same version owner. A separately written
+// magic string can label new sections as an old layout and shift every reader.
+#[cfg(test)]
+const MAGIC: &[u8; 8] = &save_magic(SAVE_VERSION);
+
+const fn save_magic(version: u8) -> [u8; 8] {
+    assert!(version > 0 && version < 100, "Save version must fit its eight-byte header");
+    if version < 10 {
+        [b'V', b'X', b'W', b'S', b'A', b'V', b'E', b'0' + version]
+    } else {
+        [b'V', b'X', b'W', b'S', b'A', b'V', b'0' + version / 10, b'0' + version % 10]
+    }
+}
+
+#[cfg(test)]
+#[path = "storage/format_tests.rs"]
+mod format_tests;
 #[cfg(test)]
 #[path = "storage/environment_tests.rs"]
 mod environment_tests;
@@ -21,6 +38,21 @@ mod chip_tests;
 #[cfg(test)]
 #[path = "storage/wildlife_tests.rs"]
 mod wildlife_tests;
+#[cfg(test)]
+#[path = "storage/difficulty_tests.rs"]
+mod difficulty_tests;
+#[cfg(test)]
+#[path = "storage/recovery_tests.rs"]
+mod recovery_tests;
+#[cfg(test)]
+#[path = "storage/range_tests.rs"]
+mod range_tests;
+#[cfg(test)]
+#[path = "storage/steam_tests.rs"]
+mod steam_tests;
+#[cfg(test)]
+#[path = "storage/boiler_tests.rs"]
+mod boiler_tests;
 /// Current writer version. Companion bytes follow the adventure block from 18;
 /// the found-spell log (3 words) follows the companion from 19. Version 20
 /// widens the resource table to 22 and the machine table to 21 kinds, and
@@ -42,7 +74,44 @@ mod wildlife_tests;
 /// Version 36 persists production orders and their bounded sand feed bins.
 /// Version 37 appends passive wildlife identities, health and positions.
 /// Version 38 adds persistent Ossuary Engine mechanisms, stock and salvage.
-pub(crate) const SAVE_VERSION: u8 = 38;
+/// Version 39 persists orbital freight momentum, cargo and elastic tether modes.
+/// Version 40 appends the world difficulty word; older saves load as Normal.
+/// Version 41 retains whole-block machine buffers and recovery checkpoints.
+/// Version 43 appends smeltery component and metal material IDs; record layout is unchanged.
+/// Version 42 stores the offhand and persistent cache slot inventories.
+/// Version 45 adds inventory slot protection and retained quantities.
+/// Version 46 retains the Manyfold counterweight latch (older saves are unlatched).
+/// Version 47 appends one face-role word per machine. Older saves are both on every face.
+/// Version 48 appends bamboo, wheat, carrot, beetroot and crop shoot blocks and four foods (bread,
+/// root stew, cooked fish, harvest cake). Record layout is unchanged; older saves load as before.
+/// Version 49 retains the wearer's burner fuel and induction-pack charge.
+/// Version 50 appends four potions (healing, resistance, leaping, haste) and four status effects
+/// (resistance, absorption, haste, jump boost). Record layout is unchanged.
+/// Version 51 appends an optional, validated planet recipe to the session footer.
+/// Version 52 retains industrial air, deposition and machine gas/waste stocks.
+/// Version 53 retains voxel habitat identity, construction, gas and airlocks.
+/// Version 54 retains general station cargo, dispatch clocks and security robots.
+/// Version 58 expands the factory block buffers for quarry output.
+/// Version 59 adds the standalone quarry and its excavation direction.
+/// Version 60 checkpoints block inventories with the world and factory buffers.
+/// Version 61 adds paydirt and gold to the factory block buffers.
+/// Version 62 appends 36 flora blocks (kelp through iron fern). Record layout is unchanged.
+/// Version 63 adds gold ingots to the resource buffers.
+/// Version 64 adds five distinct ore minerals to the factory block buffers.
+/// Version 66 adds feathers to the resource buffers (factory format 20).
+/// Version 67 adds oxygen and configured machine vents (factory format 21).
+/// Version 68 checkpoints the metered dam and mill with voxel edits and inventory.
+/// It also retains Planet flight motion and foreign-body anchors.
+/// Version 69 retains the planet's civilization choice. Older planets remain living worlds.
+/// Version 70 appends the crop harvester block. Record layout is unchanged.
+/// Version 71 commits residents, activities and travel with their physical inventories.
+/// Version 72 appends the dungeon Locked Door and Great Door blocks. Record layout is unchanged.
+/// Version 73 retains the planet's chosen history length. Older planets keep the generator's own.
+/// Version 74 appends Lightless stone, foxfire moss and the Lightless shaft, and world type code 7
+/// (the Lightless realm). Record layout is unchanged; older saves load as before.
+/// Version 75 appends the fourteen Gilded Cave blocks (gilded gate through sunstone) and world
+/// type code 8 (the Gilded Cave realm). Record layout is unchanged; older saves load as before.
+pub(crate) const SAVE_VERSION: u8 = 75;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -87,12 +156,36 @@ struct Decoder<'a> {
     bytes: &'a [u8],
     offset: usize,
 }
-impl Decoder<'_> {
-    fn u32(&mut self) -> Result<u32> {
-        let end = self.offset.checked_add(4).context("Save offset overflow")?;
+/// Offset of the region identity, shared by the library and region collector.
+fn identity_offset(prefix: &[u8], version: u8) -> Result<usize> {
+    let word = |offset: usize| -> Result<u32> {
+        Ok(u32::from_le_bytes(prefix.get(offset..offset + 4).context("Truncated world header")?.try_into()?))
+    };
+    let kind = word(16)?;
+    let mut offset = if version >= 12 { 176 } else { 164 };
+    if kind == 5 { offset += 40; }
+    if version >= 49 { offset += 8; }
+    if version >= 55 && kind == 3 && engine_voxel::WorldSampleConfig::is_hell_generator(word(8)?) {
+        offset += if word(88)? == 0 { 4 } else { 44 };
+    }
+    if version >= 68 && kind == 4 {
+        offset += planet_actor::HEADER_BYTES;
+        if word(planet_actor::ANCHOR_TAG_OFFSET)? != 0 {
+            offset += planet_actor::ANCHOR_BYTES;
+        }
+    }
+    Ok(offset)
+}
+
+impl<'a> Decoder<'a> {
+    fn take(&mut self, len: usize) -> Result<&'a [u8]> {
+        let end = self.offset.checked_add(len).context("Save offset overflow")?;
         let value = self.bytes.get(self.offset..end).context("Truncated save")?;
         self.offset = end;
-        Ok(u32::from_le_bytes(value.try_into()?))
+        Ok(value)
+    }
+    fn u32(&mut self) -> Result<u32> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into()?))
     }
     fn float(&mut self) -> Result<f32> {
         let value = f32::from_bits(self.u32()?);
@@ -105,16 +198,37 @@ mod paths;
 pub(crate) use paths::preference_read_path;
 pub use paths::save_directory;
 mod background;
+pub(crate) mod session;
+mod planet_actor;
 mod library;
 pub use background::{
     SaveService, autosave_enabled, autosave_seconds, set_autosave_enabled, set_autosave_seconds,
 };
-pub use library::{WorldEntry, WorldLibrary};
+pub use library::{WorldEntry, WorldLibrary, load_named, name_world};
 
 fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result<Vec<u8>> {
     ensure!(world.ca_view.is_none(), "Experimental CPU region requires an exact checkpoint format; ordinary world save refused");
+    session_identity(world, player, day, SAVE_VERSION)
+}
+
+/// Largest player coordinate a save accepts, in voxels.
+/// Planets span six faces of `PITCH_M` each, so their range grows with finer voxels.
+fn max_player_coordinate(kind: WorldType, scale: VoxelScalePreset) -> f32 {
+    match kind {
+        WorldType::Planet => (6.0 * atlas::PITCH_M / f64::from(scale.meters())) as f32,
+        WorldType::Nether => (6.0 * atlas::PITCH_M / f64::from(scale.meters())).max(1_000_000.0) as f32,
+        _ => 1_000_000.0,
+    }
+}
+
+fn session_identity(world: &World, player: &Player, day: &DayNightCycle, version: u8) -> Result<Vec<u8>> {
+    if let Some(settings) = world.planet_settings {
+        ensure!(settings.valid() && (world.sample_config().hell_mirror()
+            || world.world_type == WorldType::Planet
+                && world.generator_version >= engine_voxel::CUSTOM_PLANET_VERSION), "Invalid planet recipe");
+    }
     ensure!(
-        player.pos.abs().max_element() <= 1_000_000.0,
+        player.pos.abs().max_element() <= max_player_coordinate(world.world_type, world.voxel_scale),
         "Player position exceeds supported save range"
     );
     ensure!((0.1..=10.0).contains(&player.scale), "Invalid player scale");
@@ -122,16 +236,12 @@ fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result
         (1.0..=86400.0).contains(&day.day_length_seconds),
         "Invalid day length"
     );
-    let mut bytes = MAGIC.to_vec();
+    let mut bytes = save_magic(version).to_vec();
     push(&mut bytes, world.generator_version);
     push(&mut bytes, world.seed);
     push(
         &mut bytes,
-        match world.world_type {
-            WorldType::Superflat => 0,
-            WorldType::Hills => 1,
-            WorldType::Ridged => 2,
-        },
+        u32::from(world.world_type.code()),
     );
     push(
         &mut bytes,
@@ -170,6 +280,16 @@ fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result
         ensure!(value.is_finite(), "Cannot save non-finite state");
         push(&mut bytes, value.to_bits());
     }
+    super::orbital::habitat::persistence::validate(&world.orbital.habitats)?;
+    // Terrain tag 5 is new: its actor extension does not alter older world layouts.
+    if world.world_type == WorldType::Manyfold {
+        ensure!(player.gravity_frame.is_finite() && (player.gravity_frame.length_squared() - 1.0).abs() < 0.001, "Invalid upright frame");
+        for v in player.gravity_frame.to_array() { push(&mut bytes, v.to_bits()); }
+        ensure!(world.manyfold_weight.valid(), "Invalid Manyfold weight");
+        for v in world.manyfold_weight.position.to_array().into_iter().chain(world.manyfold_weight.velocity.to_array()) {
+            push(&mut bytes, v.to_bits());
+        }
+    }
     push(&mut bytes, u32::from(player.flying));
     push(
         &mut bytes,
@@ -177,6 +297,21 @@ fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result
     );
     push(&mut bytes, day.day_index);
     push(&mut bytes, day.weather_seed);
+    if world.sample_config().is_hell() {
+        let anchor = player.anchor;
+        if let Some(a) = anchor {
+            ensure!(crate::planet::influence::valid_hell_anchor(world, a), "Invalid Hell moon anchor");
+        }
+        push(&mut bytes, anchor.map_or(0, |a| u32::from(a.body.0)));
+        if let Some(a) = anchor {
+            for value in a.pos.to_array().into_iter().chain(a.vel.to_array()).chain(a.upright.to_array()) {
+                push(&mut bytes, (value as f32).to_bits());
+            }
+        }
+    }
+    if version >= 68 && world.world_type == WorldType::Planet {
+        planet_actor::encode(player, &mut bytes)?;
+    }
     // Retain every weather control without relying on Rust struct layout.
     let c = day.cloud_controls;
     for value in [
@@ -206,15 +341,15 @@ fn session_header(world: &World, player: &Player, day: &DayNightCycle) -> Result
         ensure!(value.is_finite(), "Cannot save non-finite weather state");
         push(&mut bytes, value.to_bits());
     }
+    ensure!(player.traversal.checkpoint_valid(), "Invalid traversal reservoirs");
+    for value in [player.traversal.fuel_seconds, player.traversal.charge_fe] {
+        push(&mut bytes, value.to_bits());
+    }
     Ok(bytes)
 }
 fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let resources = if save_version >= 20 {
-        super::factory::RESOURCE_COUNT
-    } else {
-        super::factory::LEGACY_RESOURCE_COUNT
-    };
+    let resources = super::factory::resources_in_save(save_version);
     for &amount in &world.expedition.resources[..resources] {
         push(&mut bytes, amount);
     }
@@ -225,6 +360,17 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     world.factory.encode_format(
         &mut bytes,
         match save_version {
+            67.. => super::factory::FACTORY_FORMAT,
+            66 => 20,
+            64..=65 => 19,
+            63 => 18,
+            61..=62 => 17,
+            59..=60 => 16,
+            58 => 15,
+            52.. => 14,
+            47.. => 13,
+            44.. => 12,
+            41.. => 11,
             21.. => 10,
             20 => 9,
             _ => 8,
@@ -235,7 +381,7 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
         world.adventure.encode_companion(&mut bytes);
     }
     if save_version >= 19 {
-        world.adventure.encode_spell_log(&mut bytes);
+        world.adventure.encode_spell_log(&mut bytes, save_version >= 56);
     }
     if save_version >= 23 { world.adventure.encode_boss_series(&mut bytes); }
     if save_version >= 38 { world.adventure.encode_engines(&mut bytes); }
@@ -249,6 +395,7 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     if save_version >= 31 { world.environment.encode(&mut bytes); }
     if save_version >= 32 { world.adventure.resonance.encode(&mut bytes); }
     world.inventory.encode_versioned(&mut bytes, save_version);
+    if save_version >= 44 { super::tool_workshop::encode(&world.adventure.tool_bank, &mut bytes).expect("validated tool records"); }
     push(&mut bytes, world.inventory.dropped.len() as u32);
     for drop in &world.inventory.dropped {
         for v in drop.pos.to_array() {
@@ -261,6 +408,55 @@ fn session_footer(world: &World, save_version: u8) -> Vec<u8> {
     }
     if save_version >= 34 { world.factory.chips.encode(&mut bytes); }
     if save_version >= 37 { world.adventure.wildlife.encode(&world.adventure.enemies, &mut bytes); }
+    if save_version >= 40 { push(&mut bytes, world.adventure.difficulty.code()); }
+    if save_version >= 41 {
+        for point in [world.adventure.respawn_point, world.adventure.last_death_pos] {
+            push(&mut bytes, u32::from(point.is_some()));
+            if let Some(point) = point {
+                for value in point.to_array() {
+                    push(&mut bytes, value.to_bits());
+                }
+            }
+        }
+    }
+    if save_version >= 42 { super::containers::encode(&world.caches, &mut bytes); }
+    if save_version >= 46 { push(&mut bytes, u32::from(world.manyfold_weight.opened)); }
+    if save_version >= 51 {
+        push(&mut bytes, u32::from(world.planet_settings.is_some()));
+        if let Some(settings) = world.planet_settings {
+            for value in settings.values { push(&mut bytes, u32::from(value)); }
+            if save_version >= 69 { push(&mut bytes, settings.civilization.code()); }
+            if save_version >= 73 { push(&mut bytes, u32::from(settings.history_myr)); }
+        }
+    }
+    if save_version >= 52 { world.industry.encode_versioned(&mut bytes, save_version >= 67); }
+    if save_version >= 53 { super::orbital::habitat::persistence::encode(&world.orbital.habitats, &mut bytes); }
+    if save_version >= 57 {
+        let spawn = world.adventure.spawn_binding;
+        push(&mut bytes, u32::from(spawn.bed.is_some()) | (u32::from(spawn.arrival.is_some()) << 1));
+        if let Some(bed) = spawn.bed {
+            for value in bed.to_array() { push(&mut bytes, value as u32); }
+        }
+        if let Some(arrival) = spawn.arrival {
+            for value in arrival.to_array() { push(&mut bytes, value.to_bits()); }
+        }
+    }
+    if save_version >= 60 {
+        let block_data = super::block_data::sidecar::encode(&world.block_data);
+        push(&mut bytes, block_data.len() as u32);
+        bytes.extend_from_slice(&block_data);
+    }
+    if save_version >= 68 {
+        let mill = world.mill.map(|state| ron::to_string(&state).expect("serializable mill"));
+        push(&mut bytes, mill.as_ref().map_or(0, |text| text.len() as u32));
+        if let Some(text) = mill { bytes.extend_from_slice(text.as_bytes()); }
+    }
+    if save_version >= 71 {
+        for state in [super::farming::sidecar::encode(world), super::travel::sidecar::encode(&world.travel)] {
+            push(&mut bytes, state.len() as u32);
+            bytes.extend_from_slice(&state);
+        }
+    }
     bytes
 }
 fn manifest(
@@ -311,6 +507,10 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
     );
     let mut bytes = Vec::new();
     file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+    load_bytes(&bytes, slot)
+}
+
+fn load_bytes(bytes: &[u8], slot: &Path) -> Result<SavedSession> {
     ensure!(
         bytes.len() >= 16 && bytes.len() as u64 <= MAX_FILE_BYTES,
         "Invalid save size"
@@ -343,16 +543,40 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
     };
     let generator_version = if version_two { input.u32()? } else { 1 };
     ensure!(
-        (1..=super::CURRENT_GENERATOR_VERSION).contains(&generator_version),
+        (1..=super::CURRENT_GENERATOR_VERSION).contains(&generator_version)
+            || (engine_voxel::COASTAL_PLANET_GENERATOR..=engine_voxel::MOBILE_RIVERBED_GENERATOR).contains(&generator_version)
+            || generator_version == engine_voxel::CUSTOM_PLANET_VERSION
+            || generator_version == 137
+            || generator_version == engine_voxel::SEAMLESS_PLANET_GENERATOR
+            || generator_version == engine_voxel::HELL_ECOLOGY_GENERATOR
+            || generator_version == engine_voxel::HELL_RUINS_GENERATOR
+            || generator_version == engine_voxel::HELL_SURVEYED_RUINS_GENERATOR
+            || generator_version == engine_voxel::HELL_MIRROR_GENERATOR
+            || generator_version == engine_voxel::HELL_BIOME_GENERATOR
+            || (engine_voxel::PLANET_FREIGHT_GENERATOR..=engine_voxel::PLANET_FREIGHT_DETOUR_GENERATOR).contains(&generator_version)
+            || generator_version == engine_voxel::PLANET_GENERATOR_VERSION
+            || (engine_voxel::WATERSHED_EROSION_GENERATOR..=engine_voxel::BRANCHING_WATERSHEDS_GENERATOR).contains(&generator_version)
+            || generator_version == engine_voxel::LANDSCAPE_CYCLES_GENERATOR
+            || generator_version == engine_voxel::DEEP_TIME_GENERATOR
+            || generator_version == engine_voxel::FRACTAL_COAST_GENERATOR
+            || generator_version == engine_voxel::PROCESS_COAST_GENERATOR
+            || generator_version == engine_voxel::CLEAN_RIVERBED_GENERATOR
+            || generator_version == engine_voxel::GROUND_BREAK_GENERATOR
+            || generator_version == engine_voxel::LIVING_SURFACE_GENERATOR
+            || generator_version == engine_voxel::LOWLAND_RIVER_GENERATOR
+            || generator_version == engine_voxel::RIFT_VALLEY_GENERATOR
+            || generator_version == engine_voxel::DIKE_SWARM_GENERATOR
+            || generator_version == engine_voxel::CARVED_SURFACE_GENERATOR
+            || generator_version == engine_voxel::ROCK_RELIEF_GENERATOR
+            || generator_version == engine_voxel::FLOODPLAIN_MEANDER_GENERATOR
+            || generator_version == engine_worldgen::planetary::reference_relief::VERSION
+            || generator_version == engine_worldgen::manyfold::maze::TWISTED
+            // First tree-detail planet release stays readable as defaults advance.
+            || generator_version == 137,
         "Unsupported terrain generator version"
     );
     let seed = input.u32()?;
-    let kind = match input.u32()? {
-        0 => WorldType::Superflat,
-        1 => WorldType::Hills,
-        2 => WorldType::Ridged,
-        _ => anyhow::bail!("Invalid terrain type"),
-    };
+    let kind = u8::try_from(input.u32()?).ok().and_then(WorldType::from_code).context("Invalid terrain type")?;
     let scale = match input.u32()? {
         0 => VoxelScalePreset::OneMeter,
         1 => VoxelScalePreset::HalfMeter,
@@ -373,7 +597,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         player.precise_pos += residual.as_dvec3();
     }
     ensure!(
-        player.pos.abs().max_element() <= 1_000_000.0,
+        player.pos.abs().max_element() <= max_player_coordinate(kind, scale),
         "Player position exceeds supported range"
     );
     player.yaw = input.float()?.rem_euclid(std::f32::consts::TAU);
@@ -385,6 +609,13 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
     let length = input.float()?;
     ensure!((1.0..=86400.0).contains(&length), "Invalid day length");
     let mut day_night = DayNightCycle::new(time, length);
+    if kind == WorldType::Manyfold {
+        player.gravity_frame = glam::Quat::from_array([input.float()?, input.float()?, input.float()?, input.float()?]);
+        ensure!((player.gravity_frame.length_squared() - 1.0).abs() < 0.001, "Invalid upright frame");
+        world.manyfold_weight.position = Vec3::new(input.float()?, input.float()?, input.float()?);
+        world.manyfold_weight.velocity = Vec3::new(input.float()?, input.float()?, input.float()?);
+        ensure!(world.manyfold_weight.valid(), "Invalid Manyfold weight");
+    }
     player.flying = input.u32()? != 0;
     player.fly_mode = if input.u32()? == 0 {
         FlyMode::Creative
@@ -393,6 +624,23 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
     };
     day_night.day_index = input.u32()?;
     day_night.weather_seed = input.u32()?;
+    world.orbital.planet_tick = crate::planet::tick_of(&day_night);
+    if version >= 55 && world.sample_config().is_hell() {
+        let body = input.u32()?;
+        if body != 0 {
+            let body = engine_space::BodyId(u16::try_from(body)?);
+            let pos = glam::DVec3::new(f64::from(input.float()?), f64::from(input.float()?), f64::from(input.float()?));
+            let vel = glam::DVec3::new(f64::from(input.float()?), f64::from(input.float()?), f64::from(input.float()?));
+            let upright = glam::DQuat::from_xyzw(f64::from(input.float()?), f64::from(input.float()?),
+                f64::from(input.float()?), f64::from(input.float()?));
+            let a = crate::planet::influence::Anchor { body, pos, vel, upright };
+            ensure!(crate::planet::influence::valid_hell_anchor(&world, a), "Invalid Hell moon anchor");
+            crate::planet::influence::restore_hell_anchor(&world, &mut player, a);
+        }
+    }
+    if version >= 68 && kind == WorldType::Planet {
+        planet_actor::decode(&mut input, &mut player)?;
+    }
     let c = &mut day_night.cloud_controls;
     for target in [
         &mut c.coverage,
@@ -421,6 +669,11 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         *target = input.float()?;
     }
     day_night.cloud_controls = super::sanitize_cloud_controls(day_night.cloud_controls);
+    if version >= 49 {
+        player.traversal.fuel_seconds = input.float()?;
+        player.traversal.charge_fe = input.float()?;
+        ensure!(player.traversal.checkpoint_valid(), "Invalid saved traversal reservoirs");
+    }
     if version_three {
         let name_len = input.u32()? as usize;
         ensure!(
@@ -498,7 +751,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         }
         if version_four {
             let resources = if version >= 20 {
-                super::factory::RESOURCE_COUNT
+                super::factory::resources_in_save(version)
             } else if version_seven {
                 super::factory::LEGACY_RESOURCE_COUNT
             } else if version_six {
@@ -527,7 +780,29 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             world.factory = super::factory::Factory::decode(
                 &mut || input.u32(),
                 size,
-                if version >= 21 {
+                if version >= 67 {
+                    super::factory::FACTORY_FORMAT
+                } else if version >= 66 {
+                    20
+                } else if version >= 64 {
+                    19
+                } else if version >= 63 {
+                    18
+                } else if version >= 61 {
+                    17
+                } else if version >= 59 {
+                    16
+                } else if version >= 58 {
+                    15
+                } else if version >= 52 {
+                    14
+                } else if version >= 47 {
+                    13
+                } else if version >= 44 {
+                    12
+                } else if version >= 41 {
+                    11
+                } else if version >= 21 {
                     10
                 } else if version >= 20 {
                     9
@@ -554,7 +829,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             // player never loses access to something they already owned.
             if version >= 19 {
                 world.adventure.spell_log =
-                    super::adventure::Adventure::decode_spell_log(&mut || input.u32())?;
+                    super::adventure::Adventure::decode_spell_log(&mut || input.u32(), version >= 56)?;
             }
             if version >= 23 { world.adventure.decode_boss_series(&mut || input.u32())?; }
             if version >= 38 { world.adventure.decode_engines(&mut || input.u32())?; }
@@ -570,6 +845,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         }
         if version >= 24 {
             world.orbital = super::orbital::State::decode(&mut || input.u32(), version)?;
+            world.orbital.planet_tick = crate::planet::tick_of(&day_night);
         }
         if version >= 26 {
             world.habitats = super::habitats::State::decode(&mut || input.u32(), version)?;
@@ -587,6 +863,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
                 world.voxel_scale.meters(),
                 version,
             )?;
+            if version >= 44 { world.adventure.tool_bank = super::tool_workshop::decode(&mut || input.u32())?; }
             if version >= 16 {
                 let count = input.u32()?;
                 ensure!(count <= 1024, "Too many dropped stacks");
@@ -613,14 +890,106 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             if version >= 37 {
                 world.adventure.wildlife = super::adventure::wildlife::State::decode(&mut || input.u32())?;
             }
+            if version >= 40 {
+                let code = input.u32()?;
+                world.adventure.set_difficulty(super::adventure::difficulty::Difficulty::from_code(code));
+            }
+            if version >= 41 {
+                let adventure = &mut world.adventure;
+                for target in [&mut adventure.respawn_point, &mut adventure.last_death_pos] {
+                    let present = input.u32()?;
+                    ensure!(present <= 1, "Invalid recovery checkpoint flag");
+                    *target = if present == 1 {
+                        let point = Vec3::new(input.float()?, input.float()?, input.float()?);
+                        ensure!(point.abs().max_element() <= 1_000_000.0, "Recovery checkpoint out of range");
+                        Some(point)
+                    } else {
+                        None
+                    };
+                }
+            }
+            if version >= 42 { world.caches = super::containers::decode(&mut || input.u32(), &world.inventory)?; }
+            if version >= 46 {
+                let opened = input.u32()?;
+                ensure!(opened <= 1, "Invalid counterweight latch");
+                world.manyfold_weight.opened = opened != 0;
+            }
+            if version >= 51 {
+                let present = input.u32()?;
+                ensure!(present <= 1, "Invalid planet recipe flag");
+                if present != 0 {
+                    ensure!((kind == WorldType::Planet && generator_version >= engine_voxel::CUSTOM_PLANET_VERSION) || (kind == WorldType::Nether && matches!(generator_version, engine_voxel::HELL_MIRROR_GENERATOR | engine_voxel::HELL_BIOME_GENERATOR)), "Planet recipe on incompatible world");
+                    let mut settings = engine_voxel::PlanetSettings::default();
+                    for value in &mut settings.values {
+                        let raw = input.u32()?;
+                        ensure!(raw <= 100, "Planet recipe dial out of range");
+                        *value = raw as u8;
+                    }
+                    if version >= 69 {
+                        settings.civilization = engine_voxel::CivilizationMode::from_code(input.u32()?)
+                            .context("Invalid civilization mode")?;
+                    }
+                    if version >= 73 {
+                        settings.history_myr = u16::try_from(input.u32()?).ok()
+                            .filter(|myr| engine_voxel::PlanetSettings::valid_history(*myr))
+                            .context("Planet history length out of range")?;
+                    }
+                    world.planet_settings = Some(settings);
+                }
+            }
+            if version >= 52 { world.industry = super::industry::State::decode_versioned(&mut || input.u32(), version >= 67)?; }
+            if version >= 53 { world.orbital.habitats = super::orbital::habitat::persistence::decode(&mut || input.u32())?; }
+            if version >= 57 {
+                let flags = input.u32()?;
+                ensure!(flags <= 3, "Invalid Hell spawn flags");
+                if flags & 1 != 0 {
+                    let bed = IVec3::new(input.u32()? as i32, input.u32()? as i32, input.u32()? as i32);
+                    ensure!(bed.to_array().iter().all(|v| v.unsigned_abs() <= 1_000_000), "Hell bed out of range");
+                    world.adventure.spawn_binding.bed = Some(bed);
+                }
+                if flags & 2 != 0 {
+                    let arrival = Vec3::new(input.float()?, input.float()?, input.float()?);
+                    ensure!(arrival.abs().max_element() <= 1_000_000.0, "Hell arrival out of range");
+                    world.adventure.spawn_binding.arrival = Some(arrival);
+                }
+            }
+            if version >= 60 {
+                let length = input.u32()? as usize;
+                world.block_data = super::block_data::sidecar::decode(input.take(length)?)?;
+            }
+            if version >= 68 {
+                let length = input.u32()? as usize;
+                ensure!(length <= 512, "Oversized mill record");
+                if length != 0 {
+                    let state: super::mill::Mill = ron::de::from_bytes(input.take(length)?)?;
+                    ensure!(state.valid(&world), "Invalid mill record");
+                    world.mill = Some(state);
+                }
+            }
+            if version >= 71 {
+                let length = input.u32()? as usize;
+                ensure!(length <= 48 * 1024 * 1024, "Oversized resident checkpoint");
+                let (farming, herd) = super::farming::sidecar::decode(input.take(length)?)?;
+                let clock = farming.clock;
+                world.farming = farming;
+                super::farming::sidecar::apply_herd(&mut world, herd, clock)?;
+                let length = input.u32()? as usize;
+                ensure!(length <= 8 * 1024 * 1024, "Oversized travel checkpoint");
+                world.travel = super::travel::sidecar::decode(input.take(length)?)?;
+            }
             let bank = world.adventure.wand_bank.len();
             let inv = &world.inventory;
             ensure!(
-                inv.hotbar.iter().chain(inv.pack.iter()).chain(inv.craft_grid.iter()).chain(std::iter::once(&inv.cursor)).flatten().map(|s| s.item)
+                inv.hotbar.iter().chain(inv.pack.iter()).chain(inv.craft_grid.iter()).chain(std::iter::once(&inv.cursor)).chain(std::iter::once(&inv.offhand)).flatten().map(|s| s.item)
+                    .chain(world.caches.iter().flat_map(|c| c.slots.iter().flatten().map(|s| s.item)))
+                    .chain(world.orbital.habitats.cargo.stations.iter().filter_map(|s| s.shipment.as_ref())
+                        .flat_map(|q| q.items.iter().map(|s| s.item)))
                     .chain(inv.dropped.iter().map(|d| d.stack.item))
                     .all(|item| !matches!(item, super::inventory::Item::Wand { id, .. } if id as usize >= bank)),
                 "Wand item without a wand record"
             );
+            // The rules sidecar is loaded below; preserve the saved preset until then.
+            world.rules.stacks = world.inventory.balance;
             world.sync_from_inventory();
         } else {
             world.migrate_legacy_save_to_inventory();
@@ -628,9 +997,7 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
         if world.ensure_starter_wand() {
             // Pre-wand saves could load without any discoverable route to
             // spellcasting. Grant the same Lumen Twig a fresh world receives.
-            world.expedition.say(
-                "Lumen Twig attuned. Hold R to cast, T cycles spells, and E → Gear arranges the deck.",
-            );
+            world.expedition.say("Lumen Twig Added");
         }
         if version_nine {
             world.activity = super::activity::Activity::decode(&mut || input.u32(), version_ten)?;
@@ -653,10 +1020,18 @@ fn load_exact(path: &Path, slot: &Path) -> Result<SavedSession> {
             eprintln!("[rules] Using default rules: {e:#}");
             super::rules::Rules::default()
         });
-        super::farming::sidecar::load(&mut world, &root);
-        super::block_data::sidecar::load(&mut world.block_data, &root);
-        super::travel::sidecar::load(&mut world.travel, &root);
+        world.rules.systems.publish();
+        if version < 71 { super::farming::sidecar::load(&mut world, &root); }
+        if version < 60 {
+            super::block_data::sidecar::load(&mut world.block_data, &root);
+        }
+        if world.inventory.balance != world.rules.stacks { world.inventory.migrate_balance(world.rules.stacks); }
+        if version < 71 { super::travel::sidecar::load(&mut world.travel, &root); }
         super::progression::sidecar::load(&mut world, &root);
+        super::stats::sidecar::load(&mut world, &root);
+        super::goals::sidecar::load(&mut world.goals, &root);
+        super::portals::sidecar::load(&mut world, &root);
+        super::lightless_life::load(&mut world, &root);
         world.regions = super::regions::RegionStream::open(root, records);
         world.regions.view.ensure_owner()?;
         background::validate_extents(&world.regions.view)?;
@@ -903,6 +1278,7 @@ mod tests {
         let mut v17_bytes = Vec::with_capacity(512);
         let mut v17_header = session_header(&v17_world, &player, &day_night).unwrap();
         v17_header[..8].copy_from_slice(b"VXWSAV17");
+        v17_header.truncate(v17_header.len() - 8);
         v17_bytes.extend_from_slice(&v17_header);
         v17_bytes.extend_from_slice(&(region_name.len() as u32).to_le_bytes());
         v17_bytes.extend_from_slice(region_name);
@@ -930,6 +1306,7 @@ mod tests {
         let mut v12_bytes = Vec::with_capacity(512);
         let mut v12_header = session_header(&v12_world, &player, &day_night).unwrap();
         v12_header[..8].copy_from_slice(b"VXWSAV12");
+        v12_header.truncate(v12_header.len() - 8);
         v12_bytes.extend_from_slice(&v12_header);
         v12_bytes.extend_from_slice(&(region_name.len() as u32).to_le_bytes());
         v12_bytes.extend_from_slice(region_name);
@@ -981,8 +1358,8 @@ mod tests {
         let player = Player::new();
         let day_night = DayNightCycle::default();
         let mut bytes = Vec::with_capacity(512);
-        let mut header = session_header(world, &player, &day_night).unwrap();
-        header[..8].copy_from_slice(format!("VXWSAV{version:02}").as_bytes());
+        let mut header = session_identity(world, &player, &day_night, version).unwrap();
+        if version < 49 { header.truncate(header.len() - 8); }
         bytes.extend_from_slice(&header);
         let region_name = b"test-world";
         bytes.extend_from_slice(&(region_name.len() as u32).to_le_bytes());
@@ -997,23 +1374,6 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, &bytes).unwrap();
         path
-    }
-
-    #[test]
-    fn every_save_version_since_34_loads() {
-        let dir = std::env::temp_dir().join(format!("voxel_versions_since_34_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::HalfMeter, 3434);
-        world.adventure.begin_journey();
-        world.inventory.craft_grid[4] = Some(ItemStack::new(Item::Block(BlockId::Clay), 7));
-        for version in 34..=SAVE_VERSION {
-            let path = synth_save(&world, version, &dir, &format!("world_v{version}.dat"));
-            let loaded = load_exact(&path, &path).unwrap_or_else(|e| panic!("save version {version}: {e:#}"));
-            assert_eq!(loaded.world.seed, world.seed, "save version {version}");
-            assert_eq!(loaded.world.inventory.craft_grid[4].unwrap().count, 7, "save version {version}");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1040,6 +1400,30 @@ mod tests {
         let old = load_exact(&legacy, &legacy).unwrap();
         assert_eq!(old.world.adventure.spell_log, SpellLog::all());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn version_66_keeps_feathers_and_a_v65_layout_still_decodes() {
+        use crate::world::factory;
+        let dir = std::env::temp_dir().join(format!("voxel_v66_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let world = |feathers: u32| {
+            let mut w = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+            w.adventure.begin_journey();
+            w.expedition.resources[factory::GOLD_INGOT] = 2 * 64;
+            w.expedition.resources[factory::FEATHERS] = feathers * 64;
+            w.reconcile_legacy_to_inventory();
+            w
+        };
+        let current = synth_save(&world(3), SAVE_VERSION, &dir, "world_v66.dat");
+        let loaded = load_exact(&current, &current).unwrap();
+        assert_eq!(loaded.world.inventory.count_item(Item::Resource(factory::FEATHERS as u8)), 3);
+        let legacy = synth_save(&world(0), 65, &dir, "world_v65.dat");
+        let old = load_exact(&legacy, &legacy).unwrap();
+        assert_eq!(old.world.inventory.count_item(Item::Resource(factory::GOLD_INGOT as u8)), 2);
+        assert_eq!(old.world.inventory.count_item(Item::Resource(factory::FEATHERS as u8)), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1197,4 +1581,37 @@ mod tests {
         assert!(inv.hotbar.iter().chain(inv.pack.iter()).flatten().any(|s| matches!(s.item, Item::Wand { id: 0, .. })));
         std::fs::remove_dir_all(&dir).unwrap();
     }
+    #[test]
+    fn crop_items_round_trip_at_v48_and_a_v47_save_keeps_its_food() {
+        use super::super::inventory::FoodKind;
+        let dir = std::env::temp_dir().join(format!("voxel_v48_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut w = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        w.inventory = super::super::inventory::SurvivalInventory::empty();
+        w.inventory.pack[0] = Some(ItemStack::new(Item::Food(FoodKind::Bread), 5));
+        w.inventory.pack[1] = Some(ItemStack::new(Item::Block(BlockId::WheatCrop), 3));
+        w.inventory.pack[2] = Some(ItemStack::new(Item::Food(FoodKind::HarvestCake), 2));
+        w.inventory.pack[3] = Some(ItemStack::new(Item::Block(BlockId::CropShoot), 1));
+        let path = synth_save(&w, SAVE_VERSION, &dir, "world_v48.dat");
+        let back = load_exact(&path, &path).unwrap().world;
+        assert_eq!(back.inventory.pack[..4], w.inventory.pack[..4]);
+        let mut old = World::new(WorldType::Superflat, VoxelScalePreset::OneMeter);
+        old.inventory = super::super::inventory::SurvivalInventory::empty();
+        old.inventory.pack[0] = Some(ItemStack::new(Item::Food(FoodKind::RawFish), 4));
+        old.inventory.pack[1] = Some(ItemStack::new(Item::Block(BlockId::BambooShoot), 2));
+        let path = synth_save(&old, 47, &dir, "world_v47.dat");
+        let back = load_exact(&path, &path).unwrap().world;
+        assert_eq!(back.inventory.pack[..2], old.inventory.pack[..2]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
+
+#[cfg(test)]
+#[path = "storage/geology_cache_tests.rs"]
+mod geology_cache_tests;
+
+
+#[cfg(test)]
+#[path = "storage/relief_cache_tests.rs"]
+mod relief_cache_tests;

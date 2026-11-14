@@ -18,7 +18,7 @@ fn model_materials_keep_terrain_off_creatures_and_held_tools() {
         world.adventure.wand = 0;
         for weapon in [0, 5] {
             world.adventure.weapon = weapon;
-            let vertices = models::build(&world, &player, &DayNightCycle::new(0.5, 600.0), 0.001);
+            let vertices = models::build(&world, &player, &DayNightCycle::new(0.5, 600.0), 0.001, &crate::render::ChunkCache::new(IVec3::ZERO));
             assert!(!vertices.is_empty());
             for v in &vertices {
                 let family = v.surface[2].round() as u32 % 64;
@@ -26,9 +26,15 @@ fn model_materials_keep_terrain_off_creatures_and_held_tools() {
                     "terrain family {family} leaked into a model at {:?}", v.pos);
             }
             let held: Vec<_> = vertices.iter().filter(|v| v.surface[2] >= 262_144.0).collect();
-            assert!(held.iter().any(|v| v.surface[2] as u32 % 64 == 59), "missing metal head");
-            assert!(held.iter().any(|v| v.surface[2] as u32 % 64 == 54), "missing skin material");
-            assert!(held.iter().any(|v| v.surface[2] as u32 % 64 == models::AUTHORED_SURFACE as u32), "missing authored haft");
+            let has = |family: u32| held.iter().any(|v| v.surface[2] as u32 % 64 == family);
+            assert!(has(54), "missing skin material");
+            if weapon == 0 {
+                // An unarmed swing with an empty hand is a punch: no placeholder tool.
+                assert!(!has(59), "unarmed swing drew a tool head");
+            } else {
+                // Armed swings draw the voxel blade in the viewmodel material.
+                assert!(has(55), "missing blade material");
+            }
             models::recycle(vertices);
         }
     }

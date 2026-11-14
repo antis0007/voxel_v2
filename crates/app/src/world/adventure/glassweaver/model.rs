@@ -36,10 +36,23 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
     let hover = 0.05 * breath - crouch;
     // Four jointed legs: hip on the pelvis ring, a high knee, a needle foot.
     for (i, (x, z)) in [(-0.55, -0.45), (0.55, -0.45), (-0.6, 0.5), (0.6, 0.5)].into_iter().enumerate() {
-        let gait = (e.phase * 3.6 + i as f32 * 1.57).sin();
         let hip = at(x * 0.45, 1.05 + hover, z * 0.45);
-        let knee = at(x * 1.25, 1.45 + hover + gait.max(0.0) * 0.18, z * 1.2 + gait * 0.12);
-        let foot = at(x * 1.55, 0.02, z * 1.45 + gait * 0.22);
+        // Convert persistent world contacts into the unscaled body frame. The
+        // final body transform below restores the exact planted position.
+        let local = if s.motion.ready {
+            Quat::from_rotation_y(-e.yaw) * (s.motion.feet[i].at - e.pos) / boss_look::scale(e)
+        } else { motion::REST[i] };
+        let foot = e.pos + local;
+        let delta = foot - hip;
+        let length = delta.length().max(0.001);
+        let axis = delta / length;
+        let outward = Vec3::new(x, 0.65, z).normalize();
+        let bend = (outward - axis * outward.dot(axis)).normalize_or_zero();
+        let upper = 0.9_f32;
+        let lower = 1.15_f32;
+        let reach = length.clamp((lower-upper).abs()+0.001, upper+lower-0.001);
+        let along = (upper*upper - lower*lower + reach*reach) / (2.0*reach);
+        let knee = hip + axis * along + bend * (upper*upper-along*along).max(0.0).sqrt();
         m.beam(hip, knee, 0.075, shell, 0.0);
         m.beam(knee, foot, 0.05, shell, 0.0);
         m.cuboid(foot + Vec3::Y * 0.05, Vec3::new(0.09, 0.1, 0.09), Quat::from_rotation_y(0.78), glass, 0.4);
@@ -60,7 +73,7 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
     let chest = at(0.0, 1.05 + hover, 0.0);
     let up = |y: f32, z: f32| chest + tilt * Vec3::new(0.0, y, z);
     m.cuboid(up(0.35, 0.0), Vec3::new(0.38, 0.5, 0.3), tilt, shell, 0.0);
-    m.cuboid(up(0.8, -0.02), Vec3::new(0.5, 0.42, 0.34), tilt * Quat::from_rotation_y(0.78), glass, 0.25 + p.wind * 0.6);
+    m.material_box(up(0.8, -0.02), Vec3::new(0.5, 0.42, 0.34), tilt * Quat::from_rotation_y(0.78), glass, 56.0, 0.25 + p.wind * 0.6);
     m.orb(up(0.8, -0.2), 0.1, pal.core, 1.2 + p.wind * 2.0 + breath * 0.2);
     // Collar spines and the head: a tilted prism with a slit eye.
     for i in 0..5 {
@@ -69,7 +82,7 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
     }
     let head = up(1.35 + 0.03 * breath, -0.12);
     let nod = tilt * Quat::from_rotation_x(0.2 * p.wind) * Quat::from_rotation_z(0.78);
-    m.cuboid(head, Vec3::new(0.26, 0.26, 0.34), nod, glass, 0.35);
+    m.material_box(head, Vec3::new(0.26, 0.26, 0.34), nod, glass, 56.0, 0.35);
     m.cuboid(head + tilt * Vec3::new(0.0, 0.0, -0.17), Vec3::new(0.2, 0.035, 0.03), tilt, pal.core, 1.8 + p.wind * 2.0);
     // Arms: shoulder, elbow, a long glass needle per hand.
     for side in [-1.0f32, 1.0] {
@@ -112,6 +125,11 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
     m.scale_since(mark, e.pos, Vec3::splat(k));
     m.set_surface_kind(41.0);
     lattice(e, m, time, pal);
+    for shard in &s.motion.shards {
+        let fade = (shard.life / 0.6).clamp(0.0, 1.0);
+        m.material_box(shard.at, Vec3::new(0.10, 0.16, 0.07) * fade,
+            shard.rotation, pal.glass, 56.0, 0.0);
+    }
 }
 
 /// The lattice lives in the arena, not on the body: nodes, strands, the bolt
@@ -147,7 +165,7 @@ fn lattice(e: &Enemy, m: &mut Model, time: f32, pal: &Palette) {
             let mending = s.mend == Some(i as u8);
             let target = live.is_some_and(|(path, len)| path[len as usize - 1] as usize == i);
             let glow = 0.6 + life + if target { 1.5 + (time * 10.0).sin() } else { 0.0 };
-            m.cuboid(node.pos, Vec3::new(0.32, 0.62, 0.32) * (0.75 + 0.25 * life), spin * Quat::from_rotation_x(0.3), pal.glass, glow);
+            m.material_box(node.pos, Vec3::new(0.32, 0.62, 0.32) * (0.75 + 0.25 * life), spin * Quat::from_rotation_x(0.3), pal.glass, 56.0, glow * 0.18);
             m.cuboid(node.pos, Vec3::new(0.22, 0.22, 0.22), spin * Quat::from_rotation_z(0.78), pal.core, glow + 0.5);
             if mending {
                 m.beam(hands(e), node.pos, 0.02, pal.core, 2.0);

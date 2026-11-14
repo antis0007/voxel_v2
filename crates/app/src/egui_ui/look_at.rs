@@ -23,6 +23,8 @@ pub struct LookAt<'a> {
     /// Measured cell temperature, including ambient and frozen states.
     pub temperature_c: Option<f32>,
     pub volume_ul: Option<u64>,
+    pub water: Option<crate::world::water_tools::Reading>,
+    pub bucket_ul: Option<u32>,
     pub environment: Option<crate::world::environment::inspect::Inspection>,
     pub distance_m: Option<f32>,
     /// Control hint from `expedition::hint`, e.g. `F  Inspect   ·   E  Inventory`.
@@ -33,8 +35,17 @@ pub struct LookAt<'a> {
 
 /// Seconds the panel takes to settle when the target changes.
 const SETTLE: f64 = 0.12;
-const WIDTH: f32 = 236.0;
-const SMALL: f32 = 11.0;
+const WIDTH: f32 = 240.0;
+const SMALL: f32 = 13.0;
+
+fn scaled(ui: &egui::Ui, value: f32) -> f32 {
+    value * super::typography::inspector_scale(ui.ctx())
+}
+
+fn label_text(ui: &egui::Ui, value: impl Into<String>) -> RichText {
+    RichText::new(value).family(super::typography::inspector_family()).size(scaled(ui, SMALL))
+
+}
 
 pub fn draw(ctx: &egui::Context, look: &LookAt) {
     // Restart the fade-in whenever the target block changes.
@@ -49,23 +60,38 @@ pub fn draw(ctx: &egui::Context, look: &LookAt) {
         ((((now - since) / SETTLE) as f32).clamp(0.0, 1.0) * 4.0).floor() / 4.0
     };
 
-    egui::Area::new("target_name".into())
-        .anchor(Align2::CENTER_TOP, [0.0, 70.0 - (1.0 - appear) * 4.0])
+    // Below the compass when it shows; the rise-in stays a two-point step.
+    let slot = super::hud_layout::place(ctx, "look_at");
+    let shown = egui::Area::new(egui::Id::new("target_name"))
+        .anchor(slot.align, slot.offset - vec2(0.0, (1.0 - appear) * 2.0))
         .interactable(false)
         .show(ctx, |ui| {
             ui.set_opacity(appear);
             egui::Frame::new()
-                .fill(Color32::from_rgba_unmultiplied(22, 19, 23, 228))
-                .stroke(Stroke::new(1.0, EDGE))
-                .inner_margin(egui::Margin::symmetric(6, 4))
+                .fill(if super::themes::get(ctx) == 0 { Color32::from_rgba_unmultiplied(22, 19, 23, 228) }
+                    else { super::themes::current(ctx).panel })
+                .stroke(Stroke::new(1.0, if super::themes::get(ctx) == 0 { EDGE }
+                    else { super::themes::current(ctx).edge }))
+                .inner_margin(egui::Margin::symmetric(10, 8))
                 .show(ui, |ui| {
-                    ui.set_min_width(WIDTH);
-                    ui.set_max_width(WIDTH + 40.0);
-                    ui.spacing_mut().interact_size.y = 10.0;
-                    ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
+                    let width = scaled(ui, WIDTH).min((ctx.content_rect().width() - 32.0).max(80.0));
+                    ui.set_width(width);
+                    ui.spacing_mut().interact_size.y = scaled(ui, 16.0);
+                    ui.spacing_mut().item_spacing = vec2(scaled(ui, 10.0), scaled(ui, 5.0));
                     header(ui, look);
+                    if let Some(water) = look.water {
+                        let prefix = if water.partial || water.scanning { "≥ " } else { "≈ " };
+                        row(ui, "Pool", &format!("{prefix}{}", crate::world::water_tools::volume(water.ul)), MANA);
+                        if water.scanning { ui.label(label_text(ui, "Measuring").color(MUTED)); }
+                        else if water.partial { ui.label(label_text(ui, "Partial Volume").color(MUTED)); }
+                    }
+                    if let Some(amount) = look.bucket_ul {
+                        let shown = crate::world::water_tools::bucket_contents(amount);
+                        row(ui, "Bucket", &shown, MANA);
+                        keycap_row(ui, if matches!(look.block, BlockId::Water | BlockId::Lava | BlockId::SulfuricAcid) { "RMB  Scoop · Shift+RMB  Pour" } else { "RMB  Pour" });
+                    }
                     if let Some(environment) = look.environment {
-                        ui.label(RichText::new(environment.condition).small().color(AMBER));
+                        ui.label(label_text(ui, environment.condition).color(AMBER));
                         if ui.input(|i| i.modifiers.shift) {
                             row(ui, "Water", &format!("{:.3} L", environment.water_ul as f64 / 1_000_000.0), MANA);
                             if environment.sediment_mg > 0 {
@@ -73,20 +99,26 @@ pub fn draw(ctx: &egui::Context, look: &LookAt) {
                             }
                         }
                     }
+                    if let Some(e) = look.environment {
+                        if e.pollution_mg>0 {row(ui,"Pollution",&format!("{:.2} g",e.pollution_mg as f64/1000.0),AMBER);}
+                        for (i,c) in e.air.iter().enumerate().filter(|(_,v)|**v>=1.0) {row(ui,&crate::world::industry::config::CONFIG.species[i].name,&format!("{c:.1} mg/m³"),AMBER);}
+                    }
                     if let Some(probe) = look.machine {
                         ui.add_space(1.0);
                         machine(ui, probe);
                     }
-                    if ui.input(|i| i.modifiers.shift) && !look.hint.is_empty() {
+                    if ui.input(|i| i.modifiers.shift) && !look.hint.is_empty()
+                        && !crate::world::interaction::block_interactable(look.block) {
                         keycap_row(ui, look.hint);
                     }
                 });
         });
+    super::hud_layout::claim(ctx, "look_at", shown.response.rect);
 }
 
 fn header(ui: &mut egui::Ui, look: &LookAt) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(scaled(ui, 32.0), scaled(ui, 32.0)), Sense::hover());
         let painter = ui.painter();
         painter.rect_filled(rect, 0.0, Color32::from_rgb(16, 14, 17));
         let (sides, accent) = if look.temperature_c.is_some_and(|t| t > 300.0) {
@@ -96,8 +128,8 @@ fn header(ui: &mut egui::Ui, look: &LookAt) {
         } else {
             (6, JADE)
         };
-        super::sigils::draw(painter, rect.center(), 11.0, sides, accent);
-        super::draw_voxel_icon(painter, rect.shrink(3.0), look.block);
+        super::sigils::draw(painter, rect.center(), scaled(ui, 14.0), sides, accent);
+        super::draw_voxel_icon(painter, rect.shrink(scaled(ui, 4.0)), look.block);
         // One brief acquisition glint; a held target never keeps sparkling.
         let now = ui.ctx().input(|i| i.time);
         let since = ui.ctx().data(|d| d.get_temp::<(u32, f64)>(egui::Id::new("look_at_state")))
@@ -114,24 +146,23 @@ fn header(ui: &mut egui::Ui, look: &LookAt) {
         }
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let name = look
                     .machine
                     .and_then(|m| m.shell_of)
                     .map(|_| look.block.display_name())
                     .unwrap_or(look.block.display_name());
-                ui.label(RichText::new(name).size(12.0).strong().color(PAPER));
+                ui.label(label_text(ui, name).size(scaled(ui, 12.0)).color(PAPER));
                 if let Some(temp_c) = look.temperature_c {
                     let colour = if temp_c > 300.0 { DANGER } else { AMBER };
-                    ui.label(RichText::new(format!("{temp_c:.0}°C")).size(SMALL).color(colour));
+                    ui.label(label_text(ui, format!("{temp_c:.0}°C")).color(colour));
                 }
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
                 ui.label(
-                    RichText::new(crate::world::inventory::Item::Block(look.block).category())
-                        .size(SMALL)
-                        .italics()
+                    label_text(ui, crate::world::inventory::Item::Block(look.block).category())
+
                         .color(JADE),
                 );
                 facts(ui, look);
@@ -155,23 +186,23 @@ fn facts(ui: &mut egui::Ui, look: &LookAt) {
             MatterState::Vacuum => Some(("Vacuum", MUTED)),
         };
         if let Some((text, colour)) = state {
-            ui.label(RichText::new(text).size(SMALL).color(colour));
+            ui.label(label_text(ui, text).color(colour));
         }
         if (!solid || ui.input(|i| i.modifiers.shift))
             && let Some(volume) = look.volume_ul {
-                ui.label(RichText::new(format!("{:.3} L", volume as f64 / 1_000_000.0))
-                    .size(SMALL).color(MUTED));
+                ui.label(label_text(ui, format!("Cell: {}", crate::world::water_tools::volume(volume)))
+                    .color(MUTED));
             }
         if ui.input(|i| i.modifiers.shift)
             && material.physics.collision == CollisionKind::Passable && solid {
-            ui.label(RichText::new("Passable").size(SMALL).color(MUTED));
+            ui.label(label_text(ui, "Passable").color(MUTED));
         }
         if ui.input(|i| i.modifiers.shift) && solid && material.physics.hardness > 0.0 {
             hardness_pips(ui, material.physics.hardness);
         }
     }
     if let Some(distance) = look.distance_m.filter(|_| ui.input(|i| i.modifiers.shift)) {
-        ui.label(RichText::new(format!("{distance:.1} m")).size(SMALL).color(MUTED));
+        ui.label(label_text(ui, format!("{distance:.1} m")).color(MUTED));
     }
 }
 
@@ -189,18 +220,18 @@ fn hardness_pips(ui: &mut egui::Ui, hardness: f32) {
 /// `label ........ value` on one line.
 fn row(ui: &mut egui::Ui, label: &str, value: &str, colour: Color32) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(SMALL).color(MUTED));
+        ui.label(label_text(ui, label).color(MUTED));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(value).size(SMALL).monospace().color(colour));
+            ui.label(label_text(ui, value).color(colour));
         });
     });
 }
 
 /// A thin bar with its caption drawn inside.
 fn bar(ui: &mut egui::Ui, fraction: f32, colour: Color32, caption: &str) {
-    let width = ui.available_width().max(WIDTH);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 11.0), Sense::hover());
-    let p = ui.painter();
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, scaled(ui, 32.0)), Sense::hover());
+    let p = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     p.rect_filled(rect, 0.0, Color32::from_rgb(14, 12, 16));
     let mut fill = rect;
     fill.set_width(rect.width() * fraction.clamp(0.0, 1.0));
@@ -210,7 +241,7 @@ fn bar(ui: &mut egui::Ui, fraction: f32, colour: Color32, caption: &str) {
         rect.left_center() + vec2(3.0, 0.0),
         Align2::LEFT_CENTER,
         caption,
-        FontId::monospace(10.0),
+        FontId::new(scaled(ui, SMALL), super::typography::inspector_family()),
         PAPER,
     );
 }
@@ -222,16 +253,16 @@ fn stacks(ui: &mut egui::Ui, label: &str, items: &[(usize, u32)]) {
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        ui.label(RichText::new(label).size(SMALL).color(MUTED));
+        ui.label(label_text(ui, label).color(MUTED));
         for &(i, n) in items.iter().take(5) {
-            let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            let (r, _) = ui.allocate_exact_size(vec2(scaled(ui, 18.0), scaled(ui, 18.0)), Sense::hover());
             icons::paint(ui.painter(), r, Icon::Resource(i));
             let count = if n % 64 == 0 {
                 format!("{}", n / 64)
             } else {
                 format!("{:.2}", n as f32 / 64.0)
             };
-            ui.label(RichText::new(count).size(11.0).monospace().color(PAPER))
+            ui.label(label_text(ui, count).color(PAPER))
                 .on_hover_text(NAMES[i]);
         }
     });
@@ -259,14 +290,14 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
         let (dot, _) = ui.allocate_exact_size(vec2(7.0, 10.0), Sense::hover());
         ui.painter().circle_filled(dot.center(), 3.0, colour);
         let status = if n.enabled { super::factory::status_label(n.status) } else { "Paused" };
-        ui.label(RichText::new(status).size(11.0).strong().color(colour));
+        ui.label(label_text(ui, status).strong().color(colour));
         if n.upgrade > 0 {
             let tier = if n.kind == Kind::Battery {
                 power::battery_tier_name(n.upgrade).to_string()
             } else {
                 format!("Drive ×{}", n.upgrade + 1)
             };
-            ui.label(RichText::new(tier).size(SMALL).color(MANA));
+            ui.label(label_text(ui, tier).color(MANA));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if n.flow != 0 {
@@ -275,7 +306,7 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
                 } else {
                     (format!("−{}", power::fmt_power(-n.flow as f64)), AMBER)
                 };
-                ui.label(RichText::new(text).size(SMALL).monospace().color(colour));
+                ui.label(label_text(ui, text).color(colour));
             }
         });
     });
@@ -283,7 +314,7 @@ fn machine(ui: &mut egui::Ui, probe: &Probe) {
         ui.horizontal(|ui| {
             let (art, _) = ui.allocate_exact_size(vec2(15.0, 12.0), Sense::hover());
             super::chip_art::package(ui.painter(), art, MANA);
-            ui.label(RichText::new(controller).size(SMALL).color(MANA));
+            ui.label(label_text(ui, controller).color(MANA));
         });
     }
     if !ui.input(|i| i.modifiers.shift) {
@@ -545,7 +576,7 @@ fn keycap_row(ui: &mut egui::Ui, hint: &str) {
         for segment in hint.split('·').map(str::trim).filter(|s| !s.is_empty()) {
             if let Some((key, action)) = segment.split_once("  ") {
                 keycap(ui, key.trim());
-                ui.label(RichText::new(action.trim()).size(SMALL).color(PAPER));
+                ui.label(label_text(ui, action.trim()).color(PAPER));
             }
         }
     });
@@ -557,6 +588,6 @@ fn keycap(ui: &mut egui::Ui, key: &str) {
         .stroke(Stroke::new(1.0, EDGE))
         .inner_margin(egui::Margin::symmetric(3, 0))
         .show(ui, |ui| {
-            ui.label(RichText::new(format!("[{}]", crate::keybinds::rebound_label(key))).size(SMALL).strong().color(PAPER));
+            ui.label(label_text(ui, format!("[{}]", crate::keybinds::rebound_label(key))).strong().color(PAPER));
         });
 }

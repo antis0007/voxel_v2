@@ -43,6 +43,16 @@ pub(super) fn wear_bar(painter: &egui::Painter, rect: Rect, addr: SlotAddr) {
     painter.rect_filled(fill, 0, color);
 }
 
+pub(super) fn assembled_bar(painter:&egui::Painter,rect:Rect,tool:&engine_tools::ToolAssembly) {
+    let Ok(stats)=tool.stats() else{return;};
+    if tool.durability_left>=stats.durability {return;}
+    let frac=tool.durability_left as f32/stats.durability as f32;
+    let back=Rect::from_min_size(egui::pos2(rect.left()+2.0,rect.bottom()-3.0),vec2((rect.width()-4.0).max(1.0),3.0));
+    painter.rect_filled(back,0,Color32::BLACK);
+    let fill=Rect::from_min_size(back.min,vec2(back.width()*frac,2.0));
+    painter.rect_filled(fill,0,Color32::from_rgb((230.0*(1.0-frac))as u8,(210.0*frac)as u8,52));
+}
+
 /// `Durability: N / M` for the tooltip of a durable stack.
 pub(super) fn durability_line(ui: &mut egui::Ui, addr: SlotAddr) {
     if let Some((left, max)) = durability(ui.ctx(), addr) {
@@ -83,6 +93,10 @@ fn color(kind: Kind) -> Color32 {
         Kind::Weakness => Color32::from_rgb(72, 77, 72),
         Kind::Poison => Color32::from_rgb(78, 147, 49),
         Kind::FireResistance => Color32::from_rgb(228, 154, 58),
+        Kind::Resistance => Color32::from_rgb(168, 121, 99),
+        Kind::Absorption => Color32::from_rgb(235, 199, 70),
+        Kind::Haste => Color32::from_rgb(218, 190, 86),
+        Kind::JumpBoost => Color32::from_rgb(100, 199, 98),
     }
 }
 
@@ -90,35 +104,79 @@ fn roman(level: u8) -> &'static str {
     ["", "", " II", " III", " IV", " V"].get(level as usize).copied().unwrap_or("")
 }
 
-/// Active effects as badges with seconds left, top right.
-pub(super) fn effects(ctx: &egui::Context) {
-    let Some(view) = view(ctx) else { return };
-    if view.effects.is_empty() {
-        return;
+const BADGE: f32 = 26.0;
+/// Seconds left when a badge starts to blink.
+const EXPIRING_S: f32 = 5.0;
+
+/// Whether `kind` is active this frame.
+pub(super) fn active(ctx: &egui::Context, kind: Kind) -> bool {
+    view(ctx).is_some_and(|v| v.effects.iter().any(|a| a.kind == kind))
+}
+
+/// `45s`, `3m`: whole units, minutes once past ninety seconds.
+fn remaining(seconds: f32) -> String {
+    if seconds > 90.0 { format!("{:.0}m", (seconds / 60.0).round()) } else { format!("{:.0}s", seconds.ceil()) }
+}
+
+/// Effect badges in one row just above `vitals`: buffs first, then debuffs,
+/// each with a sweep for time spent. `mana_poison` is the zone multiplier
+/// while mana poisoning bites. Returns the row's rect when anything drew.
+pub(super) fn effect_bar(ctx: &egui::Context, vitals: Rect, mana_poison: Option<f32>, interactable: bool) -> Option<Rect> {
+    let view = view(ctx);
+    let mut list: Vec<_> = view.iter().flat_map(|v| v.effects.iter().copied()).collect();
+    list.sort_by_key(|a| (a.kind.harmful(), a.kind as u8));
+    if list.is_empty() && mana_poison.is_none() {
+        return None;
     }
-    egui::Area::new("status_effects".into())
-        .anchor(Align2::RIGHT_TOP, [-12.0, 12.0])
-        .interactable(true)
+    let time = ctx.input(|i| i.time as f32);
+    let still = super::magic_fx::reduced(ctx);
+    let label_h = 11.0;
+    let top = vitals.top() - 6.0 - BADGE - label_h;
+    let area = egui::Area::new(egui::Id::new("status_effects"))
+        .fixed_pos(egui::pos2(vitals.left(), top))
+        .interactable(interactable)
         .show(ctx, |ui| {
+            ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
             ui.horizontal(|ui| {
-                for a in &view.effects {
-                    let (rect, response) = ui.allocate_exact_size(vec2(36.0, 30.0), egui::Sense::hover());
-                    let painter = ui.painter();
-                    let badge = Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 8.0), vec2(14.0, 14.0));
-                    painter.rect_filled(badge.expand(1.0), 0, style::INK);
-                    painter.rect_filled(badge, 0, color(a.kind));
-                    if a.kind.harmful() {
-                        painter.rect_filled(badge.shrink(4.0), 0, style::INK);
-                    }
-                    painter.text(
-                        egui::pos2(rect.center().x, rect.bottom()),
-                        Align2::CENTER_BOTTOM,
-                        format!("{:.0}s", a.seconds.ceil()),
-                        FontId::monospace(10.0),
-                        style::PAPER,
-                    );
-                    response.on_hover_text(format!("{}{}", a.kind.name(), roman(a.level)));
+                for a in &list {
+                    let total = a.total.max(a.seconds).max(0.001);
+                    let blink = !still && a.seconds < EXPIRING_S && (time * 3.0).fract() < 0.5;
+                    let id = a.kind as usize;
+                    let rim = if a.kind.harmful() { style::DANGER } else { color(a.kind) };
+                    let response = badge(ui, id, rim, Some(1.0 - a.seconds / total), &remaining(a.seconds), a.level, blink);
+                    response.on_hover_text(format!("{}{} · {}", a.kind.name(), roman(a.level), remaining(a.seconds)));
+                }
+                if let Some(m) = mana_poison {
+                    let id = super::icons::sprites16::MANA_POISONING;
+                    let response = badge(ui, id, style::DANGER, None, &format!("{m:.1}x"), 1, false);
+                    response.on_hover_text(format!("Mana poisoning · {m:.1}x"));
                 }
             });
         });
+    Some(area.response.rect)
+}
+
+/// One badge: chamfered plate, icon, time sweep, level and the label below.
+fn badge(ui: &mut egui::Ui, id: usize, rim: Color32, spent: Option<f32>, label: &str, level: u8, blink: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(BADGE, BADGE + 11.0), egui::Sense::hover());
+    let tile = Rect::from_min_size(rect.min, vec2(BADGE, BADGE));
+    let p = ui.painter();
+    p.add(super::hud_style::plate(ui.ctx(), tile, rim));
+    super::icons::sprites16::paint_effect(p, tile.shrink(4.0), id);
+    if let Some(spent) = spent {
+        super::hud_style::sweep(p, tile.shrink(3.0), spent.clamp(0.0, 1.0));
+    }
+    if blink {
+        p.rect_filled(tile.shrink(2.0), 0, Color32::from_black_alpha(110));
+    }
+    if level > 1 {
+        let at = tile.right_top() + vec2(-2.0, 1.0);
+        let text = roman(level).trim();
+        p.text(at + vec2(1.0, 1.0), Align2::RIGHT_TOP, text, FontId::monospace(9.0), style::INK);
+        p.text(at, Align2::RIGHT_TOP, text, FontId::monospace(9.0), style::PAPER);
+    }
+    let foot = egui::pos2(tile.center().x, rect.bottom());
+    p.text(foot + vec2(1.0, 1.0), Align2::CENTER_BOTTOM, label, FontId::monospace(10.0), style::INK);
+    p.text(foot, Align2::CENTER_BOTTOM, label, FontId::monospace(10.0), style::PAPER);
+    response
 }

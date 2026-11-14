@@ -14,6 +14,7 @@ use glam::{IVec3, Vec3};
 use std::sync::Arc;
 
 mod overlay;
+pub(crate) use overlay::box_edges;
 
 /// Solid cells above this draw only the paste box, not the silhouette.
 const GHOST_CELLS: usize = 32_768;
@@ -42,6 +43,8 @@ pub struct BlueprintTool {
     clipboard: Option<Arc<Blueprint>>,
     ghost: Vec<[Vec3; 2]>,
     armed: bool,
+    settler_build: bool,
+    survival_selection: bool,
     origin: Option<IVec3>,
     pub paste_air: bool,
     work: Option<Work>,
@@ -57,6 +60,8 @@ impl Default for BlueprintTool {
             clipboard: None,
             ghost: Vec::new(),
             armed: false,
+            settler_build: false,
+            survival_selection: false,
             origin: None,
             paste_air: true,
             work: None,
@@ -101,7 +106,14 @@ impl BlueprintTool {
 
     /// Drops an armed paste preview; true when one was armed.
     pub fn cancel_paste(&mut self) -> bool {
+        self.settler_build = false;
         std::mem::take(&mut self.armed)
+    }
+
+    pub fn arm_settler_build(&mut self) {
+        self.settler_build = true;
+        self.armed = true;
+        self.origin = None;
     }
 
     /// Runs queued presses, then advances any copy or write within `budget`.
@@ -111,8 +123,9 @@ impl BlueprintTool {
             self.work = None;
             self.corners = None;
         }
-        if creative.locked() || network {
+        if (creative.locked() && !self.settler_build) || network {
             self.armed = false;
+            self.settler_build = false;
         }
         for action in std::mem::take(&mut self.queued) {
             if let Some(message) = self.command(action, world, creative, target, network) {
@@ -128,7 +141,7 @@ impl BlueprintTool {
         }
     }
 
-    fn command(&mut self, action: Action, world: &World, creative: &mut CreativeState, target: RaycastTarget, network: bool) -> Option<String> {
+    fn command(&mut self, action: Action, world: &mut World, creative: &mut CreativeState, target: RaycastTarget, network: bool) -> Option<String> {
         let busy = self.work.is_some();
         let writes_refused = || {
             if creative.locked() {
@@ -141,9 +154,7 @@ impl BlueprintTool {
         };
         match action {
             Action::BlueprintCorner => {
-                if !creative.choose_tool(ToolKind::AreaTool) {
-                    return Some("Blueprints: Creative Only".into());
-                }
+                self.survival_selection = !creative.choose_tool(ToolKind::AreaTool);
                 let cell = target.hit.or(target.place)?;
                 let corners = match self.corners {
                     Some((a, _)) if self.second_corner_next => (a, cell),
@@ -167,9 +178,26 @@ impl BlueprintTool {
                     return Some(format!("Selection Too Large: {} / {} Cells", region.volume(), blueprint::MAX_VOLUME));
                 };
                 self.work = Some(Work::Copy { capture, cut });
+                self.survival_selection = false;
                 None
             }
             Action::BlueprintPaste => {
+                if !network && (self.settler_build || creative.locked()) {
+                    let Some(bp) = self.clipboard.as_ref() else { return Some("Clipboard Empty".into()) };
+                    if !self.armed || !self.settler_build {
+                        self.arm_settler_build();
+                        return Some("Aim, then press Paste to queue the build".into());
+                    }
+                    let cell = target.place.or(target.hit)?;
+                    let origin = blueprint::origin_at(cell, bp.size());
+                    return Some(match crate::world::farming::jobs::queue_blueprint(world, bp, origin) {
+                        Ok(count) => {
+                            self.cancel_paste();
+                            format!("Build orders queued: {count}")
+                        }
+                        Err(reason) => reason.into(),
+                    });
+                }
                 if let Some(refused) = writes_refused() {
                     return Some(refused);
                 }

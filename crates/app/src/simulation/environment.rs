@@ -22,6 +22,8 @@ mod roots;
 mod sediment;
 mod soil;
 #[cfg(test)]
+mod admission_tests;
+#[cfg(test)]
 mod tests;
 const EVENTS_PER_SERVICE: usize = 512;
 
@@ -38,61 +40,75 @@ pub(super) fn update(
     }
     world.environment.fixed_steps += 1;
     world.environment.target_tick = world.environment.fixed_steps / 120;
+    // One unavailable sky chunk used to stop this loop, and `tick` only moved
+    // once that event finished. After a dig the overlay then sat hundreds of
+    // seconds behind while every other patch waited on the same ray.
+    world.environment.tick = world.environment.target_tick;
     // A bounded contact probe, independent of view direction or render LOD.
     // Ordinary edits and fluid transfers supply the rest of the frontier.
     if world.environment.fixed_steps.is_multiple_of(120) {
         world.environment.wake(player - IVec3::Y);
     }
+    let mut retry = Vec::new();
     for _ in 0..EVENTS_PER_SERVICE {
         if !budget.has_time() {
             break;
         }
-        let next = world.environment.tick + 1;
-        if next > world.environment.target_tick {
+        let mut trace=crate::gameplay_trace::Trace::new();
+        let now = world.environment.tick;
+        let Some((due, key)) = world.environment.due.first().copied().filter(|(due, _)| *due <= now) else {
             break;
-        }
-        let Some((due, p)) = world.environment.due.first().copied().filter(|(due, _)| *due <= next) else {
-            world.environment.tick = world
-                .environment
-                .target_tick
-                .min(world.environment.due.first().map_or(world.environment.target_tick, |(due, _)| due - 1));
-            continue;
         };
-        let p = env::position(p);
+        let p = env::position(key);
         let cfg = world.sample_config();
         if p.y < cfg.min_world_y() || p.y >= cfg.max_world_y() {
-            world.environment.complete_event(due, env::key(p));
+            world.environment.complete_event(due, key);
             continue;
         }
         let owner = world.environment.owner(p);
         let extent = world.environment.patches.get(&owner).map_or(1, |p| p.extent);
-        let positions: Vec<_> = std::iter::once(p)
-            .chain(env::faces(env::position(owner), extent).into_iter().map(|(q, _)| q))
-            .chain((1..world.environment.cells_per_metre).map(|depth| p - IVec3::Y * depth))
-            .filter(|q| q.y >= cfg.min_world_y() && q.y < cfg.max_world_y())
-            .collect();
+        let mut positions = std::mem::take(&mut world.environment.source_positions);
+        positions.clear();
+        positions.push(p);
+        env::append_face_positions(env::position(owner), extent, &mut positions);
+        positions.extend((1..world.environment.cells_per_metre).map(|depth| p - IVec3::Y * depth));
+        positions.retain(|q| q.y >= cfg.min_world_y() && q.y < cfg.max_world_y());
         let mut ready = true;
         for &q in &positions {
-            ready &= sources.request_for(world, chunk(q), chunk(p));
+            ready &= sources.request_environment(world, chunk(q), chunk(p));
         }
         if !ready || !sources.prepare(world, &positions) {
             world.environment.blocked += 1;
-            break; // Keep exact order and the entire pending event.
+            world.environment.source_positions = positions;
+            world.environment.complete_event(due, key);
+            retry.push((due, key));
+            continue;
         }
+        trace.mark("environment-sources");
         if !light::prepare(world, sources, p) {
             world.environment.blocked += 1;
-            break;
+            world.environment.source_positions = positions;
+            world.environment.complete_event(due, key);
+            retry.push((due, key));
+            continue;
         }
-        world.environment.event_tick = Some(next);
-        let soil_repeat = soil::process(world, p, next, blocks, chunks);
+        trace.mark("environment-light");
+        world.environment.source_positions = positions;
+        world.environment.event_tick = Some(now);
+        let soil_repeat = soil::process(world, p, now, blocks, chunks);
+        trace.mark("environment-soil");
         let sediment_repeat = sediment::process(world, p, blocks, chunks);
+        trace.mark("environment-sediment");
         world.environment.event_tick = None;
-        world.environment.complete_event(due, env::key(p));
+        world.environment.complete_event(due, key);
         if soil_repeat || sediment_repeat {
             let owner = world.environment.owner(p);
             let delay = if sediment_repeat { 1 } else { soil::interval(world, p) };
-            world.environment.schedule(owner, next + delay);
+            world.environment.schedule(owner, now + delay);
         }
+    }
+    for (due, key) in retry {
+        world.environment.schedule(key, due);
     }
     prune::sweep(world, player);
 }

@@ -16,15 +16,16 @@ fn config() -> crate::world::WorldSampleConfig {
 #[test]
 fn submerged_volume_optics_and_tessellation_are_invariant_but_free_surfaces_change() {
     let never = AtomicBool::new(false);
-    let mesh_of = |source: &GeneratedChunk| MeshPlan::for_chunk(source, &never).unwrap().build_lod(source, 0);
+    let mesh_of = |source: &GeneratedChunk| MeshPlan::for_chunk(source, &never, 0).unwrap().build_lod(source, 0);
     let bytes = |mesh: &ChunkMesh| bytemuck::cast_slice::<Vertex3, u8>(&mesh.vertices).to_vec();
     for scale in [1.0, 0.5, 0.25] {
         let mut source = GeneratedChunk {
-            voxel_meters: scale, water_levels: Default::default(), water_deficit: Default::default(), chunk: IVec3::new(-1, 0, -1),
+            voxel_meters: scale, generator_version: 0, flora_config: None, manyfold_shell: false, water_levels: Default::default(), water_deficit: Default::default(), water_motion: Default::default(), chunk: IVec3::new(-1, 0, -1),
             blocks: vec![BlockId::Air; (PADDED_CHUNK_SIZE as usize).pow(3)],
             sky_ceiling: vec![0; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
             bed_height: vec![0; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
             bed_frac: Vec::new(),
+            trees: Vec::new(),
         };
         for z in -28..-4 { for x in -28..-4 { for y in 0..=6 {
             source.set_world(IVec3::new(x,y,z), if y==0 {BlockId::Sand} else {BlockId::Water});
@@ -91,7 +92,7 @@ fn shared_border_vertices_agree_on_packed_water_data() {
     let never = AtomicBool::new(false);
     let mesh_of = |cx: i32| {
         let chunk = crate::world::generate_padded(&cfg, IVec3::new(cx, 0, 0), &never).unwrap();
-        MeshPlan::for_chunk(&chunk, &never)
+        MeshPlan::for_chunk(&chunk, &never, 0)
             .unwrap()
             .build_lod(&chunk, 0)
     };
@@ -141,13 +142,16 @@ fn all_lods_preserve_free_water_level_area_and_optics() {
                 let row = chunk_y * CHUNK_SIZE + 12;
                 let mut chunk = GeneratedChunk {
                     voxel_meters: scale,
+                    generator_version: 0, flora_config: None, manyfold_shell: false,
                     water_levels: HashMap::new(),
                     water_deficit: HashMap::new(),
+                    water_motion: Default::default(),
                     chunk: coord,
                     blocks: vec![BlockId::Air; (PADDED_CHUNK_SIZE as usize).pow(3)],
                     sky_ceiling: vec![bed; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
                     bed_height: vec![bed; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
                     bed_frac: Vec::new(),
+                    trees: Vec::new(),
                 };
                 let origin = chunk.origin();
                 for y in 0..PADDED_CHUNK_SIZE {
@@ -168,7 +172,7 @@ fn all_lods_preserve_free_water_level_area_and_optics() {
                         }
                     }
                 }
-                let fine = MeshPlan::for_chunk(&chunk, &never)
+                let fine = MeshPlan::for_chunk(&chunk, &never, 0)
                     .unwrap()
                     .build_lod(&chunk, 0);
                 let key = |p: [f32; 3]| p.map(f32::to_bits);
@@ -240,13 +244,15 @@ fn all_lods_preserve_free_water_level_area_and_optics() {
 fn exact_water_budget_covers_fragmented_partial_surfaces() {
     let mut chunk = GeneratedChunk {
         voxel_meters: 1.0,
+        generator_version: 0, flora_config: None, manyfold_shell: false,
         water_levels: Default::default(),
-        water_deficit: Default::default(),
+        water_deficit: Default::default(), water_motion: Default::default(),
         chunk: IVec3::ZERO,
         blocks: vec![BlockId::Air; (PADDED_CHUNK_SIZE as usize).pow(3)],
         sky_ceiling: Vec::new(),
         bed_height: Vec::new(),
         bed_frac: Vec::new(),
+        trees: Vec::new(),
     };
     for y in 0..PADDED_CHUNK_SIZE {
         for z in 0..PADDED_CHUNK_SIZE {

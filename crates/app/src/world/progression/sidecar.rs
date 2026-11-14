@@ -8,7 +8,7 @@ use anyhow::{Context, Result, ensure};
 use std::path::Path;
 
 pub const FILE: &str = "progression.vxp";
-const MAGIC: &[u8; 8] = b"VXPRG001";
+const MAGIC: &[u8; 8] = b"VXPRG004";
 const MAX_ENTRIES: usize = 64;
 
 fn hash(b: &[u8]) -> u64 {
@@ -42,6 +42,8 @@ impl<'a> Reader<'a> {
 pub fn encode(state: &State, inv: &crate::world::inventory::SurvivalInventory) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.extend_from_slice(&state.xp.to_le_bytes());
+    out.extend_from_slice(&state.lore.to_le_bytes());
+    out.extend_from_slice(&[state.lessons, u8::from(state.horticulture)]);
     out.extend_from_slice(&state.saturation.to_bits().to_le_bytes());
     let effects: Vec<_> = state.effects.list.iter().take(Kind::ALL.len()).collect();
     out.push(effects.len() as u8);
@@ -74,17 +76,36 @@ fn inv_item(inv: &crate::world::inventory::SurvivalInventory, slot: Slot) -> Opt
         Slot::Hotbar(i) => inv.hotbar.get(i as usize).copied().flatten(),
         Slot::Pack(i) => inv.pack.get(i as usize).copied().flatten(),
         Slot::Equipment(i) => inv.equipment.get(i as usize).copied().flatten(),
+        Slot::Offhand => inv.offhand,
         Slot::Cursor => inv.cursor,
+        Slot::CraftGrid(i) => inv.craft_grid.get(i as usize).copied().flatten(),
     }
     .map(|s| s.item)
 }
 
 pub fn decode(bytes: &[u8]) -> Result<State> {
-    ensure!(bytes.len() >= 26 && bytes.get(..8) == Some(MAGIC.as_slice()), "Unsupported progression file");
+    let current = bytes.get(..8) == Some(MAGIC.as_slice());
+    let ranked_study = bytes.get(..8) == Some(b"VXPRG003");
+    let has_lore = current || ranked_study || bytes.get(..8) == Some(b"VXPRG002");
+    ensure!(bytes.len() >= 26 && (has_lore || bytes.get(..8) == Some(b"VXPRG001")), "Unsupported progression file");
     let end = bytes.len() - 8;
     ensure!(hash(&bytes[..end]) == u64::from_le_bytes(bytes[end..].try_into()?), "Progression file checksum mismatch");
     let mut r = Reader { bytes: &bytes[..end], at: 8 };
     let mut state = State { xp: r.u32()?, ..State::default() };
+    if has_lore { state.lore = r.u32()? & (super::super::adventure::chronicle::MASK | super::thresholds::Milestone::MASK); }
+    if current || ranked_study {
+        let study = r.u8()?;
+        state.lessons = if ranked_study {
+            ensure!(study <= super::study::LEGACY_MAX_AFFINITY, "Invalid magic affinity");
+            (1 << study) - 1
+        } else {
+            ensure!(study & !super::study::LESSON_MASK == 0, "Invalid study lessons");
+            study
+        };
+        let horticulture = r.u8()?;
+        ensure!(horticulture <= 1, "Invalid horticulture study");
+        state.horticulture = horticulture == 1;
+    }
     let saturation = r.f32()?;
     ensure!(saturation.is_finite() && (0.0..=100.0).contains(&saturation), "Invalid saturation");
     state.saturation = saturation;
@@ -97,7 +118,7 @@ pub fn decode(bytes: &[u8]) -> Result<State> {
         ensure!((1..=MAX_LEVEL).contains(&level), "Invalid effect level");
         ensure!(seconds.is_finite() && seconds > 0.0 && seconds <= MAX_SECONDS, "Invalid effect time");
         ensure!(state.effects.level(kind) == 0, "Duplicate effect");
-        state.effects.list.push(Active { kind, seconds, level });
+        state.effects.list.push(Active { kind, seconds, level, total: seconds });
     }
     let count = r.u8()? as usize;
     ensure!(count <= MAX_ENTRIES, "Too many wear entries");
@@ -117,7 +138,10 @@ pub fn load(world: &mut crate::world::World, dir: &Path) {
     let path = dir.join(FILE);
     let Ok(bytes) = std::fs::read(&path) else { return };
     match decode(&bytes) {
-        Ok(state) => world.progression = state,
+        Ok(state) => {
+            world.progression = state;
+            super::study::restore_spells(world);
+        }
         Err(e) => eprintln!("[progression] Ignoring {}: {e:#}", path.display()),
     }
 }

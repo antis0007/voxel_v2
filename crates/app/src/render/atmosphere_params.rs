@@ -83,12 +83,12 @@ impl SkyArt {
         haze_extinction: 6.0e-5,
         haze_scale_height: 1400.0,
         solar_radius_deg: 0.65,
-        solar_glare: 0.18,
-        sky_grade: 0.30,
-        sunset_saturation: 1.18,
-        cloud_contrast: 1.15,
-        exposure_ev: 0.0,
-        bloom_strength: 0.30,
+        solar_glare: 0.08,
+        sky_grade: 0.18,
+        sunset_saturation: 1.0,
+        cloud_contrast: 0.85,
+        exposure_ev: 0.15,
+        bloom_strength: 0.08,
         fog_seam: 1.0,
     };
 
@@ -163,6 +163,7 @@ impl Default for SkyArt {
 /// for the full render uniform refactor.
 #[derive(Clone, Copy, Debug)]
 pub struct AtmosphereParameters {
+    pub hell: bool,
     pub sun_dir: Vec3,
     pub moon_dir: Vec3,
     pub sun_color: Vec3,
@@ -173,11 +174,14 @@ pub struct AtmosphereParameters {
     pub daylight: f32,
     pub twilight: f32,
     pub cloud_cover: f32,
+    /// Today's aerosol regime plus regional air, applied to the preset.
+    pub air: crate::world::sky_air::SkyAir,
 }
 
 impl AtmosphereParameters {
     pub fn from_lighting(lighting: &LightingState, cloud_controls: &CloudControls) -> Self {
         Self {
+            hell: lighting.hell,
             sun_dir: lighting.sun_dir.normalize_or_zero(),
             moon_dir: lighting.moon_dir.normalize_or_zero(),
             sun_color: Vec3::from_array(lighting.sun_color),
@@ -188,6 +192,7 @@ impl AtmosphereParameters {
             daylight: saturate(lighting.daylight),
             twilight: saturate(lighting.twilight),
             cloud_cover: saturate(cloud_controls.coverage * cloud_controls.density),
+            air: lighting.sky_air,
         }
     }
 
@@ -196,7 +201,7 @@ impl AtmosphereParameters {
         const DIR_EPSILON: f32 = 0.0005;
         const SCALAR_EPSILON: f32 = 0.002;
 
-        vec3_distance(self.sun_dir, other.sun_dir) <= DIR_EPSILON
+        self.hell == other.hell && vec3_distance(self.sun_dir, other.sun_dir) <= DIR_EPSILON
             && vec3_distance(self.moon_dir, other.moon_dir) <= DIR_EPSILON
             && vec3_distance(self.sun_color, other.sun_color) <= COLOR_EPSILON
             && vec3_distance(self.moon_color, other.moon_color) <= COLOR_EPSILON
@@ -206,6 +211,7 @@ impl AtmosphereParameters {
             && (self.daylight - other.daylight).abs() <= SCALAR_EPSILON
             && (self.twilight - other.twilight).abs() <= SCALAR_EPSILON
             && (self.cloud_cover - other.cloud_cover).abs() <= SCALAR_EPSILON
+            && !self.air.differs(other.air)
     }
 }
 

@@ -86,7 +86,7 @@ fn level_mismatch_seam(side: f64) {
     for j in (1..TILE_SAMPLES).step_by(2) {
         fine.height_m[(j * TILE_SAMPLES) as usize] = 200;
     }
-    let target = chart::join(engine_core::cube_sphere::Face::ALL[2], DVec3::new(0.0, 0.0, -12_000.0));
+    let target = chart::join(engine_core::cube_sphere::Face::ALL[2], DVec3::new(0.0, 0.0, -0.75 * chart::HALF_M));
     let up = chart::to_body(target).normalize();
     // Looking across the edge so the slots face the eye.
     let west = (chart::to_body(target + DVec3::new(side * 100.0, 0.0, 0.0)) - chart::to_body(target)).normalize();

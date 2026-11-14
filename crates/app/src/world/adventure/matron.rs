@@ -5,6 +5,7 @@ use action::{Phase, Run};
 
 pub(super) const KIND: u32 = 15;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Action {
     Rake,
     Stamp,
@@ -12,6 +13,7 @@ pub(super) enum Action {
     Plant,
 }
 #[derive(Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct State {
     pub run: Option<Run<Action>>,
     pub pods: u32,
@@ -174,6 +176,7 @@ pub(super) fn tick(
                             },
                             bore_budget: 0,
                             trail_timer: 0.0,
+                            flight: None,
                             splashed: false,
                             follow: None,
                         });

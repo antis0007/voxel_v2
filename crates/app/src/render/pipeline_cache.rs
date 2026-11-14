@@ -7,6 +7,25 @@ use std::path::PathBuf;
 /// Largest cache file read back; a bigger one is ignored and rebuilt.
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 
+fn cache_directory() -> Option<PathBuf> {
+    std::env::var_os("VOXEL_CACHE_DIR").filter(|path| !path.is_empty()).map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "LOCALAPPDATA" } else { "XDG_CACHE_HOME" })
+                .filter(|path| !path.is_empty())
+                .map(|path| PathBuf::from(path).join("VoxelWorkshop").join("cache"))
+        })
+}
+
+fn read_cache(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len == 0 || len > MAX_BYTES { return None; }
+    let mut bytes = Vec::with_capacity(len as usize);
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 == len).then_some(bytes)
+}
+
 pub struct DiskCache {
     cache: wgpu::PipelineCache,
     path: PathBuf,
@@ -30,11 +49,21 @@ impl DiskCache {
             return None;
         }
         let key = wgpu::util::pipeline_cache_key(info)?;
-        let path = crate::world::storage::save_directory().join("pipeline-cache").join(key);
-        let data = std::fs::metadata(&path)
-            .ok()
-            .filter(|m| m.len() <= MAX_BYTES)
-            .and_then(|_| std::fs::read(&path).ok());
+        let legacy_path = || crate::world::storage::save_directory().join("pipeline-cache").join(&key);
+        let shared_path = cache_directory().map(|dir| dir.join("pipeline-cache").join(&key));
+        // Reuse existing caches on upgrade. Future launches can use the shared
+        // cache without probing the world-save directory during GPU startup.
+        let (path, data) = match shared_path {
+            Some(path) => {
+                let data = read_cache(&path).or_else(|| read_cache(&legacy_path()));
+                (path, data)
+            }
+            None => {
+                let path = legacy_path();
+                let data = read_cache(&path);
+                (path, data)
+            }
+        };
         // SAFETY: the file is only ever written from `PipelineCache::get_data`,
         // atomically (temp file then rename). wgpu checks its header, adapter key
         // and length, the driver checks its own header, and `fallback` starts an
@@ -60,9 +89,11 @@ impl DiskCache {
 
     /// Writes the current cache contents on a background thread.
     pub fn save(&self) {
-        let Some(data) = self.cache.get_data() else { return };
+        let cache = self.cache.clone();
         let path = self.path.clone();
         let spawned = std::thread::Builder::new().name("pipeline-cache".into()).spawn(move || {
+            let Some(data) = cache.get_data() else { return };
+            if data.is_empty() || data.len() as u64 > MAX_BYTES { return; }
             let write = || -> std::io::Result<()> {
                 if let Some(dir) = path.parent() {
                     std::fs::create_dir_all(dir)?;

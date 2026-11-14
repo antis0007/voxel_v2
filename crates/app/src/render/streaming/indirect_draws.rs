@@ -23,18 +23,8 @@ pub fn set_enabled(enabled: bool) {
 pub fn set_supported(adapter: &wgpu::Adapter, device_features: wgpu::Features) {
     let flags = adapter.get_downlevel_capabilities().flags;
     let supported = flags.contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION)
-        && device_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
-        && !debug_assert_breaks_multidraw(adapter.get_info().backend);
+        && device_features.contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
     SUPPORTED.store(supported, Ordering::Relaxed);
-}
-
-/// Whether debug builds must avoid multi-draw indirect on `backend`.
-///
-/// wgpu-core 27.0.3 `command/render.rs:2851` debug-asserts a wrong stride in the
-/// DX12 indirect-validation batcher when count > 1; release output is correct.
-/// Remove once wgpu is upgraded past it.
-pub(in crate::render) fn debug_assert_breaks_multidraw(backend: wgpu::Backend) -> bool {
-    cfg!(debug_assertions) && backend == wgpu::Backend::Dx12
 }
 
 pub fn active() -> bool {
@@ -42,6 +32,7 @@ pub fn active() -> bool {
 }
 
 /// Runs of consecutive equal pages as `(page, first_draw, count)`.
+#[cfg(test)]
 pub(in crate::render) fn split_runs(pages: &[u32]) -> Vec<(u32, u32, u32)> {
     let mut runs: Vec<(u32, u32, u32)> = Vec::new();
     for (i, &page) in pages.iter().enumerate() {
@@ -65,6 +56,10 @@ pub(in crate::render) struct IndirectDraws {
     capacity: u64,
     /// `(page, byte offset, draw count)` from the last `prepare`.
     runs: Vec<(u32, u64, u32)>,
+    // Retain CPU staging capacity just as we retain the GPU argument buffer.
+    draws: Vec<(u32, wgpu::util::DrawIndexedIndirectArgs)>,
+    upload_bytes: Vec<u8>,
+    uploaded_bytes: Vec<u8>,
 }
 
 impl IndirectDraws {
@@ -107,7 +102,7 @@ impl IndirectDraws {
         mut slot_of: impl FnMut(IVec3) -> u32,
         group_pages: bool,
     ) -> (usize, usize) {
-        let mut draws = Vec::new();
+        self.draws.clear();
         let mut indices = 0usize;
         for coord in coords {
             let Some(slice) = cache.draw_slice(coord) else { continue };
@@ -119,25 +114,18 @@ impl IndirectDraws {
                 first_instance: slot_of(coord),
             };
             indices += args.index_count as usize;
-            draws.push((slice.page, args));
+            self.draws.push((slice.page, args));
         }
         if group_pages {
-            group_by_page(&mut draws);
+            group_by_page(&mut self.draws);
         }
-        let pages: Vec<u32> = draws.iter().map(|&(page, _)| page).collect();
-        let mut bytes = Vec::with_capacity(draws.len() * ARGS_BYTES as usize);
-        for (_, args) in &draws {
-            bytes.extend_from_slice(args.as_bytes());
-        }
-        self.runs = split_runs(&pages)
-            .into_iter()
-            .map(|(page, first, count)| (page, first as u64 * ARGS_BYTES, count))
-            .collect();
-        if bytes.is_empty() {
+        self.pack_arguments();
+        if self.upload_bytes.is_empty() {
             return (0, 0);
         }
-        if self.buffer.is_none() || (bytes.len() as u64) > self.capacity {
-            self.capacity = (bytes.len() as u64).next_power_of_two().max(16_384 * ARGS_BYTES);
+        let allocate = self.buffer.is_none() || (self.upload_bytes.len() as u64) > self.capacity;
+        if allocate {
+            self.capacity = (self.upload_bytes.len() as u64).next_power_of_two().max(16_384 * ARGS_BYTES);
             self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("chunk indirect draws"),
                 size: self.capacity,
@@ -145,10 +133,28 @@ impl IndirectDraws {
                 mapped_at_creation: false,
             }));
         }
-        if let Some(buffer) = &self.buffer {
-            queue.write_buffer(buffer, 0, &bytes);
+        if (allocate || self.upload_bytes != self.uploaded_bytes)
+            && let Some(buffer) = &self.buffer
+        {
+            queue.write_buffer(buffer, 0, &self.upload_bytes);
+            std::mem::swap(&mut self.upload_bytes, &mut self.uploaded_bytes);
         }
-        (pages.len(), indices)
+        (self.draws.len(), indices)
+    }
+
+    /// Pack arguments and page runs together, in the exact submitted order.
+    /// Empty batches must also clear runs so no previous-frame draws survive.
+    fn pack_arguments(&mut self) {
+        self.upload_bytes.clear();
+        self.upload_bytes.reserve(self.draws.len() * ARGS_BYTES as usize);
+        self.runs.clear();
+        for (index, (page, args)) in self.draws.iter().enumerate() {
+            self.upload_bytes.extend_from_slice(args.as_bytes());
+            match self.runs.last_mut() {
+                Some((previous_page, _, count)) if previous_page == page => *count += 1,
+                _ => self.runs.push((*page, index as u64 * ARGS_BYTES, 1)),
+            }
+        }
     }
 
     /// Issues the prepared runs. Buffers rebind only when the page changes.

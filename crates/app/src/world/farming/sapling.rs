@@ -7,9 +7,13 @@ use glam::{IVec3, Vec3};
 
 /// Fungal biomass: feeding one to a plot advances it a stage.
 pub const BIOMASS: Item = Item::Resource(13);
+/// One crown leaf cell in this many bears a fruit bud.
+const FRUIT_EVERY: u32 = 5;
 /// Leaf-break drop chances per cubic metre of leaves, in millionths.
 const SAPLING_PER_MILLION: u64 = 50_000;
 const VINES_PER_MILLION: u64 = 25_000;
+/// Broadleaf crowns also drop an apple, which plants an apple tree.
+const APPLE_PER_MILLION: u64 = 10_000;
 
 /// The sapling or vines a broken leaf cell drops, if its positional roll wins.
 pub fn leaf_drop(seed: u32, metres: f32, p: IVec3, block: B) -> Option<Item> {
@@ -23,6 +27,10 @@ pub fn leaf_drop(seed: u32, metres: f32, p: IVec3, block: B) -> Option<Item> {
         Some(Item::Block(B::Sapling))
     } else if roll < threshold(SAPLING_PER_MILLION) + threshold(VINES_PER_MILLION) {
         Some(Item::Block(B::Vines))
+    } else if block == B::Leaves
+        && roll < threshold(SAPLING_PER_MILLION) + threshold(VINES_PER_MILLION) + threshold(APPLE_PER_MILLION)
+    {
+        Some(Item::Block(B::Apple))
     } else {
         None
     }
@@ -33,6 +41,16 @@ pub fn fertilize(world: &mut World, cell: IVec3, slot: usize) -> bool {
     let k: Key = key(cell);
     let Some(mut plot) = world.farming.plots.get(&k).copied() else { return false };
     let Some(crop) = super::table::get(plot.crop) else { return false };
+    if super::watershed::manages(world, cell, crop) {
+        world.expedition.say("Nursery Uses Intake Water");
+        return true;
+    }
+    if crop.irrigation_metres.is_some()
+        && !super::conditions(world, cell, crop).is_some_and(|c| c.wet)
+    {
+        world.expedition.say("Needs Water");
+        return true;
+    }
     if plot.stage >= crop.mature() {
         world.expedition.say(format!("{} · Mature", crop.crop.display_name()));
         return true;
@@ -77,7 +95,22 @@ pub fn tree_edits(seed: u32, p: IVec3, shape: TreeShape, metres: f32, get: impl 
                     continue;
                 }
                 if get(q).is_empty() {
-                    edits.push((q, B::Leaves));
+                    // Fruit hangs from the lower outer crown, where it can be reached.
+                    let bears = shape.fruit.is_some() && y <= 0 && reach > 0.55
+                        && stage::roll(seed, q, 0xf27).is_multiple_of(FRUIT_EVERY);
+                    edits.push((q, if bears { B::FruitBud } else { B::Leaves }));
+                }
+            }
+        }
+    }
+    if let Some(root) = shape.roots {
+        // Prop roots: two cells out and down from the lowest trunk metre on each side.
+        let lift = cells(1.0).max(1);
+        for d in [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
+            for (out, up) in [(1, lift), (2, lift / 2), (2, 0)] {
+                let q = p + d * out + IVec3::Y * up;
+                if get(q).is_empty() || get(q) == B::Water {
+                    edits.push((q, root));
                 }
             }
         }
@@ -94,6 +127,14 @@ pub fn grow(world: &mut World, p: IVec3, crop: &Crop, room: usize, changed: &mut
         return false;
     }
     world.set_many_committed(&edits, |q, _, _| changed.push(q));
+    if let Some((row, _)) = shape.fruit.and_then(super::table::grafted) {
+        let now = world.farming.clock;
+        for &(q, b) in &edits {
+            if b == B::FruitBud && world.get(q) == B::FruitBud && world.farming.plots.len() < super::MAX_PLOTS {
+                world.farming.plots.insert(key(q), super::Plot::new(row, now));
+            }
+        }
+    }
     world.get(p) == B::Log
 }
 
@@ -179,23 +220,25 @@ mod tests {
     #[test]
     fn leaf_drops_are_positional_and_scale_with_cell_volume() {
         let cells = |metres: f32| {
-            let (mut saplings, mut vines) = (0, 0);
+            let (mut saplings, mut vines, mut apples) = (0, 0, 0);
             for i in 0..40_000 {
                 let p = IVec3::new(i % 200, -40 + i / 4000, (i / 200) % 20);
                 assert_eq!(leaf_drop(9, metres, p, B::Leaves), leaf_drop(9, metres, p, B::Leaves));
                 match leaf_drop(9, metres, p, B::Leaves) {
                     Some(Item::Block(B::Sapling)) => saplings += 1,
                     Some(Item::Block(B::Vines)) => vines += 1,
+                    Some(Item::Block(B::Apple)) => apples += 1,
                     None => {}
                     other => panic!("unexpected drop {other:?}"),
                 }
             }
-            (saplings, vines)
+            (saplings, vines, apples)
         };
-        let (saplings, vines) = cells(1.0);
+        let (saplings, vines, apples) = cells(1.0);
         assert!((1600..2400).contains(&saplings), "about 5%: {saplings}");
         assert!((700..1300).contains(&vines), "about 2.5%: {vines}");
-        let (fine, _) = cells(0.25);
+        assert!((250..550).contains(&apples), "about 1%: {apples}");
+        let (fine, _, _) = cells(0.25);
         assert!(fine < 80, "a quarter-metre leaf holds 1/64 of the chance: {fine}");
         assert_eq!(leaf_drop(9, 1.0, IVec3::ZERO, B::Stone), None);
     }

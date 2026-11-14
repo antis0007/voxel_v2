@@ -60,7 +60,7 @@ fn frozen_cache_keeps_lod_meshes() {
     cache.freeze(true);
     cache.residency_limits.1 = 1;
     let before = cache.lod_meshes.bytes();
-    cache.lod_meshes.remember(IVec3::new(9, 0, 9), ChunkGpuMesh::test_mesh(3, 1, false, 4096));
+    cache.lod_meshes.remember(IVec3::new(9, 0, 9), ChunkGpuMesh::test_mesh(3, 1, false, 4096), None);
     cache.trim_lod_budget();
     assert_eq!(cache.lod_meshes.bytes(), before + 4096);
     cache.freeze(false);

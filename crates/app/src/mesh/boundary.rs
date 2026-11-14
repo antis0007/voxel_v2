@@ -11,17 +11,15 @@ pub(super) fn emit_conforming_face(
     material: FaceMaterial,
     normal: [f32; 3],
     ao: [f32; 4],
+    top_inset: f32,
 ) -> bool {
     if steps.iter().all(|&count| count == 1) {
         return false;
     }
     let origin = chunk.chunk * crate::world::CHUNK_SIZE;
     let detail = material.surface();
-    let water_top = material.block == crate::world::BlockId::Water && normal[1] > 0.5;
     let vertex = |mut position: Vec3, occlusion: f32| {
-        if water_top {
-            position.y -= super::WATER_SURFACE_INSET;
-        }
+        position.y -= top_inset;
         Vertex3 {
             pos: position.to_array(),
             color: material.color(),

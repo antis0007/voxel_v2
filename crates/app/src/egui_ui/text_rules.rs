@@ -4,6 +4,9 @@
 use std::path::Path;
 
 const CHECKED: &[&str] = &[
+    "crates/app/src/egui_ui/lift_panel.rs",
+    "crates/app/src/egui_ui/brew_view.rs",
+    "crates/app/src/egui_ui/station_page.rs",
     "crates/app/src/egui_ui/chip_canvas.rs",
     "crates/app/src/egui_ui/chip_editor.rs",
     "crates/app/src/egui_ui/chip_fab.rs",
@@ -27,6 +30,8 @@ const CHECKED: &[&str] = &[
     "crates/app/src/world/factory/recipes.rs",
     "crates/app/src/world/undercrown/interact.rs",
     "crates/app/src/world/adventure/reliquaries/access.rs",
+    "crates/app/src/egui_ui/mortality.rs",
+    "crates/app/src/world/adventure/death.rs",
     "crates/chip/src/characterize.rs",
     "crates/chip/src/compile.rs",
     "crates/chip/src/fab.rs",
@@ -34,6 +39,20 @@ const CHECKED: &[&str] = &[
     "crates/chip/src/lot.rs",
     "crates/chip/src/loops.rs",
     "assets/chip_modules.ron",
+    "crates/app/src/egui_ui/world_loader/mod.rs",
+    "crates/app/src/egui_ui/world_loader/stages.rs",
+    "crates/app/src/egui_ui/world_loader/timeline.rs",
+    "crates/app/src/egui_ui/world_loader/globe.rs",
+    "crates/app/src/egui_ui/world_loader/groups.rs",
+    "crates/app/src/egui_ui/world_loader/backdrop.rs",
+    "crates/app/src/egui_ui/world_loader/survey.rs",
+    "crates/app/src/egui_ui/world_loader/preview.rs",
+    "crates/app/src/loading_report.rs",
+    "crates/app/src/egui_ui/flight_hud.rs",
+    "crates/app/src/egui_ui/system_map.rs",
+    "crates/app/src/egui_ui/system_map/canvas.rs",
+    "crates/app/src/egui_ui/system_map/info.rs",
+    "crates/app/src/space_nav/text.rs",
 ];
 
 const BANNED: &[&str] = &[

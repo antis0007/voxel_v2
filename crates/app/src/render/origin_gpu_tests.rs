@@ -20,8 +20,8 @@ fn depth_row(
     indirect: Option<&wgpu::Buffer>,
 ) -> Vec<f32> {
     // Ortho over x in [-16, 16] looking down -Y with screen-right = +X: one texel per unit.
-    let matrix = Mat4::orthographic_rh(-16.0, 16.0, -4.0, 4.0, 0.1, 40.0)
-        * Mat4::look_to_rh(Vec3::new(0.0, 20.0, 0.0), -Vec3::Y, -Vec3::Z);
+    let matrix = glam::camera::rh::proj::directx::orthographic(-16.0, 16.0, -4.0, 4.0, 0.1, 40.0)
+        * glam::camera::rh::view::look_to_mat4(Vec3::new(0.0, 20.0, 0.0), -Vec3::Y, -Vec3::Z);
     let (pipeline, bind_group) = renderer.test_cascade(queue, matrix);
     let vertices = [[-2.0, 0.0, -2.0], [-2.0, 0.0, 2.0], [2.0, 0.0, 2.0], [2.0, 0.0, -2.0]].map(|pos| Vertex3 {
         pos,
@@ -54,6 +54,7 @@ fn depth_row(
     let mut encoder = device.create_command_encoder(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("draw offset first instance"),
             color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -102,7 +103,7 @@ fn depth_row(
         })
         .unwrap();
     receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap().unwrap();
-    let mapped = readback.slice(..).get_mapped_range();
+    let mapped = readback.slice(..).get_mapped_range().expect("GPU readback range");
     let row = (HEIGHT / 2 * ROW_BYTES) as usize;
     let depths = bytemuck::cast_slice::<u8, f32>(&mapped[row..row + WIDTH as usize * 4]).to_vec();
     drop(mapped);
@@ -132,7 +133,7 @@ fn gpu_draw_offset_first_instance() {
         label: Some("draw offset contract"),
         source: wgpu::ShaderSource::Wgsl(crate::shader_sources::SHADOW_SHADER.into()),
     });
-    let renderer = ShadowRenderer::new(&device, &shader);
+    let renderer = ShadowRenderer::new(&device, &shader, None);
     let mut offsets = DrawOffsets::default();
     offsets.begin_frame(DrawTransform::IDENTITY);
     assert_eq!(offsets.slot(IVec3::X, || transform(8.0)), 1);
@@ -144,11 +145,6 @@ fn gpu_draw_offset_first_instance() {
 
     if features.is_empty() {
         println!("[draw-offset] adapter lacks INDIRECT_FIRST_INSTANCE; direct path only");
-        return;
-    }
-    let backend = adapter.get_info().backend;
-    if crate::render::streaming::indirect_draws::debug_assert_breaks_multidraw(backend) {
-        println!("[draw-offset] {backend:?} debug build: wgpu-core debug assert; direct path only");
         return;
     }
     let args: Vec<u8> = [1u32, 2]

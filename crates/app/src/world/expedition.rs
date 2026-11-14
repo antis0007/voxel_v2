@@ -4,32 +4,27 @@ use super::{BlockId as B, World, effects, mark_chunk_and_neighbors_dirty};
 use glam::{IVec3, Vec3};
 use std::collections::{HashSet, VecDeque};
 
-pub const NAMES: [&str; super::factory::RESOURCE_COUNT] = [
-    "Copper ore",
-    "Tin ore",
-    "Iron ore",
-    "Coal",
-    "Lumen fibre",
-    "Resonant crystal",
-    "Copper ingots",
-    "Tin ingots",
-    "Iron ingots",
-    "Copper dust",
-    "Tin dust",
-    "Iron dust",
-    "Ancient circuits",
-    "Fungal biomass",
-    "Bronze ingots",
-    "Steel ingots",
-    "Induction coils",
-    "Arcane cores",
-    "Wild essence",
-    "Coal coke",
-    "Creosote oil",
-    "Bio-ethanol",
+pub use engine_content::factory_resources::NAMES;
+
+const UNIT: u32 = engine_content::fabrication::UNITS_PER_ITEM;
+pub(super) const SMELT_COAL: u32 = UNIT / 4;
+const FIELD_BATCH_LIMIT: u32 = 4;
+/// Resource input, quantity, and ingot output, in inventory subunits.
+pub(super) const FIELD_SMELTING: [(usize, u32, usize); 4] = [
+    (0, UNIT, 6),
+    (1, UNIT, 7),
+    (2, UNIT, 8),
+    (super::factory::GOLD_CONCENTRATE, super::factory::recipes::CONCENTRATE_PER_INGOT, super::factory::GOLD_INGOT),
 ];
-const UNIT: u32 = 64;
 const BORE_FUEL_UNITS: u32 = UNIT / 8;
+
+pub(super) fn harvest_units(voxel_meters: f32) -> u32 {
+    (voxel_meters.powi(3) * UNIT as f32).round().max(1.0) as u32
+}
+
+pub(super) fn field_quartz_cost(cells_per_metre: i32) -> u32 {
+    8 * cells_per_metre.pow(3) as u32
+}
 
 /// Physical radius shared by excavation and the inventory's tool comparison.
 pub fn bore_radius(tier: u32) -> f32 {
@@ -41,43 +36,40 @@ pub fn bore_fuel_cost() -> f64 {
     BORE_FUEL_UNITS as f64 / UNIT as f64
 }
 
-/// Five container families. The block picks the family; the cell picks the roll,
+/// Common caches contain field supplies. Finished industrial parts and arcane
+/// cores come from manufacturing and guarded rewards, regardless of altitude.
+/// The block picks the family; the cell picks the roll,
 /// so two coffers in one crypt are not the same payout.
-fn container_loot(block: B, p: IVec3) -> (&'static str, &'static [(usize, u32)]) {
+pub(super) fn container_loot(block: B, p: IVec3) -> (&'static str, &'static [(usize, u32)]) {
     let roll =
         (p.x.wrapping_mul(31) ^ p.y.wrapping_mul(13) ^ p.z.wrapping_mul(17)).unsigned_abs() % 3;
-    let deep = p.y < 0;
     match block {
         B::SurveyCache => match roll {
             0 => (
-                "Relic coffer: circuits, a coil and resonant crystal. Bring the coil to a smelter.",
-                if deep {
-                    &[(12, 3), (16, 2), (5, 2), (17, 1)]
-                } else {
-                    &[(12, 2), (16, 1), (5, 1), (8, 2)]
-                },
+                "Survey Samples · Crystal · Copper Ore · Coal",
+                &[(5, 1), (0, 3), (3, 2)],
             ),
             1 => (
-                "Archive chest: steel, circuits and an arcane core.",
-                &[(15, 2), (12, 2), (17, 1), (3, 4)],
+                "Survey Supplies · Iron Ore · Tin Ore · Coal",
+                &[(2, 3), (1, 2), (3, 4)],
             ),
             _ => (
-                "Survey locker: refined metal and crystal for a blade head.",
-                &[(8, 4), (6, 3), (5, 2), (15, 1)],
+                "Survey Samples · Copper · Iron · Crystal",
+                &[(8, 1), (6, 2), (5, 1)],
             ),
         },
         B::CultivatorCache => match roll {
             0 => (
-                "Ration cask: biomass, fibre and a grip wrapping.",
-                &[(13, 8), (4, 4), (12, 1)],
+                "Garden Supplies · Biomass · Lumen Fibre",
+                &[(13, 4), (4, 3)],
             ),
             1 => (
-                "Spore barrel: caps' worth of fibre and a coil.",
-                &[(4, 6), (13, 4), (16, 1), (5, 1)],
+                "Garden Supplies · Lumen Fibre · Biomass",
+                &[(4, 4), (13, 3)],
             ),
             _ => (
-                "Cultivator crate: food stocks and a little crystal.",
-                &[(13, 6), (4, 3), (5, 2), (3, 2)],
+                "Garden Supplies · Biomass · Fibre · Coal",
+                &[(13, 4), (4, 3), (3, 2)],
             ),
         },
         _ => match roll {
@@ -86,16 +78,12 @@ fn container_loot(block: B, p: IVec3) -> (&'static str, &'static [(usize, u32)])
                 &[(0, 6), (2, 6), (3, 8), (8, 1)],
             ),
             1 => (
-                "Armory locker: ingots and a binding coil.",
-                &[(6, 4), (8, 3), (16, 1), (3, 4)],
+                "Workshop Supplies · Copper · Iron · Coal",
+                &[(6, 2), (8, 1), (3, 4)],
             ),
             _ => (
-                "Workshop chest: mixed ore, fibre and a core if you are deep enough.",
-                if deep {
-                    &[(1, 4), (2, 4), (4, 3), (17, 1)]
-                } else {
-                    &[(0, 4), (1, 4), (3, 6), (4, 2)]
-                },
+                "Workshop Supplies · Mixed Ore · Coal · Fibre",
+                &[(0, 4), (1, 4), (3, 6), (4, 2)],
             ),
         },
     }
@@ -144,7 +132,9 @@ fn reinforce_weapon(world: &mut World) -> bool {
     false
 }
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Expedition {
+    #[cfg_attr(feature = "multiplayer", serde(deserialize_with = "super::factory::read_resources"))]
     pub resources: [u32; super::factory::RESOURCE_COUNT],
     pub tool_tier: u32,
     pub workshop_found: bool,
@@ -153,6 +143,15 @@ pub struct Expedition {
     pub lamp_disabled: bool,
     pub message: String,
     pub message_seconds: f32,
+    /// `Label: value` lines for the message's log tooltip, newline separated.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub detail: String,
+    /// Where the message happened, in metres, for distance and bearing.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub at: Option<[f32; 3]>,
+    /// Counts messages so the log sees a repeat of the same text.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub serial: u32,
 }
 impl Expedition {
     pub fn lamp_enabled(&self) -> bool {
@@ -173,8 +172,20 @@ impl Expedition {
     }
 
     pub fn say(&mut self, message: impl Into<String>) {
+        self.say_for(message, 6.0);
+    }
+    pub fn say_for(&mut self, message: impl Into<String>, seconds: f32) {
         self.message = message.into();
-        self.message_seconds = 6.0;
+        self.message_seconds = seconds;
+        self.detail.clear();
+        self.at = None;
+        self.serial = self.serial.wrapping_add(1);
+    }
+    /// A message with log detail lines and a position in metres.
+    pub fn say_at(&mut self, message: impl Into<String>, detail: impl Into<String>, at: glam::Vec3) {
+        self.say(message);
+        self.detail = detail.into();
+        self.at = Some(at.to_array());
     }
     pub fn tick(&mut self, dt: f32) {
         self.message_seconds = (self.message_seconds - dt).max(0.0);
@@ -212,16 +223,27 @@ impl Expedition {
         true
     }
 }
+pub(crate) fn ore_resource(block: B) -> Option<usize> {
+    use engine_content::ore::Family;
+    Some(match engine_content::ore::family(block)? {
+        Family::Copper => 0,
+        Family::Tin => 1,
+        Family::Iron => 2,
+        Family::Coal => 3,
+        Family::Crystal => 5,
+        Family::GoldQuartz => return None,
+    })
+}
+
 pub(crate) fn resource(block: B) -> Option<usize> {
     Some(match block {
-        B::CopperOre => 0,
-        B::TinOre => 1,
-        B::IronOre => 2,
-        B::CoalOre => 3,
+        B::CopperBlock => 6,
+        B::TinBlock => 7,
+        B::IronBlock => 8,
+        B::BronzeBlock => 14,
         B::GlowCap => 4,
-        B::Crystal => 5,
         B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => 13,
-        _ => return None,
+        _ => return ore_resource(block),
     })
 }
 const TREE_DIRECTIONS: [IVec3; 6] = [
@@ -232,107 +254,9 @@ const TREE_DIRECTIONS: [IVec3; 6] = [
     IVec3::Z,
     IVec3::NEG_Z,
 ];
-const MAX_TREE_CELLS: usize = 1024;
-
-/// Turn the remaining trunk of a chopped tree into one falling assembly.
-///
-/// The broken log has already been removed and collected by the caller. This
-/// function finds the connected trunk/canopy, removes every leaf immediately,
-/// and converts the remaining logs into a runtime rigid body with an initial
-/// sideways impulse. `rigid::tick` drops the logs as items once it settles.
-/// Returns the cells whose meshes must be refreshed immediately.
-pub fn fell_tree(world: &mut World, removed: IVec3) -> Option<Vec<IVec3>> {
-    let mut queue = VecDeque::new();
-    let mut seen = HashSet::new();
-    for d in TREE_DIRECTIONS {
-        let q = removed + d;
-        if matches!(world.get(q), B::Log | B::Leaves) {
-            queue.push_back(q);
-        }
-    }
-    let mut logs = Vec::new();
-    let mut leaves = Vec::new();
-    while let Some(cell) = queue.pop_front() {
-        if seen.len() >= MAX_TREE_CELLS || !seen.insert(cell) {
-            continue;
-        }
-        match world.get(cell) {
-            B::Log => logs.push(cell),
-            B::Leaves => leaves.push(cell),
-            _ => continue,
-        }
-        for d in TREE_DIRECTIONS {
-            let q = cell + d;
-            if !seen.contains(&q) && matches!(world.get(q), B::Log | B::Leaves) {
-                queue.push_back(q);
-            }
-        }
-    }
-    // A lone log or a pile without a canopy is not a tree.
-    if logs.len() < 2 || leaves.len() < 4 {
-        return None;
-    }
-
-    let leaf_edits: Vec<(IVec3, B)> = leaves.iter().map(|p| (*p, B::Air)).collect();
-    let mut removed_leaves = Vec::new();
-    world.set_many_committed(&leaf_edits, |p, _, _| removed_leaves.push(p));
-    // Admission can skip individual cells. Only removed leaves produce loot.
-    let loot = canopy_loot(&removed_leaves);
-    for (p, item, count) in loot {
-        give_or_drop(world, p, item, count);
-    }
-    let metres = world.voxel_scale.meters();
-    for &p in &removed_leaves {
-        if let Some(item) = super::farming::sapling::leaf_drop(world.seed, metres, p, B::Leaves) {
-            give_or_drop(world, p, item, 1);
-        }
-    }
-
-    let mut touched = removed_leaves;
-    let body_possible = logs.len() <= crate::simulation::sandbox::MAX_BODY_VOXELS
-        && world.sandbox.bodies.len() < crate::simulation::sandbox::MAX_BODIES
-        && !world.sandbox.bodies.iter().any(|body| {
-            body.occupied
-                .iter()
-                .any(|(p, _)| logs.iter().any(|q| p == q))
-        })
-        && logs.iter().all(|p| world.get(*p) == B::Log);
-    if body_possible {
-        let origin = *logs.iter().min_by_key(|p| (p.y, p.x, p.z)).unwrap();
-        let occupied: Vec<_> = logs.iter().map(|p| (*p, B::Log)).collect();
-        let fall = Vec3::new(
-            (removed.x as f32 * 0.73).sin(),
-            0.0,
-            (removed.z as f32 * 0.91).cos(),
-        )
-        .normalize_or_zero();
-        let fall = if fall.length_squared() < 1e-4 {
-            Vec3::X
-        } else {
-            fall
-        };
-        world
-            .sandbox
-            .bodies
-            .push(crate::simulation::sandbox::RigidBody {
-                origin,
-                position: Vec3::ZERO,
-                velocity: fall * 1.1,
-                rotation: glam::Quat::IDENTITY,
-                angular: Vec3::new(fall.z, 0.0, -fall.x) * 2.2,
-                debt: 0.0,
-                settle_time: 0.0,
-                was_submerged: false,
-                voxels: logs.iter().map(|p| (*p - origin, B::Log)).collect(),
-                occupied,
-            });
-        world.activity.wake(origin);
-    } else {
-        drop_log_cells(world, &logs, &mut HashSet::new(), &mut HashSet::new());
-        touched.extend(logs);
-    }
-    Some(touched)
-}
+mod woodcutting;
+pub(crate) use woodcutting::{finish_tree, harvest_log};
+pub use woodcutting::fell_tree;
 
 /// Leaf litter and fruit shaken from a canopy. Litter is one item per eight
 /// leaf cells; fruit is a deterministic ~1.5% of cells, so the same tree always
@@ -359,7 +283,7 @@ fn canopy_loot(leaves: &[IVec3]) -> Vec<(IVec3, super::inventory::Item, u32)> {
 }
 
 /// Give one item to the pack, or drop it at `p` when the pack is full.
-fn give_or_drop(world: &mut World, p: IVec3, item: super::inventory::Item, count: u32) {
+pub(super) fn give_or_drop(world: &mut World, p: IVec3, item: super::inventory::Item, count: u32) {
     let scale = world.voxel_scale.meters();
     let (inserted, remainder) = world
         .inventory
@@ -378,25 +302,6 @@ fn give_or_drop(world: &mut World, p: IVec3, item: super::inventory::Item, count
     }
 }
 
-/// Remove log cells and give every log back as an item (or a nearby drop when
-/// the pack is full). Used when a felled assembly settles.
-pub(crate) fn drop_log_cells(
-    world: &mut World,
-    cells: &[IVec3],
-    blocks: &mut HashSet<IVec3>,
-    chunks: &mut HashSet<IVec3>,
-) {
-    let item = super::inventory::Item::Block(B::Log);
-    for &p in cells {
-        let Ok(commit) = effects::replace(world, p, B::Log, B::Air) else {
-            continue;
-        };
-        commit.publish(world, blocks, chunks);
-        give_or_drop(world, p, item, 1);
-    }
-    world.sync_from_inventory();
-}
-
 pub fn harvest(
     world: &mut World,
     p: IVec3,
@@ -410,13 +315,19 @@ pub fn harvest(
         return true;
     }
     let block = world.get(p);
+    if super::containers::is_cache(block) { return super::containers::harvest(world, p, blocks, chunks); }
     if block == B::Air {
         return false;
     }
+    // Only a registered assembly can return a kit. Loose casing can remain
+    // after a rejected placement or be present in an older save.
+    if super::factory::Kind::from_block(block).is_some() {
+        let Ok(commit) = effects::replace(world, p, block, B::Air) else { return false };
+        commit.publish(world, blocks, chunks);
+        return true;
+    }
 
-    let units = (world.voxel_scale.meters().powi(3) * UNIT as f32)
-        .round()
-        .max(1.0) as u32;
+    let units = harvest_units(world.voxel_scale.meters());
 
     // Pre-check inventory capacity before destroying the block so a full pack never loses items.
     if matches!(block, B::SalvageCrate | B::SurveyCache | B::CultivatorCache) {
@@ -471,10 +382,17 @@ pub fn harvest(
         }
     }
 
-    let Ok(commit) = effects::replace(world, p, block, B::Air) else {
+    // A sub-metre plant stamp comes away whole and drops once, for the aimed cell.
+    let stamp = engine_content::stamp::cells(block, p, world.voxel_scale.meters(), |q| world.get(q));
+    let Ok(commit) = effects::replace(world, p, block, super::farming::forage::vacated(block)) else {
         return false;
     };
     commit.publish(world, blocks, chunks);
+    for q in stamp.into_iter().skip(1) {
+        if let Ok(commit) = effects::replace(world, q, block, super::farming::forage::vacated(block)) {
+            commit.publish(world, blocks, chunks);
+        }
+    }
     if let Some(seed) = super::farming::wild_seed(world, p, block) {
         give_or_drop(world, p, seed, 1);
     }
@@ -519,32 +437,64 @@ pub fn harvest(
         }
         world.sync_from_inventory();
     }
-    if block == B::Log
-        && let Some(cells) = fell_tree(world, p) {
-            for cell in cells {
-                blocks.insert(cell);
-                mark_chunk_and_neighbors_dirty(chunks, cell);
-            }
-        }
     true
 }
 
-/// Fast path for spell-generated craters.
-///
-/// A spell blast is a world-shaping event, not a mining action: running the
-/// full harvest/inventory pipeline for every stone voxel made large craters
-/// crawl and silently filled the pack with rubble. Magic removes the terrain
-/// directly. Resource-bearing cells keep the same volume-weighted yields as
-/// mining; ordinary rubble stays out of the pack.
+fn ejectable_rock(material: B) -> bool {
+    matches!(material, B::Stone | B::Sandstone | B::Limestone | B::Basalt | B::Cobblestone | B::StoneBricks)
+}
+
+/// Transfer an exposed rock cell to a body without editing or awarding it.
+pub(crate) fn eject_terrain(world: &mut World, p: IVec3, push: Vec3, speed: f32) -> bool {
+    use crate::simulation::sandbox::MAX_BODIES;
+    if !push.is_finite() || !speed.is_finite() || speed <= 0.0 { return false; }
+    let material = world.get(p);
+    if !ejectable_rock(material)
+        || world.sandbox.bodies.len() >= MAX_BODIES - 16
+        || effects::admit(world, p).is_err()
+        || !super::orbital::habitat::ordinary_spell_allowed(world, p) {
+        return false;
+    }
+    let exit = TREE_DIRECTIONS.into_iter()
+        .filter(|&d| effects::admit(world, p + d).is_ok()
+            && super::orbital::habitat::ordinary_spell_allowed(world, p + d)
+            && world.get(p + d) == B::Air)
+        .max_by(|a, b| a.as_vec3().dot(push).total_cmp(&b.as_vec3().dot(push)));
+    let Some(exit) = exit else { return false };
+    let scale = world.voxel_scale.meters();
+    let direction = (exit.as_vec3() + Vec3::Y * 0.18).normalize();
+    let density = (material.material().physics.density / 1000.0).max(0.5);
+    if !world.sandbox.add_debris(p, &[(p, material)], direction * (speed / density.sqrt() / scale)) {
+        return false;
+    }
+    if let Some(body) = world.sandbox.bodies.last_mut() {
+        body.angular = direction.cross(push).clamp_length_max(1.0) * 3.0;
+    }
+    world.adventure.spawn_voxel_burst(
+        (p.as_vec3() + Vec3::splat(0.5) + exit.as_vec3() * 0.5) * scale,
+        material.color(p), 4, 1.8, (scale * 0.12).clamp(0.015, 0.06),
+    );
+    world.activity.wake(p);
+    true
+}
+
+/// Carve a spell crater without filling the pack with ordinary rubble.
+/// Resource cells keep their volume-weighted yields.
 pub fn spell_blast(
     world: &mut World,
     p: IVec3,
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> bool {
+    if !super::orbital::habitat::ordinary_spell_allowed(world, p) { return false; }
     if super::fittings::harvest(world, p, blocks, chunks) { return true; }
     let b = world.get(p);
     if b == B::Air || b.is_liquid() {
+        return false;
+    }
+    // A budgeted crater can span several frames. Airborne chips may cross
+    // later cells in the same stroke; the blast impulse already moved them.
+    if ejectable_rock(b) && world.sandbox.bodies.iter().any(|body| body.occupied.as_slice() == [(p, b)]) {
         return false;
     }
     if world
@@ -567,11 +517,8 @@ pub fn spell_blast(
         give_or_drop(world, p, super::inventory::Item::Block(B::Log), 1);
         world.sync_from_inventory();
     }
-    if let Some(cells) = fell_tree(world, p) {
-        for cell in cells {
-            blocks.insert(cell);
-            mark_chunk_and_neighbors_dirty(chunks, cell);
-        }
+    if b == B::Log {
+        fell_tree(world, p, Vec3::ZERO);
     }
     true
 }
@@ -584,6 +531,7 @@ pub fn blast_harvest(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) -> bool {
+    if !super::orbital::habitat::ordinary_spell_allowed(world, p) { return false; }
     if super::fittings::harvest(world, p, blocks, chunks) { return true; }
     let b = world.get(p);
     // Ordinary terrain changes inventory directly. Rebuilding all legacy
@@ -608,9 +556,7 @@ pub fn blast_harvest(
     use super::inventory::{DroppedStack, Item, ItemStack};
     let pos = (p.as_vec3() + glam::Vec3::splat(0.5)) * world.voxel_scale.meters();
     let (item, count, remainder) = if let Some(i) = resource(b) {
-        let units = (world.voxel_scale.meters().powi(3) * UNIT as f32)
-            .round()
-            .max(1.0) as u32;
+        let units = harvest_units(world.voxel_scale.meters());
         let amount = world.inventory.resource_remainders[i] + units;
         (
             Item::Resource(i as u8),
@@ -656,44 +602,40 @@ pub fn blast_harvest(
             });
         }
     }
-    if b == B::Log
-        && let Some(cells) = fell_tree(world, p) {
-            for cell in cells {
-                blocks.insert(cell);
-                mark_chunk_and_neighbors_dirty(chunks, cell);
-            }
-        }
+    if b == B::Log {
+        fell_tree(world, p, Vec3::ZERO);
+    }
     true
 }
 
 pub fn hint(block: B, tier: u32) -> &'static str {
+    if super::dungeon_quest::is_door(block) {
+        return "RMB  Unlock";
+    }
     if let Some(s)=engine_content::fittings::state(block) {
-        return if s.lever { "F / Right mouse  Switch" } else if s.open { "F / Right mouse  Close" } else { "F / Right mouse  Open" };
+        return if s.lever { "RMB  Switch" } else if s.open { "RMB  Close" } else { "RMB  Open" };
     }
     if super::factory::Kind::from_block(block).is_some() {
-        return "F  Inspect   ·   E  Inventory";
+        return "RMB  Open";
+    }
+    if engine_content::ore::family(block).is_some() {
+        return if tier > 0 { "Alt + left mouse  Bore seam · consumes lumen fibre" } else { "Left mouse  Mine material" };
     }
     match block {
-        B::SalvageCrate | B::SurveyCache | B::CultivatorCache => "F  Open salvage cache",
-        B::Workbench => "F  Use workbench   ·   E  Craft",
-        B::Bed => "F  Sleep until dawn",
-        B::Smelter => "F  Smelt ore   ·   Requires coal",
+        B::SalvageCrate | B::SurveyCache | B::CultivatorCache => "RMB  Open",
+        B::Workbench => "RMB  Craft",
+        B::Bed => "RMB  Sleep",
+        B::Smelter => "RMB  Smelt ore   ·   Requires coal",
         B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => "F  Harvest biomass",
+        B::SweetBerries | B::Grapes | B::Tomato | B::GlowBerries | B::Apple | B::Cherry | B::Fig => "RMB  Pick",
+        B::CropHarvester => "RMB on soil  Set · Range 4 m",
         B::GlowCap => "F  Harvest lumen fibre",
-        B::CopperOre
-        | B::TinOre
-        | B::IronOre
-        | B::CoalOre
-        | B::Crystal
-        | B::Stone
+        B::Stone
         | B::Limestone
         | B::Basalt
             if tier > 0 =>
         {
             "Alt + left mouse  Bore seam · consumes lumen fibre"
-        }
-        B::CopperOre | B::TinOre | B::IronOre | B::CoalOre | B::Crystal => {
-            "Left mouse  Mine material"
         }
         _ => "",
     }
@@ -706,6 +648,7 @@ pub fn interact(
     blocks: &mut HashSet<IVec3>,
     chunks: &mut HashSet<IVec3>,
 ) {
+    if super::smeltery::interact(world, p, blocks, chunks) { return; }
     if super::farming::inspect(world, p) {
         return;
     }
@@ -713,6 +656,9 @@ pub fn interact(
     if super::factory::Kind::from_block(b).is_some() {
         let anchor = super::factory::anchor(p, super::factory::step(world));
         world.factory.focus = Some(anchor);
+        if super::factory::Kind::from_block(b) == Some(super::factory::Kind::Storage) {
+            super::containers::open(world, anchor);
+        } else { world.inventory.container = None; }
         if let Some(node) = world.factory.nodes.get(&anchor) {
             world.expedition.say(format!("{} | {} | E  Open",node.kind.name(),node.status));
         }
@@ -720,17 +666,36 @@ pub fn interact(
     }
     match b {
         B::Workbench => {
+            world.inventory.container = None;
+            world.factory.focus = None;
             world.expedition.workshop_found = true;
             world.factory.bench = Some(p);
             world.expedition.say("E  Craft");
             super::workshop::use_bench(world, _player);
         }
         B::Smelter => {
+            use super::factory::GOLD_INGOT;
             world.expedition.workshop_found = true;
             let mut processed = 0;
-            for (ore, metal) in [(0, 6), (1, 7), (2, 8)] {
-                if super::inventory::resources::exchange(&mut world.inventory,
-                    &[(ore, UNIT), (3, UNIT / 4)], &[(metal, UNIT)]) {
+            for (ore, amount, metal) in FIELD_SMELTING {
+                for _ in 0..FIELD_BATCH_LIMIT {
+                    if !super::inventory::resources::exchange(&mut world.inventory,
+                        &[(ore, amount), (3, SMELT_COAL)], &[(metal, UNIT)])
+                    {
+                        break;
+                    }
+                    processed += 1;
+                }
+            }
+            let quartz = super::inventory::Item::Block(B::GoldQuartz);
+            let quartz_batch = field_quartz_cost(super::factory::step(world));
+            if world.inventory.count_item(quartz) >= quartz_batch {
+                let mut trial = world.inventory.clone();
+                if trial.remove_item(quartz, quartz_batch)
+                    && super::inventory::resources::exchange(&mut trial, &[(3, SMELT_COAL)],
+                        &[(GOLD_INGOT, super::smeltery::INGOTS_PER_BLOCK * UNIT)])
+                {
+                    world.inventory = trial;
                     processed += 1;
                 }
             }
@@ -742,7 +707,7 @@ pub fn interact(
                 });
                 world
                     .expedition
-                    .say("Smelted batch: 1 ingot per ore using 0.25 coal.");
+                    .say(format!("Smelted {processed} batches"));
             } else if reinforce_weapon(world) {
                 world.reconcile_legacy_to_inventory();
                 world.sync_from_inventory();
@@ -751,30 +716,12 @@ pub fn interact(
             }
         }
         B::SalvageCrate | B::SurveyCache | B::CultivatorCache => {
-            let mut queue = VecDeque::from([p]);
-            let mut visited = HashSet::new();
-            while let Some(cell) = queue.pop_front() {
-                if visited.len() >= 512 || !visited.insert(cell) {
-                    continue;
-                }
-                if (cell - p).as_vec3().length() * world.voxel_scale.meters() > 1.8
-                    || world.get(cell) != b
-                {
-                    continue;
-                }
-                if harvest(world, cell, blocks, chunks) {
-                    for d in [
-                        IVec3::X,
-                        IVec3::NEG_X,
-                        IVec3::Y,
-                        IVec3::NEG_Y,
-                        IVec3::Z,
-                        IVec3::NEG_Z,
-                    ] {
-                        queue.push_back(cell + d);
-                    }
-                }
+            if super::containers::open(world, p) {
+                super::dungeon_quest::on_cache_open(world, p);
             }
+        }
+        B::LockedDoor | B::BossDoor => {
+            super::dungeon_quest::try_open(world, p, blocks, chunks);
         }
         B::GlowCap | B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => {
             harvest(world, p, blocks, chunks);
@@ -841,17 +788,7 @@ pub fn interact(
 /// runs pass `Budget::UNBOUNDED` so the result depends only on the world.
 pub fn bore_targets(world: &mut World, p: IVec3, player: Vec3, time_budget: crate::simulation::Budget) -> Vec<IVec3> {
     let b = world.get(p);
-    if !matches!(
-        b,
-        B::CopperOre
-            | B::TinOre
-            | B::IronOre
-            | B::CoalOre
-            | B::Crystal
-            | B::Stone
-            | B::Limestone
-            | B::Basalt
-    ) {
+    if engine_content::ore::family(b).is_none() && !matches!(b, B::Stone | B::Limestone | B::Basalt) {
         return Vec::new();
     }
     let tier = world.expedition.tool_tier;
@@ -943,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn chopped_tree_fells_as_an_assembly_and_clears_the_canopy() {
+    fn chopped_tree_carries_its_canopy_and_drops_its_wood() {
         let mut world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 1234);
         let base = IVec3::new(0, 100, 0);
         for y in 100..=103 {
@@ -959,30 +896,20 @@ mod tests {
             }
         }
         world.set(base, B::Air);
-        let touched = fell_tree(&mut world, base).expect("tree should be recognized");
-        assert!(!touched.is_empty());
-        assert_eq!(world.get(IVec3::new(1, 103, 0)), B::Air);
+        assert!(fell_tree(&mut world, base, Vec3::X));
+        assert_eq!(world.get(IVec3::new(1, 103, 0)), B::Leaves);
         assert_eq!(world.sandbox.bodies.len(), 1);
-        assert!(
-            world.sandbox.bodies[0]
-                .occupied
-                .iter()
-                .all(|(_, b)| *b == B::Log)
-        );
-        assert!(world.sandbox.bodies[0].occupied.len() >= 3);
 
-        let body = world.sandbox.bodies.remove(0);
-        let cells: Vec<_> = body.occupied.iter().map(|(p, _)| *p).collect();
-        let before = world
-            .inventory
-            .count_item(crate::world::inventory::Item::Block(B::Log));
-        drop_log_cells(&mut world, &cells, &mut HashSet::new(), &mut HashSet::new());
-        assert!(cells.iter().all(|p| world.get(*p) == B::Air));
-        assert!(
-            world
-                .inventory
-                .count_item(crate::world::inventory::Item::Block(B::Log))
-                >= before + cells.len() as u32
-        );
+        let mut body = world.sandbox.bodies.remove(0);
+        let logs = body.occupied.iter().filter(|(_, b)| *b == B::Log).count();
+        assert_eq!(logs, 3);
+        assert!(body.occupied.iter().any(|(_, b)| *b == B::Leaves));
+        assert!(finish_tree(&mut world, &mut body, &mut HashSet::new(), &mut HashSet::new()));
+        assert_eq!(world.get(IVec3::new(1, 103, 0)), B::Air);
+        let dropped: u32 = world.inventory.dropped.iter()
+            .filter(|d| d.stack.item == super::super::inventory::Item::Block(B::Log))
+            .map(|d| d.stack.count)
+            .sum();
+        assert_eq!(dropped, logs as u32);
     }
 }

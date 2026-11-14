@@ -2,15 +2,17 @@
 //! `Adventure::wand`/`loadout` are the working copy of whichever wand is held,
 //! written back to the bank every tick so dropping or storing one loses nothing.
 use super::*;
-use crate::wand_style::{GLOWS, GRIPS, HEADS, SHAFTS, TRAILS, WandStyle};
+use crate::wand_style::{GLOWS, GRIPS, SHAFTS, TRAILS, WandStyle};
 use crate::world::inventory::{Item, ItemStack, SurvivalInventory};
 use engine_core::hash::{hash01, hash_u32};
 
 pub const MAX_WANDS: usize = 4096;
+pub const GRIMOIRE_LOOK: u16 = 1 << 15;
 /// Largest multiple of the rank's mana pool a found wand can roll.
 pub const MAX_MANA_SCALE: f32 = 1.7;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct WandRecord {
     pub tier: u32,
     pub loadout: wands::Loadout,
@@ -35,23 +37,31 @@ const TITLES: [&str; 24] = [
 /// crafted chassis and returns the tier's table stats unchanged.
 pub fn stats_for(tier: u32, loadout: &wands::Loadout, rank: u32) -> wands::WandStats {
     let mut s = wands::stats(tier, loadout.mode, rank);
+    let grimoire = wands::is_grimoire(loadout.mode);
+    if let Some(binding) = super::enchanting::binding(loadout.mode) {
+        s.name = &binding.grimoire;
+        s.chassis = "Bound";
+        s.mana_max *= binding.mana_capacity;
+    }
     let seed = loadout.seed;
     if seed == 0 || tier == 0 {
         return s;
     }
     let span = |salt, lo: f32, hi: f32| lo + (hi - lo) * roll(seed, salt);
-    s.name = TITLES[pick(seed, 0, TITLES.len())];
+    if !grimoire {
+        s.name = TITLES[pick(seed, 0, TITLES.len())];
+    }
     s.cast_delay = (s.cast_delay * span(1, 0.55, 1.6)).max(0.02);
     s.recharge_time = (s.recharge_time * span(2, 0.5, 1.7)).max(0.08);
     s.mana_max = (s.mana_max * span(3, 0.7, MAX_MANA_SCALE)).round();
     s.mana_charge_speed *= charge_scale(loadout);
     s.spread_deg = (s.spread_deg + span(5, -2.0, 6.0)).max(0.0);
-    if shuffled(seed, tier) {
+    if !grimoire && shuffled(seed, tier) {
         s.shuffle = true;
         s.recharge_time *= 0.7;
         s.chassis = "Shuffle";
     }
-    if tier >= 2 && roll(seed, 6) < 0.22 {
+    if !grimoire && tier >= 2 && roll(seed, 6) < 0.22 {
         s.spells_per_cast += 1;
     }
     s
@@ -73,7 +83,9 @@ pub fn style(seed: u32, crafted: WandStyle) -> WandStyle {
     }
     WandStyle {
         shaft: pick(seed, 10, SHAFTS.len()) as u8,
-        head: pick(seed, 11, HEADS.len()) as u8,
+        // Existing saved seeds were rolled against six families. Keep those
+        // identities stable; appended families are selectable in the atelier.
+        head: pick(seed, 11, 6) as u8,
         trail: pick(seed, 12, TRAILS.len()) as u8,
         grip: pick(seed, 13, GRIPS.len()) as u8,
         glow: pick(seed, 14, GLOWS.len()) as u8,
@@ -83,12 +95,14 @@ pub fn style(seed: u32, crafted: WandStyle) -> WandStyle {
 
 /// Icon bits carried on the item itself: tier, shaft, head and glow.
 pub fn look(record: &WandRecord) -> u16 {
-    let s = style(record.loadout.seed, WandStyle::default());
+    let s = style(record.loadout.seed, crate::wand_style::current());
     (record.tier.min(3) as u16)
         | (s.shaft as u16 & 7) << 2
         | (s.head as u16 & 7) << 5
         | (s.glow as u16 & 7) << 8
         | u16::from(record.loadout.seed == 0) << 11
+        | (s.grip as u16 & 7) << 12
+        | if wands::is_grimoire(record.loadout.mode) { GRIMOIRE_LOOK } else { 0 }
 }
 
 /// A wand lying on the ground: a small tilted shaft with its head glowing.
@@ -98,7 +112,8 @@ pub fn draw_dropped(m: &mut crate::mesh::models::Model, centre: Vec3, rot: Quat,
 
 fn usable(id: u32, tier: u32) -> bool {
     id != wands::EMPTY
-        && !matches!(id, 6 | 7)
+        && !matches!(id, 6 | 7 | super::spells::STORM_SURGE)
+        && wands::fits_instrument(id, 0)
         && spell_name(id) != "Unknown spell"
         && spell_available(id, tier, 0)
 }
@@ -145,11 +160,6 @@ pub fn drop_roll(site: IVec3, slot: u32, kind: u32, menace: u8, boss: bool, rank
     (boss || roll(seed, 99) < chance).then_some((seed, tier.min(3)))
 }
 
-fn holds(inv: &SurvivalInventory, id: u16) -> bool {
-    let is = |s: &Option<ItemStack>| s.is_some_and(|s| matches!(s.item, Item::Wand { id: w, .. } if w == id));
-    inv.hotbar.iter().chain(inv.pack.iter()).chain(inv.craft_grid.iter()).any(is) || is(&inv.cursor)
-}
-
 impl Adventure {
     /// The held deck as the viewmodel shows it: one entry per slot the wand has.
     pub fn deck_view(&self) -> Vec<Option<[f32; 3]>> {
@@ -181,6 +191,8 @@ impl Adventure {
     pub fn sync_wands(&mut self, inv: &mut SurvivalInventory, selected: usize, drop_at: Vec3) {
         if self.wand == 0 {
             self.active_wand = None;
+        } else {
+            self.clear_wand_channels();
         }
         if let Some(a) = self.active_wand
             && let Some(record) = self.wand_bank.get_mut(a as usize)
@@ -211,28 +223,25 @@ impl Adventure {
                 }
             }
         }
-        if let Some(Item::Wand { id, .. }) = inv.hotbar.get(selected).copied().flatten().map(|s| s.item)
-            && self.active_wand != Some(id)
-            && let Some(record) = self.wand_bank.get(id as usize).copied()
-        {
-            self.equip(id, record);
-        }
-        if let Some(a) = self.active_wand
-            && !holds(inv, a)
-        {
-            // The wand left the inventory; the next wand in the hotbar takes over.
-            self.active_wand = None;
-            self.wand = 0;
-            self.loadout = wands::Loadout::default();
-            let next = inv.hotbar.iter().chain(inv.pack.iter()).flatten().find_map(|s| match s.item {
+        let selected_wand = inv.hotbar.get(selected).copied().flatten().and_then(|stack| {
+            match stack.item {
                 Item::Wand { id, .. } => Some(id),
                 _ => None,
-            });
-            if let Some(id) = next
-                && let Some(record) = self.wand_bank.get(id as usize).copied()
-            {
+            }
+        });
+        if let Some(id) = selected_wand
+            && let Some(record) = self.wand_bank.get(id as usize).copied()
+        {
+            if self.active_wand != Some(id) {
                 self.equip(id, record);
             }
+        } else {
+            // Ordinary hotbar items own the hand. The saved bank record retains
+            // this wand's deck for the next explicit selection.
+            self.active_wand = None;
+            self.wand = 0;
+            self.spell = 0;
+            self.loadout = wands::Loadout::default();
         }
     }
     fn equip(&mut self, id: u16, record: WandRecord) {
@@ -247,7 +256,23 @@ impl Adventure {
                 self.spell_log.add(s);
             }
         }
+        self.clear_wand_channels();
         self.mana = self.mana.min(self.max_mana());
+    }
+
+    /// Older ordinary wands may still carry a channel. Keep the learned card
+    /// in the spellbook when clearing its incompatible slot.
+    fn clear_wand_channels(&mut self) {
+        if wands::is_grimoire(self.loadout.mode) {
+            return;
+        }
+        for i in 0..wands::MAX_SLOTS {
+            let spell = self.loadout.slot(i);
+            if !wands::fits_instrument(spell, self.loadout.mode) {
+                self.spell_log.add(spell);
+                self.loadout.set_slot(i, wands::EMPTY);
+            }
+        }
     }
 
     pub fn encode_wand_bank(&self, bytes: &mut Vec<u8>) {
@@ -274,7 +299,8 @@ impl Adventure {
             let tier = read()?;
             let mode = read()?;
             let seed = read()?;
-            ensure!((1..=3).contains(&tier) && mode <= 3, "Invalid wand chassis");
+            ensure!((1..=3).contains(&tier)
+                && (mode <= 3 || tier == 3 && wands::is_grimoire(mode)), "Invalid wand chassis");
             let mut loadout = wands::Loadout { slots: [wands::EMPTY; 4], aux_slots: [wands::EMPTY; 4], cursor: 0, mode, seed };
             for i in 0..wands::MAX_SLOTS {
                 let s = read()?;

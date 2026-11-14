@@ -1,6 +1,10 @@
 //! Presentation springs driven by fixed-step player and equipment state.
 use glam::Vec2;
 
+pub mod clips;
+
+const HIT_STOP_SECONDS: f32 = 0.05;
+
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spring {
@@ -31,6 +35,9 @@ pub struct State {
     pub speed: f32,
     pub hit: f32,
     pub fidget: f32,
+    /// Seconds into the mining chop clip; 0 at rest.
+    #[serde(default)]
+    pub mine: f32,
     pub sky: f32,
     pub tier: u32,
     pub seed: u32,
@@ -38,6 +45,27 @@ pub struct State {
     previous_health: f32,
     idle: f32,
     interaction_time: f32,
+    #[serde(skip)]
+    mine_clock: f32,
+    /// Break progress (worked, needed) seconds; the tool arc locks to it so the cell breaks on a strike.
+    #[serde(skip)]
+    pub mine_timing: Option<(f32, f32)>,
+    /// Seconds the drawn swing trails the simulated one: hit-stop pauses the clip, then it catches up.
+    #[serde(skip)]
+    pub swing_lag: f32,
+    /// One-shot clip on the held item and its time in clip seconds.
+    #[serde(skip)]
+    pub clip: Option<(clips::Name, f32)>,
+    #[serde(skip)]
+    breath: f32,
+    #[serde(skip)]
+    equip_time: f32,
+    #[serde(skip)]
+    held_seen: Option<crate::world::inventory::Item>,
+    #[serde(skip)]
+    hit_stop: f32,
+    #[serde(skip)]
+    landed_seen: u32,
     sky_clock: f32,
     sky_target: f32,
     initialized: bool,
@@ -46,9 +74,28 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self { sway: Spring::default(), aim: 0.0, inspect: 0.0, interact: 0.0,
-            equip: 0.0, gait: 0.0, speed: 0.0, hit: 0.0, fidget: 0.0, sky: 1.0,
+            equip: 0.0, gait: 0.0, speed: 0.0, hit: 0.0, fidget: 0.0, mine: 0.0, sky: 1.0,
             tier: 0, seed: 0, previous_angles: Vec2::ZERO, previous_health: 100.0,
-            idle: 0.0, interaction_time: 0.0, sky_clock: 0.0, sky_target: 1.0, initialized: false }
+            idle: 0.0, interaction_time: 0.0, mine_clock: 0.0, mine_timing: None, swing_lag: 0.0, clip: None, breath: 0.0, equip_time: 0.0, held_seen: None, hit_stop: 0.0, landed_seen: 0, sky_clock: 0.0, sky_target: 1.0, initialized: false }
+    }
+}
+
+impl State {
+    pub(super) fn checkpoint_valid(&self) -> bool {
+        self.sway.value.is_finite() && self.sway.velocity.is_finite()
+            && self.previous_angles.is_finite()
+            && [self.aim, self.inspect, self.interact, self.equip, self.gait, self.speed,
+                self.hit, self.fidget, self.mine, self.sky, self.previous_health, self.idle,
+                self.interaction_time, self.mine_clock, self.sky_clock, self.sky_target]
+                .into_iter().all(f32::is_finite)
+    }
+}
+
+impl State {
+    /// Held-item pose: idle breathing under the active clip, or a benchmark review clip.
+    pub fn pose(&self) -> clips::Pose {
+        let idle = clips::Name::Idle.clip().sample(self.breath);
+        clips::review().or(self.clip).map_or(idle, |(name, t)| idle.then(name.clip().sample(t)))
     }
 }
 
@@ -68,35 +115,78 @@ pub fn tick(player: &mut super::Player, world: &crate::world::World,
     let angles = Vec2::new(player.yaw, player.pitch);
     if !angles.is_finite() || !speed.is_finite() { return; }
     let eye = player.eye(world.voxel_scale).floor().as_ivec3();
+    let held = crate::mesh::models::held_item::held(world, player);
+    let sway_rate = crate::mesh::models::held_item::sway_rate(held);
     let state = &mut player.viewmodel;
     let adv = &world.adventure;
     if !state.initialized {
         state.previous_angles = angles;
         state.previous_health = adv.health;
+        state.held_seen = held;
+        state.equip_time = clips::Name::Equip.clip().duration;
         state.initialized = true;
     }
+    if state.held_seen != held {
+        state.held_seen = held;
+        state.equip_time = 0.0;
+    }
+    state.equip_time = (state.equip_time + dt).min(clips::Name::Equip.clip().duration);
     let mut turn = angles - state.previous_angles;
     turn.x = (turn.x + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
         - std::f32::consts::PI;
     state.previous_angles = angles;
     let target = (-turn / dt * 0.007).clamp(Vec2::splat(-0.035), Vec2::splat(0.035))
         + if inertia.is_finite() { inertia } else { Vec2::ZERO };
-    state.sway.step(target * crate::comfort::camera_motion(), 16.0, dt);
+    state.sway.step(target * crate::comfort::camera_motion(), sway_rate, dt);
     approach(&mut state.speed, speed.min(14.0), 10.0, dt);
     state.gait = (state.gait + speed * dt * 1.8).rem_euclid(std::f32::consts::TAU);
-    let held = adv.wand > 0 && adv.swing() <= 0.0;
+    let wand_held = adv.wand > 0 && adv.swing() <= 0.0;
     if adv.wand > 0 {
         if state.seed != adv.loadout.seed && state.tier != 0 { state.equip = 0.0; }
         state.tier = adv.wand;
         state.seed = adv.loadout.seed;
     }
-    approach(&mut state.equip, u8::from(held) as f32, 12.0, dt);
-    approach(&mut state.aim, u8::from(held && input.cast_spell) as f32, 11.0, dt);
+    approach(&mut state.equip, u8::from(wand_held) as f32, 12.0, dt);
+    approach(&mut state.aim, u8::from(wand_held && input.cast_spell) as f32, 11.0, dt);
     approach(&mut state.inspect,
-        u8::from(held && input.inspect_equipment && speed < 0.3 && !adv.casting()) as f32, 8.0, dt);
-    if input.interact { state.interaction_time = 0.30; }
+        u8::from(wand_held && input.inspect_equipment && speed < 0.3 && !adv.casting()) as f32, 8.0, dt);
+    let use_clip = clips::Name::Use.clip();
+    if input.interact { state.interaction_time = use_clip.duration; }
     state.interaction_time = (state.interaction_time - dt).max(0.0);
     approach(&mut state.interact, u8::from(state.interaction_time > 0.0) as f32, 14.0, dt);
+    let chop = clips::Name::Chop.clip();
+    if (input.break_block || input.break_pressed) && adv.swing() <= 0.0 && !adv.casting() {
+        state.mine_clock = match state.mine_timing {
+            Some((elapsed, needed)) => crate::world::mining::stroke_phase(elapsed, needed),
+            None => (state.mine_clock + dt / chop.duration).rem_euclid(1.0),
+        };
+        state.mine = state.mine_clock * chop.duration;
+    } else {
+        state.mine_clock = 0.0;
+        // A released stroke plays out instead of snapping back to rest.
+        state.mine = if state.mine > 0.0 && state.mine + dt < chop.duration { state.mine + dt } else { 0.0 };
+    }
+    // Hit-stop: the drawn blade holds at contact for a beat, then catches up with the swing.
+    if adv.melee_landed != state.landed_seen {
+        state.landed_seen = adv.melee_landed;
+        state.hit_stop = HIT_STOP_SECONDS;
+    }
+    if state.hit_stop > 0.0 { state.hit_stop -= dt; state.swing_lag += dt; }
+    else { state.swing_lag *= (-14.0 * dt).exp(); }
+    if adv.swing() <= 0.0 { state.swing_lag = 0.0; }
+    state.breath = (state.breath + dt).rem_euclid(clips::Name::Idle.clip().duration);
+    let equip_clip = clips::Name::Equip.clip();
+    state.clip = if adv.swing() > 0.0 {
+        let stroke = clips::Name::stroke(adv.backswing(), adv.finisher());
+        let elapsed = ((1.0 - adv.swing()) * adv.swing_duration() - state.swing_lag).max(0.0);
+        Some((stroke, elapsed * stroke.clip().duration / adv.swing_duration()))
+    } else if state.mine > 0.0 {
+        Some((clips::Name::Chop, state.mine))
+    } else if state.interaction_time > 0.0 {
+        Some((clips::Name::Use, use_clip.duration - state.interaction_time))
+    } else if state.equip_time < equip_clip.duration {
+        Some((clips::Name::Equip, state.equip_time))
+    } else { None };
     let loss = (state.previous_health - adv.health).max(0.0);
     state.previous_health = adv.health;
     state.hit = (state.hit * (-12.0 * dt).exp() + loss * 0.025).min(1.0);
@@ -111,7 +201,8 @@ pub fn tick(player: &mut super::Player, world: &crate::world::World,
     if state.sky_clock <= 0.0 {
         state.sky_clock = 0.125;
         let reach = (24.0 / scale).ceil().clamp(1.0, 96.0) as i32;
-        let covered = (1..=reach).any(|y| world.get(eye + glam::IVec3::Y*y).is_opaque());
+        let mut column = world.column_reader(eye.x, eye.z);
+        let covered = (1..=reach).any(|dy| column(eye.y + dy).is_opaque());
         state.sky_target = if covered { 0.06 } else { 1.0 };
     }
     approach(&mut state.sky, state.sky_target, 6.0, dt);
@@ -135,5 +226,23 @@ mod tests {
         a.step(Vec2::splat(f32::NAN), 16.0, 0.01);
         a.step(target, 16.0, f32::NAN);
         assert_eq!(a.value, before);
+    }
+
+    #[test]
+    fn mining_animates_immediately_and_settles_on_release() {
+        let world = crate::world::World::new(
+            crate::world::WorldType::Superflat,
+            crate::fluid::VoxelScalePreset::OneMeter,
+        );
+        let mut player = crate::player::Player::new();
+        let mut input = crate::player::Input { break_block: true, ..Default::default() };
+        tick(&mut player, &world, &input, 1.0 / 120.0);
+        // The chop clip starts on the first tick.
+        assert!(player.viewmodel.mine != 0.0);
+        input.break_block = false;
+        for _ in 0..120 {
+            tick(&mut player, &world, &input, 1.0 / 120.0);
+        }
+        assert!(player.viewmodel.mine.abs() < 1e-5);
     }
 }

@@ -56,6 +56,7 @@ mod priority_tests {
     #[test]
     fn oldest_incomplete_column_finishes_before_continuous_repairs() {
         let mut cache = ChunkCache::new(IVec3::ZERO);
+        cache.spawn_ready = true;
         let now = Instant::now();
         let old = IVec3::new(80, 0, 0);
         let tied = IVec3::new(0, 0, 80);
@@ -90,6 +91,7 @@ mod priority_tests {
     #[test]
     fn pending_sources_share_cover_and_whole_column_priority() {
         let mut cache = ChunkCache::new(IVec3::ZERO);
+        cache.spawn_ready = true;
         let birth = Instant::now() - Duration::from_secs(2);
         let old = IVec3::new(80, 0, 0);
         let tied = IVec3::new(0, 0, 80);
@@ -109,9 +111,9 @@ mod priority_tests {
         cache.dirty_meshes.insert(repair);
         let key = |coord| ChunkKey { coord, lod: 0 };
         let mut heap: std::collections::BinaryHeap<_> = [extra_y, repair, newer, old + IVec3::Y, missing, old, tied + IVec3::Y, tied]
-            .into_iter().map(|q| ChunkStreamer::source_pending_priority(&cache, key(q), true)).collect();
+            .into_iter().map(|q| ChunkStreamer::source_pending_priority(&cache, key(q), true, false, false, false, false)).collect();
         let mut order = Vec::new();
-        while let Some(std::cmp::Reverse((_, _, (_, _, _, _, x, y, z, _)))) = heap.pop() {
+        while let Some(std::cmp::Reverse(super::super::PendingSourcePriority { radial: (_, _, _, _, x, y, z, _), .. })) = heap.pop() {
             order.push(IVec3::new(x, y, z));
         }
         assert_eq!(order[0], missing, "uncovered ordinary column remains first");
@@ -121,8 +123,8 @@ mod priority_tests {
         assert_eq!(order[6], repair, "near continuous repair cannot outrank incomplete sources");
         assert_eq!(order[7], extra_y, "missing Y over published old cover is repair, not emergency cover");
         cache.edit_proxies.mark_admitted((tied.x, tied.z));
-        assert!(ChunkStreamer::source_pending_priority(&cache, key(old), true)
-            > ChunkStreamer::source_pending_priority(&cache, key(tied), true), "Reverse heap exits admitted proxy from completion lane");
+        assert!(ChunkStreamer::source_pending_priority(&cache, key(old), true, false, false, false, false)
+            > ChunkStreamer::source_pending_priority(&cache, key(tied), true, false, false, false, false), "Reverse heap exits admitted proxy from completion lane");
     }
 }
 
@@ -133,6 +135,7 @@ pub(super) struct EditProxies {
     quality_coords: HashSet<IVec3>,
     quality_columns: HashSet<(i32,i32)>,
     quality_admitted: HashSet<(i32,i32)>,
+    pub(super) quality_requested: HashSet<(i32,i32)>,
     latest_source_revision: u64,
     last_report: Option<Instant>,
     previous_water: Option<Arc<crate::world::WaterSnapshot>>,
@@ -241,7 +244,8 @@ impl ChunkCache {
         let mut changed_chunks = dirty_chunks.clone();
         if let Some(previous) = &self.edit_proxies.previous_water {
             for (q, old, new) in snapshot.water_levels.changed_chunks(previous) {
-                if (old == new && !snapshot.water_levels.precision.changed(&previous.precision,q))
+                if (!*crate::AB_OLD && !snapshot.water_levels.surface_changed(previous, q, snapshot.cfg.voxel_scale))
+                    || (old == new && !snapshot.water_levels.precision.changed(&previous.precision,q))
                     || !self.edit_proxies.previous_hot_coords.contains(&q)
                     || !snapshot.chunks.contains_key(&q)
                     || dirty_chunks.contains(&q)
@@ -462,7 +466,11 @@ impl ChunkCache {
     ) {
         let before = self.edit_proxies.columns.len();
         self.edit_proxies.columns.retain(|key, c| {
-            !(baked_columns.contains(key) && c.revision <= parent_source_revision)
+            // A baked parent covers edits, but it does not replace the fine
+            // geometry still requested by the quality selector. Retiring that
+            // geometry here makes the next frame promote it all over again.
+            !(baked_columns.contains(key) && c.revision <= parent_source_revision
+                && !self.edit_proxies.quality_requested.contains(key))
         });
         if before != self.edit_proxies.columns.len() {
             self.edit_proxies.rebuild_coords();
@@ -479,17 +487,17 @@ impl ChunkCache {
                 .view_distance_chunks
                 .clamp(1, 64),
         );
-        self.visible_coords.contains(&q)
+        self.radius_cap != Some(0) && self.visible_coords.contains(&q)
             && d.x.abs() <= r
             && d.z.abs() <= r
             && d.x * d.x + d.z * d.z <= r * r
     }
 
     pub(super) fn supplemental_gpu_bytes(&self) -> usize {
-        self.gpu_meshes
-            .iter()
-            .filter(|(q, _)| self.horizon_pin_coords.contains(*q) || self.edit_proxies.contains(q))
-            .map(|(_, mesh)| mesh.bytes)
+        self.edit_proxies.coords.iter()
+            .chain(self.horizon_pin_coords.iter().filter(|q| !self.edit_proxies.contains(q)))
+            .filter_map(|q| self.gpu_meshes.get(q))
+            .map(|mesh| mesh.bytes)
             .sum()
     }
 }

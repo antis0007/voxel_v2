@@ -1,8 +1,13 @@
 //! Rendering and atmospheric shading.
 //! Chunk residency and terrain work are owned by render/streaming.rs.
 
+mod cloud_noise;
+use cloud_noise::{gen_shape_noise_data, gen_detail_noise_data};
+
 mod capture;
+pub mod portals;
 mod frame_pacer;
+mod upload_staging;
 mod pipeline_cache;
 pub mod coverage;
 pub mod globe;
@@ -12,19 +17,31 @@ pub(crate) fn flush_review_captures() {
         eprintln!("[capture] end-of-review flush timed out");
     }
 }
+pub(crate) fn acceptance_capture_result(path: &std::path::Path) -> Option<bool> {
+    capture::watched_result(path)
+}
 mod horizon;
+mod planet;
+mod planet_frame;
 mod origin;
 mod streaming;
-pub use streaming::{ChunkCache, ChunkKey, ChunkStreamer, build_draw_list};
+pub use streaming::{ChunkCache, ChunkKey, ChunkStreamer, DrawScratch, build_draw_list_with_coverage};
+#[cfg(feature = "multiplayer")]
+pub use streaming::PortalWarmup;
 pub use streaming::{
     MAX_GPU_MIB, gpu_residency_limit_mib, gpu_residency_status, mesh_budget_mib,
     set_mesh_budget_mib, set_world_residency_budgets_mib, world_residency_budgets_mib,
 };
 pub(crate) use streaming::{chunk_bounds_sphere, extract_planes};
+pub(crate) use streaming::StreamInterestChange;
 pub(crate) use streaming::occlusion;
 pub use streaming::indirect_draws::set_enabled as set_multidraw_enabled;
 
 mod atmosphere;
+mod planet_air;
+mod torch_occlusion;
+pub mod sky_volume;
+mod sky_volume_gpu;
 mod sky_probe;
 mod posed_assets;
 pub mod atmosphere_config;
@@ -50,11 +67,20 @@ pub mod shadow;
 use anyhow::{Context, Result};
 use glam::{IVec3, Mat4, Vec3, Vec4};
 use origin::{ABSOLUTE_SLOT, DrawOffsets, DrawTransform, RenderOrigin};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const LOD_TRANSITION_TIME: Duration = Duration::from_millis(320);
+
+fn lod_transition_phase(started: Instant, now: Instant) -> Option<u32> {
+    let elapsed = now.saturating_duration_since(started);
+    (elapsed < LOD_TRANSITION_TIME).then(|| {
+        (elapsed.as_nanos() * 64 / LOD_TRANSITION_TIME.as_nanos()) as u32
+    })
+}
 use wgpu::util::DeviceExt;
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -66,15 +92,17 @@ use crate::world::{
 
 use atmosphere::{
     AtmosphereRuntime, AtmosphereRuntimeState, cloud_composite_shader_source,
-    cloud_shader_source_for_filtering, cloud_temporal_shader_source, sky_shader_source,
-    world_shader_source,
+    cloud_shader_source_for_filtering, cloud_temporal_shader_source, sky_shader_source_for_filtering,
+    world_shader_source_for_filtering,
 };
 pub use atmosphere_params::AtmosphereMode;
 pub use debug::RenderDebugView;
 
-const DEFAULT_VIEW_DISTANCE_CHUNKS: i32 = 28;
-const DEFAULT_LOD_START_CHUNKS: i32 = 10;
-const DEFAULT_LOD_LEVELS: u32 = 4;
+const DEFAULT_VIEW_DISTANCE_CHUNKS: i32 = 12;
+/// Preserve full detail through ring 5 and 2 m detail through ring 8.
+/// The additional four rings use 4 m cells, beyond the former voxel boundary.
+const DEFAULT_LOD_START_CHUNKS: i32 = 5;
+const DEFAULT_LOD_LEVELS: u32 = 3;
 
 static VIEW_DISTANCE_CHUNKS_ATOMIC: AtomicI32 = AtomicI32::new(DEFAULT_VIEW_DISTANCE_CHUNKS);
 static LOD_START_CHUNKS_ATOMIC: AtomicI32 = AtomicI32::new(DEFAULT_LOD_START_CHUNKS);
@@ -145,6 +173,8 @@ pub struct ChunkStreamerStats {
     pub gpu_resident_bytes: usize,
     pub terrain_buffer_bytes: usize,
     pub queued_mesh_bytes: usize,
+    pub upload_staging_bytes: usize,
+    pub upload_staging_jobs: usize,
     pub terrain_generated: usize,
     pub terrain_scheduled: usize,
     pub mesh_dispatched: usize,
@@ -157,6 +187,7 @@ pub struct ChunkStreamerStats {
     pub ready_chunks: usize,
     pub ready_meshes: usize,
     pub pending_schedule: usize,
+    pub parked_offscreen: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -201,8 +232,10 @@ pub struct RenderFrameStats {
     pub gpu_cloud_raymarch_ms: f32,
     pub gpu_cloud_temporal_ms: f32,
     pub gpu_sky_ms: f32,
+    pub gpu_sky_probe_ms: f32,
     pub gpu_cloud_composite_ms: f32,
     pub gpu_outline_ms: f32,
+    pub gpu_postprocess_ms: f32,
     pub gpu_ui_ms: f32,
     pub gpu_timestamps_supported: bool,
     pub cloud_history_invalidations: usize,
@@ -221,8 +254,10 @@ struct GpuPassTimings {
     cloud_raymarch_ms: f32,
     cloud_temporal_ms: f32,
     sky_ms: f32,
+    sky_probe_ms: f32,
     cloud_composite_ms: f32,
     outline_ms: f32,
+    postprocess_ms: f32,
     ui_ms: f32,
 }
 
@@ -244,7 +279,7 @@ enum CloudHistoryInvalidationReason {
 }
 
 const GPU_TIMESTAMP_BUFFERED_FRAMES: usize = 8;
-const GPU_TIMESTAMP_PASS_COUNT: u32 = GPU_TIMESTAMP_SHADOW_PASS_COUNT + 8;
+const GPU_TIMESTAMP_PASS_COUNT: u32 = GPU_TIMESTAMP_SHADOW_PASS_COUNT + 10;
 const GPU_TIMESTAMP_QUERY_COUNT: u32 = GPU_TIMESTAMP_PASS_COUNT * 2;
 const GPU_TIMESTAMP_RESULT_BYTES: u64 = GPU_TIMESTAMP_QUERY_COUNT as u64 * wgpu::QUERY_SIZE as u64;
 const GPU_TIMESTAMP_RESOLVE_BYTES: u64 = GPU_TIMESTAMP_RESULT_BYTES
@@ -259,6 +294,8 @@ const GPU_TIMESTAMP_PASS_CLOUD_COMPOSITE: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 4;
 const GPU_TIMESTAMP_PASS_OUTLINE: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 5;
 const GPU_TIMESTAMP_PASS_UI: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 6;
 const GPU_TIMESTAMP_PASS_INDIRECT: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 7;
+const GPU_TIMESTAMP_PASS_POSTPROCESS: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 8;
+const GPU_TIMESTAMP_PASS_SKY_PROBE: u32 = GPU_TIMESTAMP_PASS_TERRAIN + 9;
 
 fn allocate_pass_timestamp_writes<'a>(
     query_set: Option<&'a wgpu::QuerySet>,
@@ -297,12 +334,36 @@ struct GpuProfilerSlot {
     pass_queries: [Option<(u32, u32)>; GPU_TIMESTAMP_PASS_COUNT as usize],
 }
 
+#[derive(Debug)]
+pub(crate) enum SurfaceFrameError {
+    Lost,
+    Outdated,
+    Timeout,
+    Other,
+}
+
+impl std::fmt::Display for SurfaceFrameError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for SurfaceFrameError {}
+
 // One callback per device, installed before any optional profiler resources.
 // A false flag means no loss has been reported, not a GPU-completion fence.
-fn acquire_surface_frame(surface:&wgpu::Surface<'_>,lost:&AtomicBool,pacer:&frame_pacer::FramePacer,device:&wgpu::Device)->Result<wgpu::SurfaceTexture,wgpu::SurfaceError> {
-    if lost.load(Ordering::Acquire) {return Err(wgpu::SurfaceError::Lost);}
-    pacer.wait_before_acquire(device);
-    let result=surface.get_current_texture();
+fn acquire_surface_frame(surface:&wgpu::Surface<'_>,lost:&AtomicBool,pacer:&frame_pacer::FramePacer,device:&wgpu::Device)->Result<wgpu::SurfaceTexture,SurfaceFrameError> {
+    if lost.load(Ordering::Acquire) {return Err(SurfaceFrameError::Lost);}
+    let ready = pacer.ready(device);
+    if lost.load(Ordering::Acquire) {return Err(SurfaceFrameError::Lost);}
+    if !ready { return Err(SurfaceFrameError::Timeout); }
+    let result = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => Ok(frame),
+        wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => Err(SurfaceFrameError::Timeout),
+        wgpu::CurrentSurfaceTexture::Outdated => Err(SurfaceFrameError::Outdated),
+        wgpu::CurrentSurfaceTexture::Lost => Err(SurfaceFrameError::Lost),
+        wgpu::CurrentSurfaceTexture::Validation => Err(SurfaceFrameError::Other),
+    };
     if let Err(error)=&result {
         static FAILURES:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
         let count=FAILURES.fetch_add(1,Ordering::Relaxed)+1;
@@ -360,9 +421,9 @@ impl GpuProfiler {
 
         // Optional diagnostic allocations must not become invalid resources
         // silently published into the next render encoder.
-        device.push_error_scope(wgpu::ErrorFilter::Internal);
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
-        device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal_scope = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let (done_tx, done_rx) = mpsc::channel();
         let slots = (0..GPU_TIMESTAMP_BUFFERED_FRAMES)
             .map(|slot_index| {
@@ -400,9 +461,9 @@ impl GpuProfiler {
 
         // These scopes cover resource creation only. Resolve them at startup,
         // never by waiting on a submitted frame in the rendering loop.
-        let memory = device.pop_error_scope();
-        let validation = device.pop_error_scope();
-        let internal = device.pop_error_scope();
+        let memory = memory_scope.pop();
+        let validation = validation_scope.pop();
+        let internal = internal_scope.pop();
         let errors = pollster::block_on(async { [memory.await, validation.await, internal.await] });
         if device_lost.load(Ordering::Acquire) || errors.iter().any(Option::is_some) {
             eprintln!("GPU profiling unavailable: diagnostic resource allocation failed");
@@ -537,15 +598,13 @@ impl GpuProfiler {
             let period = self.timestamp_period_ns;
             let frame_id = slot.frame_id;
             let config_id = slot.config_id;
-            // wgpu 27's getter is infallible at the API boundary: the backend
-            // panics if loss destroys a buffer AFTER a successful map callback.
-            // Contain that race here and retire the entire optional profiler.
-            // Never retry/unmap a buffer whose mapping state is now uncertain.
+            // A lost device can invalidate the range after the map callback.
+            // Retire the profiler without retrying the invalid mapping.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mapped = slot
                     .readback_buffer
                     .slice(..GPU_TIMESTAMP_RESULT_BYTES)
-                    .get_mapped_range();
+                    .get_mapped_range().ok()?;
                 let mut raw = [0u64; GPU_TIMESTAMP_QUERY_COUNT as usize];
                 if mapped.len() != GPU_TIMESTAMP_RESULT_BYTES as usize {
                     return None;
@@ -637,7 +696,14 @@ impl GpuProfiler {
             timestamp_period_ns,
         );
 
+        let postprocess_ms = Self::pass_duration_ms(
+            raw, pass_queries, GPU_TIMESTAMP_PASS_POSTPROCESS, timestamp_period_ns,
+        );
+        let sky_probe_ms = Self::pass_duration_ms(
+            raw, pass_queries, GPU_TIMESTAMP_PASS_SKY_PROBE, timestamp_period_ns,
+        );
         GpuPassTimings {
+            // Keep the legacy subtotal stable for adaptive quality and old benchmarks.
             total_ms: shadow_ms
                 + terrain_ms
                 + indirect_ms
@@ -646,6 +712,7 @@ impl GpuProfiler {
                 + sky_ms
                 + cloud_composite_ms
                 + outline_ms
+                + postprocess_ms
                 + ui_ms,
             shadow_ms,
             terrain_ms,
@@ -653,8 +720,10 @@ impl GpuProfiler {
             cloud_raymarch_ms,
             cloud_temporal_ms,
             sky_ms,
+            sky_probe_ms,
             cloud_composite_ms,
             outline_ms,
+            postprocess_ms,
             ui_ms,
         }
     }
@@ -681,12 +750,14 @@ impl GpuProfiler {
 // Deterministic spatial integration. Temporal reprojection remains
 // available for diagnostics, but an estimated volume depth can drag unrelated
 // cloud samples together during translation. The default uses the current frame.
-static CLOUD_RENDER_SCALE: AtomicU32 = AtomicU32::new(3);
+static CLOUD_RENDER_SCALE: AtomicU32 = AtomicU32::new(4);
 /// Requested divisor: 2 = Ultra, 3 = High, 4 = Balanced.
 /// Extra divisor added by the adaptive cloud governor (0 = none).
 static CLOUD_AUTO_BUMP: AtomicU32 = AtomicU32::new(0);
 static CLOUD_ADAPTIVE_ENABLED: AtomicBool = AtomicBool::new(true);
 static CLOUDS_ENABLED: AtomicBool = AtomicBool::new(true);
+/// Clouds cut by automatic quality for this session only; the saved choice stays on.
+static CLOUDS_CUT: AtomicBool = AtomicBool::new(false);
 static INTEGRATED_GPU: AtomicBool = AtomicBool::new(false);
 
 /// The selected adapter shares system memory and power with the CPU (or is a
@@ -695,9 +766,8 @@ pub fn integrated_gpu() -> bool {
     INTEGRATED_GPU.load(Ordering::Relaxed)
 }
 
-/// Integrated-GPU shading tier: `LEAN_SHADING` in world_shader.wgsl (sky
-/// colour for mist and reflections from the per-frame probe) and a smaller
-/// torch-light budget. `VOXEL_LEAN_SHADING=0|1` overrides it for comparisons.
+/// Probe-based atmospheric shading and a bounded local-light set.
+/// `VOXEL_LEAN_SHADING=0` opts into per-pixel sky sampling and 64 lights.
 pub fn lean_shading() -> bool {
     static FORCED: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
     FORCED
@@ -706,7 +776,7 @@ pub fn lean_shading() -> bool {
             Ok("0") => Some(false),
             _ => None,
         })
-        .unwrap_or_else(integrated_gpu)
+        .unwrap_or(true)
 }
 
 /// Nearest world lights uploaded per frame. Every terrain pixel tests each one.
@@ -717,10 +787,23 @@ pub fn torch_light_budget() -> usize {
 /// Player setting. Off skips the raymarch and reports a cloudless sky to every
 /// shader (no coverage, no storm, no terrain cloud shadow or cloud fog).
 pub fn clouds_enabled() -> bool {
-    CLOUDS_ENABLED.load(Ordering::Relaxed)
+    CLOUDS_ENABLED.load(Ordering::Relaxed) && !CLOUDS_CUT.load(Ordering::Relaxed)
 }
+/// The player's choice. Settings writes the shown state back every frame, so an
+/// unchanged value must not turn a session cut into a saved choice.
 pub fn set_clouds_enabled(enabled: bool) {
-    CLOUDS_ENABLED.store(enabled, Ordering::Relaxed);
+    if enabled != clouds_enabled() {
+        CLOUDS_ENABLED.store(enabled, Ordering::Relaxed);
+        CLOUDS_CUT.store(false, Ordering::Relaxed);
+    }
+}
+/// Clouds off until restart or until the player turns them on; not saved.
+pub fn cut_clouds_for_session() {
+    CLOUDS_CUT.store(true, Ordering::Relaxed);
+}
+/// The saved setting, ignoring a session cut.
+pub fn clouds_chosen() -> bool {
+    CLOUDS_ENABLED.load(Ordering::Relaxed)
 }
 fn draw_clouds() -> bool {
     clouds_enabled() && !render_isolation().skip_clouds
@@ -753,7 +836,7 @@ pub fn effective_cloud_render_scale(width: u32, height: u32) -> u32 {
         // At full resolution keep the long-standing whole-number floor exactly.
         (if percent >= 100 { ratio.floor() } else { ratio.round() }) as u32
     };
-    let normal_maximum = divisor(height, 360.0).min(divisor(width, 640.0)).clamp(1, 4);
+    let normal_maximum = divisor(height, 240.0).min(divisor(width, 426.0)).clamp(1, 4);
     let base = cloud_render_scale().min(normal_maximum);
     let bump = CLOUD_AUTO_BUMP.load(Ordering::Relaxed);
     if bump == 0 { return base; }
@@ -804,6 +887,7 @@ const CLOUD_TEMPORAL_ENABLED: bool = false;
 struct RenderIsolation {
     skip_clouds: bool,
     skip_horizon: bool,
+    skip_horizon_work: bool,
 }
 
 fn render_isolation() -> RenderIsolation {
@@ -812,6 +896,7 @@ fn render_isolation() -> RenderIsolation {
         skip_clouds: std::env::var("VOXEL_REVIEW_SKIP_CLOUDS").as_deref() == Ok("1"),
         skip_horizon: crate::low_spec::active()
             || std::env::var("VOXEL_REVIEW_SKIP_HORIZON").as_deref() == Ok("1"),
+        skip_horizon_work: std::env::var("VOXEL_REVIEW_SKIP_HORIZON_WORK").as_deref() == Ok("1"),
     })
 }
 
@@ -838,6 +923,14 @@ struct CameraUniform {
     render_origin: [i32; 4],
     /// xyz: eye minus render origin, metres, less the view residual.
     eye_from_origin: [f32; 4],
+    planet: [[f32; 4]; 8],
+    /// Portal destination clip plane, eye-relative; zero in the primary view.
+    portal_clip: [f32; 4],
+    /// Chart shear undo around the eye, as `planet_frame::Eye::shader_rows`.
+    planet_flat: [[f32; 4]; 3],
+    /// Eye direction to fixed star axes, `planet::sky_axes`; zero: identity.
+    sky_axes: [[f32; 4]; 3],
+    terrain_arrival: coverage::TerrainArrival,
 }
 
 #[repr(C)]
@@ -870,10 +963,14 @@ struct LightingUniform {
     mood: [f32; 4],
     /// fireflies, pollen, diamond dust, embers.
     ambience: [f32; 4],
+    biome_ambience: [f32; 4],
+    mana_ambience: [f32; 4],
+    location_mood: [f32; 4],
     /// Three linear palette colours, flow controls, then detail controls.
     magic: [[f32; 4]; 5],
     /// `SkyArt::lighting_words`: solar disc, sky grade and cloud art controls.
     sky_art: [[f32; 4]; 2],
+    torch_group_bounds: [[f32; 4]; 16],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -974,6 +1071,22 @@ fn lighting_uniform_from_state(
         ];
     }
 
+    // Eight finite light groups reject distant pixels before individual BRDFs.
+    let mut torch_group_bounds = [[0.0; 4]; 16];
+    for group in 0..8 {
+        let mut min = Vec3::splat(f32::MAX);
+        let mut max = Vec3::splat(-f32::MAX);
+        for index in group*8..((group+1)*8).min(torch_lights.len().min(MAX_TORCH_LIGHTS)) {
+            let light = torch_positions[index];
+            let position = Vec3::new(light[0],light[1],light[2]);
+            let radius = Vec3::splat(light[3]);
+            min = min.min(position-radius);
+            max = max.max(position+radius);
+        }
+        torch_group_bounds[group*2] = min.extend(0.0).to_array();
+        torch_group_bounds[group*2+1] = max.extend(0.0).to_array();
+    }
+
     let held_torch_pos_radius = held_torch.map_or([0.0; 4], |torch| {
         [
             torch.position.x,
@@ -1049,7 +1162,7 @@ fn lighting_uniform_from_state(
             state.fog_color[0],
             state.fog_color[1],
             state.fog_color[2],
-            0.65,
+            0.0,
         ],
         fog_params: [fog_start, fog_end, state.fog_height, state.fog_falloff],
         weather_globals: [
@@ -1104,13 +1217,21 @@ fn lighting_uniform_from_state(
         ],
         torch_positions,
         torch_colors,
+        torch_group_bounds,
         material_tints: seasonal_tints(state),
         material_properties: crate::material_studio::snapshot().properties,
         surface_weather: crate::material_studio::weather_surface(cloud_controls.cumulonimbus),
         mood: state.mood,
         ambience: state.ambience,
+        biome_ambience: state.biome_ambience,
+        mana_ambience: state.mana_ambience,
+        location_mood: state.location_mood,
         magic: crate::egui_ui::magic_style::world_uniform(),
-        sky_art: atmosphere_params::SkyArt::active().lighting_words(),
+        sky_art: {
+            let mut words = atmosphere_params::SkyArt::active().lighting_words();
+            words[1][3] = state.cave_darkness;
+            words
+        },
     }
 }
 
@@ -1191,26 +1312,54 @@ impl DynamicVertexBuffer {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq)]
+pub enum CameraMedium {
+    #[default]
+    Air,
+    Water { depth_m: f32 },
+    Lava,
+}
+
+impl CameraMedium {
+    fn uniform(self) -> f32 {
+        match self {
+            Self::Air => 0.0,
+            Self::Water { depth_m } => 1.0 + depth_m,
+            Self::Lava => -1.0,
+        }
+    }
+}
+
 pub struct Gpu {
-    pub underwater: bool,
-    /// Height of the water surface above a submerged eye, in metres.
-    pub water_surface_m: f32,
+    pub camera_medium: CameraMedium,
     /// World-space sea level in metres. Sent through the spare camera coverage
     /// lane so terrain can receive the shallow caustic spill without a second
     /// uniform buffer.
     pub water_level_m: f32,
     /// RGB + intensity of active spell effects for the trippy resolve.
     screen_magic: [f32; 4],
+    motion_boost: f32,
+    camera_roll: f32,
+    camera_up: Vec3,
+    finite_world: bool,
+    /// The Nether: the sky draws the realm dome (`cam.planet[0].w = -1`).
+    realm_sky: bool,
+    /// Manyfold shell axis, metres. The interior fill aims here.
+    manyfold_axis_y: f32,
     /// Underground zone grade: veil rgb+amount, then desat/pulse/swirl/gain.
     zone_grade: ([f32; 4], [f32; 4]),
     postprocess: postprocess::PostProcess,
     indirect: indirect::IndirectLighting,
+    portals: portals::Stage,
     pub fxaa_enabled: bool,
     surface: wgpu::Surface<'static>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     device_lost: Arc<AtomicBool>,
+    upload_staging: Arc<upload_staging::UploadStaging>,
+    chunk_upload_credits: std::sync::Mutex<Vec<upload_staging::Credit>>,
     frame_pacer: frame_pacer::FramePacer,
+    unthrottled_present_mode: wgpu::PresentMode,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     adapter_summary: String,
@@ -1218,6 +1367,8 @@ pub struct Gpu {
     camera_bind_group: wgpu::BindGroup,
     lighting_buffer: wgpu::Buffer,
     lighting_bind_group: wgpu::BindGroup,
+    torch_blockage: torch_occlusion::State,
+    sky_volume: sky_volume_gpu::SkyVolumeGpu,
     atmosphere: AtmosphereRuntime,
     shadow_renderer: shadow::ShadowRenderer,
     /// Indirect arguments for the main terrain pass (multi-draw path).
@@ -1262,23 +1413,35 @@ pub struct Gpu {
     cloud_composite_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     world_pipeline: wgpu::RenderPipeline,
+    terrain_backstop: wgpu::RenderPipeline,
     horizon: horizon::Horizon,
+    planet_mesh: Option<planet::Mesh>,
+    outgoing_planet_mesh: Option<(planet::Mesh, Instant)>,
+    terrain_arrival: coverage::TerrainArrival,
+    planet_progress: Option<Arc<planet::progress::Progress>>,
+    planet_build: Option<planet::CoverJob>,
     scene_stream: Option<DynamicVertexBuffer>,
     posed_assets: Option<posed_assets::PosedAssets>,
     scene_vertices: usize,
     line_pipeline: wgpu::RenderPipeline,
     line_invert_pipeline: wgpu::RenderPipeline,
+    survey_line_pipeline: wgpu::RenderPipeline,
     ui_pipeline: wgpu::RenderPipeline,
     outline_stream: DynamicVertexBuffer,
     invert_outline_stream: DynamicVertexBuffer,
+    survey_outline_stream: DynamicVertexBuffer,
     ui_stream: DynamicVertexBuffer,
     depth: wgpu::TextureView,
+    /// Opaque scene occupancy, copied before fallback terrain writes its real depth.
+    terrain_backstop_depth: wgpu::TextureView,
     clear_color: [f32; 3],
     current_lighting: LightingState,
     current_debug_view: RenderDebugView,
     last_camera_pos: Vec3,
     last_camera_residual: Vec3,
-    last_cascade_view: shadow::CascadeView,
+    /// Planet placement for this frame's camera; chunks, outlines and the
+    /// cover shader all read this one value.
+    planet_eye: Option<planet_frame::Eye>,
     last_rotation_view_proj: Mat4,
     last_camera_forward: Vec3,
     last_world_scale: f32,
@@ -1315,245 +1478,6 @@ pub struct Gpu {
 // ---------------------------------------------------------------------------
 
 /// Periodic 3D hash shared by the cloud shape and detail noise generators.
-fn hash3(ix: i32, iy: i32, iz: i32, seed: u32, period: i32) -> [f32; 3] {
-    let wx = ((ix % period) + period) % period;
-    let wy = ((iy % period) + period) % period;
-    let wz = ((iz % period) + period) % period;
-    let mut h = (wx as u32).wrapping_mul(374_761_393)
-        ^ (wy as u32).wrapping_mul(668_265_263)
-        ^ (wz as u32).wrapping_mul(1_274_126_177)
-        ^ seed;
-    h ^= h >> 13;
-    h = h.wrapping_mul(0x5bd1e995);
-    h ^= h >> 15;
-    let x = (h & 0xFFFF) as f32 / 65535.0;
-    h = h.wrapping_mul(0x27d4eb2d);
-    h ^= h >> 13;
-    let y = (h & 0xFFFF) as f32 / 65535.0;
-    h = h.wrapping_mul(0x27d4eb2d);
-    h ^= h >> 13;
-    let z = (h & 0xFFFF) as f32 / 65535.0;
-    [x, y, z]
-}
-
-fn gen_shape_noise_data() -> Vec<u8> {
-    let size = 64u32;
-    let voxels = (size * size * size) as usize;
-    let mut data = vec![0u8; voxels * 4];
-
-    fn worley_tileable(px: f32, py: f32, pz: f32, freq: i32, seed: u32) -> f32 {
-        let fx = px * freq as f32;
-        let fy = py * freq as f32;
-        let fz = pz * freq as f32;
-        let ix = fx.floor() as i32;
-        let iy = fy.floor() as i32;
-        let iz = fz.floor() as i32;
-        let mut min_d = 10.0f32;
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    let nx = ix + dx;
-                    let ny = iy + dy;
-                    let nz = iz + dz;
-                    let pt = hash3(nx, ny, nz, seed, freq);
-                    let ddx = (nx as f32 + pt[0]) - fx;
-                    let ddy = (ny as f32 + pt[1]) - fy;
-                    let ddz = (nz as f32 + pt[2]) - fz;
-                    let d = (ddx * ddx + ddy * ddy + ddz * ddz).sqrt();
-                    min_d = min_d.min(d);
-                }
-            }
-        }
-        1.0 - min_d.clamp(0.0, 1.0)
-    }
-
-    fn grad3(hash: u32) -> [f32; 3] {
-        const GRADS: [[f32; 3]; 12] = [
-            [1.0, 1.0, 0.0],
-            [-1.0, 1.0, 0.0],
-            [1.0, -1.0, 0.0],
-            [-1.0, -1.0, 0.0],
-            [1.0, 0.0, 1.0],
-            [-1.0, 0.0, 1.0],
-            [1.0, 0.0, -1.0],
-            [-1.0, 0.0, -1.0],
-            [0.0, 1.0, 1.0],
-            [0.0, -1.0, 1.0],
-            [0.0, 1.0, -1.0],
-            [0.0, -1.0, -1.0],
-        ];
-        GRADS[(hash % 12) as usize]
-    }
-
-    fn perlin_tileable(px: f32, py: f32, pz: f32, freq: i32, seed: u32) -> f32 {
-        let fx = px * freq as f32;
-        let fy = py * freq as f32;
-        let fz = pz * freq as f32;
-        let x0 = fx.floor() as i32;
-        let y0 = fy.floor() as i32;
-        let z0 = fz.floor() as i32;
-        let xf = fx - fx.floor();
-        let yf = fy - fy.floor();
-        let zf = fz - fz.floor();
-        let sx = xf * xf * xf * (xf * (xf * 6.0 - 15.0) + 10.0);
-        let sy = yf * yf * yf * (yf * (yf * 6.0 - 15.0) + 10.0);
-        let sz = zf * zf * zf * (zf * (zf * 6.0 - 15.0) + 10.0);
-        let period = freq;
-        let corner_hash = |cx: i32, cy: i32, cz: i32| -> u32 {
-            let wx = ((cx % period) + period) % period;
-            let wy = ((cy % period) + period) % period;
-            let wz = ((cz % period) + period) % period;
-            let mut h = (wx as u32).wrapping_mul(374_761_393)
-                ^ (wy as u32).wrapping_mul(668_265_263)
-                ^ (wz as u32).wrapping_mul(1_274_126_177)
-                ^ seed;
-            h ^= h >> 13;
-            h = h.wrapping_mul(0x5bd1e995);
-            h ^= h >> 15;
-            h
-        };
-        let dot_grad = |cx: i32, cy: i32, cz: i32, dx: f32, dy: f32, dz: f32| -> f32 {
-            let g = grad3(corner_hash(cx, cy, cz));
-            g[0] * dx + g[1] * dy + g[2] * dz
-        };
-        let n000 = dot_grad(x0, y0, z0, xf, yf, zf);
-        let n100 = dot_grad(x0 + 1, y0, z0, xf - 1.0, yf, zf);
-        let n010 = dot_grad(x0, y0 + 1, z0, xf, yf - 1.0, zf);
-        let n110 = dot_grad(x0 + 1, y0 + 1, z0, xf - 1.0, yf - 1.0, zf);
-        let n001 = dot_grad(x0, y0, z0 + 1, xf, yf, zf - 1.0);
-        let n101 = dot_grad(x0 + 1, y0, z0 + 1, xf - 1.0, yf, zf - 1.0);
-        let n011 = dot_grad(x0, y0 + 1, z0 + 1, xf, yf - 1.0, zf - 1.0);
-        let n111 = dot_grad(x0 + 1, y0 + 1, z0 + 1, xf - 1.0, yf - 1.0, zf - 1.0);
-        let x00 = n000 + (n100 - n000) * sx;
-        let x10 = n010 + (n110 - n010) * sx;
-        let x01 = n001 + (n101 - n001) * sx;
-        let x11 = n011 + (n111 - n011) * sx;
-        let y0v = x00 + (x10 - x00) * sy;
-        let y1v = x01 + (x11 - x01) * sy;
-        (y0v + (y1v - y0v) * sz) * 0.5 + 0.5
-    }
-
-    for z in 0..size {
-        for y in 0..size {
-            for x in 0..size {
-                let i = ((z * size * size + y * size + x) * 4) as usize;
-                let px = x as f32 / size as f32;
-                let py = y as f32 / size as f32;
-                let pz = z as f32 / size as f32;
-
-                // Removed freq=64 octave (weight 0.03125, visually negligible at mip
-                // distances but cost 2M×27 Worley-equivalent operations per frame of startup).
-                let perlin_fbm = perlin_tileable(px, py, pz, 4, 0x1111) * 0.5
-                    + perlin_tileable(px, py, pz, 8, 0x2222) * 0.25
-                    + perlin_tileable(px, py, pz, 16, 0x3333) * 0.125
-                    + perlin_tileable(px, py, pz, 32, 0x4444) * 0.0625;
-                let perlin_fbm = perlin_fbm / 0.9375;
-
-                let w_fbm = worley_tileable(px, py, pz, 4, 0xAAAA) * 0.625
-                    + worley_tileable(px, py, pz, 8, 0xABBB) * 0.25
-                    + worley_tileable(px, py, pz, 16, 0xACCC) * 0.125;
-                let w_fbm = w_fbm.clamp(0.0, 1.0);
-
-                let perlin_norm = perlin_fbm.clamp(0.0, 1.0);
-                // Keep broad condensate masses. Subtractive Worley remapping
-                // here and again in the shader erased most of the shape field.
-                let perlin_body = ((perlin_norm - 0.5) * 1.8 + 0.5).clamp(0.0, 1.0);
-                let pw = (perlin_body * 0.80 + w_fbm * 0.20).clamp(0.0, 1.0);
-
-                let w1 = (worley_tileable(px, py, pz, 8, 0xBBBB) * 0.625
-                    + worley_tileable(px, py, pz, 16, 0xBCCC) * 0.25
-                    + worley_tileable(px, py, pz, 32, 0xBDDD) * 0.125)
-                    .clamp(0.0, 1.0);
-                // Removed freq=64 from W2 and W3 — each saved 2M×27 = 54M distance ops.
-                // W3 is the alpha channel (coarsest Worley detail), freq=32 is sufficient.
-                let w2 = (worley_tileable(px, py, pz, 16, 0xCCCC) * 0.625
-                    + worley_tileable(px, py, pz, 32, 0xCDDD) * 0.375)
-                    .clamp(0.0, 1.0);
-                let w3 = worley_tileable(px, py, pz, 32, 0xDDDD).clamp(0.0, 1.0);
-
-                data[i] = (pw * 255.0) as u8;
-                data[i + 1] = (w1 * 255.0) as u8;
-                data[i + 2] = (w2 * 255.0) as u8;
-                data[i + 3] = (w3 * 255.0) as u8;
-            }
-        }
-    }
-
-    data
-}
-
-fn gen_detail_noise_data() -> Vec<u8> {
-    let size = 32u32;
-    let voxels = (size * size * size) as usize;
-    let mut data = vec![0u8; voxels * 4];
-
-    fn worley_tileable(px: f32, py: f32, pz: f32, freq: i32, seed: u32) -> f32 {
-        let fx = px * freq as f32;
-        let fy = py * freq as f32;
-        let fz = pz * freq as f32;
-        let ix = fx.floor() as i32;
-        let iy = fy.floor() as i32;
-        let iz = fz.floor() as i32;
-        let mut min_d = 10.0f32;
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    let nx = ix + dx;
-                    let ny = iy + dy;
-                    let nz = iz + dz;
-                    let pt = hash3(nx, ny, nz, seed, freq);
-                    let ddx = (nx as f32 + pt[0]) - fx;
-                    let ddy = (ny as f32 + pt[1]) - fy;
-                    let ddz = (nz as f32 + pt[2]) - fz;
-                    let d = (ddx * ddx + ddy * ddy + ddz * ddz).sqrt();
-                    min_d = min_d.min(d);
-                }
-            }
-        }
-        1.0 - (min_d * 1.5).min(1.0)
-    }
-
-    for z in 0..size {
-        for y in 0..size {
-            for x in 0..size {
-                let i = ((z * size * size + y * size + x) * 4) as usize;
-                let px = x as f32 / size as f32;
-                let py = y as f32 / size as f32;
-                let pz = z as f32 / size as f32;
-
-                let w1 = (worley_tileable(px, py, pz, 4, 0xEEEE) * 0.625
-                    + worley_tileable(px, py, pz, 8, 0xEFFF) * 0.25
-                    + worley_tileable(px, py, pz, 16, 0xE111) * 0.125)
-                    .clamp(0.0, 1.0);
-                let w2 = (worley_tileable(px, py, pz, 8, 0xFFFF) * 0.625
-                    + worley_tileable(px, py, pz, 16, 0xF111) * 0.25
-                    + worley_tileable(px, py, pz, 32, 0xF222) * 0.125)
-                    .clamp(0.0, 1.0);
-                // Removed freq=64 octave — cost 262K×27 distance ops for negligible
-                // visual quality on a 64³ texture (1 period per texel at freq=64).
-                let w3 = (worley_tileable(px, py, pz, 16, 0x1234) * 0.667
-                    + worley_tileable(px, py, pz, 32, 0x1345) * 0.333)
-                    .clamp(0.0, 1.0);
-
-                // Simplified curl: 4 samples instead of 6 (skip one axis pair).
-                let eps = 2.0 / size as f32;
-                let dnx_dz = worley_tileable(px, py, pz + eps, 8, 0x5678)
-                    - worley_tileable(px, py, pz - eps, 8, 0x5678);
-                let dny_dx = worley_tileable(px + eps, py, pz, 8, 0x9ABC)
-                    - worley_tileable(px - eps, py, pz, 8, 0x9ABC);
-                let curl = ((dnx_dz * dnx_dz + dny_dx * dny_dx).sqrt() * 3.0).clamp(0.0, 1.0);
-
-                data[i] = (w1 * 255.0) as u8;
-                data[i + 1] = (w2 * 255.0) as u8;
-                data[i + 2] = (w3 * 255.0) as u8;
-                data[i + 3] = (curl * 255.0) as u8;
-            }
-        }
-    }
-
-    data
-}
-
 /// Seed weather clipmap arrays with zeros so the bind groups are valid before the
 /// CPU weather subsystem uploads its first real frame.
 fn gen_weather_texture_data() -> Vec<u8> {
@@ -1586,6 +1510,7 @@ pub struct GpuBootstrap {
     pub queue: wgpu::Queue,
     device_lost: Arc<AtomicBool>,
     frame_pacer: frame_pacer::FramePacer,
+    unthrottled_present_mode: wgpu::PresentMode,
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     adapter_summary: String,
@@ -1617,6 +1542,8 @@ pub struct GpuPendingInit {
     lighting_buffer: Option<wgpu::Buffer>,
     lighting_layout: Option<wgpu::BindGroupLayout>,
     lighting_bind_group: Option<wgpu::BindGroup>,
+    torch_blockage: Option<torch_occlusion::State>,
+    sky_volume: Option<sky_volume_gpu::SkyVolumeGpu>,
     atmosphere_layout: Option<wgpu::BindGroupLayout>,
     atmosphere_runtime: Option<AtmosphereRuntime>,
     shadow_renderer: Option<shadow::ShadowRenderer>,
@@ -1651,6 +1578,7 @@ pub struct GpuPendingInit {
     cloud_temporal_bind_group: Option<wgpu::BindGroup>,
 
     depth: Option<wgpu::TextureView>,
+    terrain_backstop_depth: Option<wgpu::TextureView>,
 
     cloud_shader: Option<wgpu::ShaderModule>,
     cloud_composite_shader: Option<wgpu::ShaderModule>,
@@ -1666,8 +1594,10 @@ pub struct GpuPendingInit {
     sky_pipeline: Option<wgpu::RenderPipeline>,
     cloud_temporal_pipeline: Option<wgpu::RenderPipeline>,
     world_pipeline: Option<wgpu::RenderPipeline>,
+    terrain_backstop: Option<wgpu::RenderPipeline>,
     line_pipeline: Option<wgpu::RenderPipeline>,
     line_invert_pipeline: Option<wgpu::RenderPipeline>,
+    survey_line_pipeline: Option<wgpu::RenderPipeline>,
     ui_pipeline: Option<wgpu::RenderPipeline>,
     /// Post-processing and bounce lighting built during `Pipelines`, with the
     /// surface and scene sizes they were built for.
@@ -1675,6 +1605,7 @@ pub struct GpuPendingInit {
 
     outline_stream: Option<DynamicVertexBuffer>,
     invert_outline_stream: Option<DynamicVertexBuffer>,
+    survey_outline_stream: Option<DynamicVertexBuffer>,
     ui_stream: Option<DynamicVertexBuffer>,
 
 }
@@ -1687,6 +1618,15 @@ fn scene_pass_key(config: &wgpu::SurfaceConfiguration) -> ScenePassKey {
 }
 impl GpuBootstrap {
     pub async fn new(window: Arc<Window>) -> Result<Self> {
+        let probe = std::env::var_os("VOXEL_PLAYABLE_PROBE").is_some();
+        let mut bootstrap_lap = std::time::Instant::now();
+        let mut probe_stage = |stage| {
+            if probe {
+                let now = std::time::Instant::now();
+                println!("[playable-probe] gpu_stage={stage} ms={:.1}", (now - bootstrap_lap).as_secs_f64() * 1000.0);
+                bootstrap_lap = now;
+            }
+        };
         let (shape_tx, shape_noise_rx) = mpsc::channel();
         let (detail_tx, detail_noise_rx) = mpsc::channel();
         let (weather_tx, weather_tex_rx) = mpsc::channel();
@@ -1702,8 +1642,9 @@ impl GpuBootstrap {
         });
 
         let size = window.inner_size();
-        let instance = wgpu::Instance::default();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone())));
         let surface = instance.create_surface(window)?;
+        probe_stage("instance_surface");
 
         // `VOXEL_GPU_POWER=low` picks the integrated GPU, to measure weak-hardware cost on a dev box.
         let power_preference = if std::env::var("VOXEL_GPU_POWER").as_deref() == Ok("low") {
@@ -1716,9 +1657,11 @@ impl GpuBootstrap {
                 power_preference,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .context("No suitable GPU adapter found")?;
+        probe_stage("adapter");
         let adapter_info = adapter.get_info();
         INTEGRATED_GPU.store(
             matches!(adapter_info.device_type, wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu),
@@ -1745,12 +1688,25 @@ impl GpuBootstrap {
                 trace: wgpu::Trace::Off,
             })
             .await?;
+        probe_stage("device");
         streaming::indirect_draws::set_supported(&adapter, device.features());
         crate::mesh::models::posed::set_enabled(true);
         let pipeline_cache = pipeline_cache::DiskCache::open(&device, &adapter_info);
+        probe_stage("pipeline_cache");
 
         let device_lost = install_device_loss_signal(&device);
         let caps = surface.get_capabilities(&adapter);
+        // On composited Windows Vulkan surfaces, prefer a replaceable queued
+        // image to Immediate's synchronous image recycling. Keep the portable
+        // automatic fallback on surfaces without Mailbox.
+        let unthrottled_present_mode = if cfg!(windows)
+            && adapter_info.backend == wgpu::Backend::Vulkan
+            && caps.present_modes.contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else {
+            wgpu::PresentMode::AutoNoVsync
+        };
         let format = caps
             .formats
             .iter()
@@ -1762,6 +1718,7 @@ impl GpuBootstrap {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | (caps.usages & wgpu::TextureUsages::COPY_SRC),
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
             // A GPU-bound integrated adapter would otherwise queue a whole
@@ -1776,6 +1733,7 @@ impl GpuBootstrap {
             },
         };
         surface.configure(&device, &config);
+        probe_stage("surface_configure");
 
         let default_lighting = LightingState::from_time(0.50);
         let clear_color = [
@@ -1790,6 +1748,7 @@ impl GpuBootstrap {
             queue,
             device_lost,
             frame_pacer: frame_pacer::FramePacer::new(config.desired_maximum_frame_latency),
+            unthrottled_present_mode,
             config,
             size,
             adapter_summary,
@@ -1827,13 +1786,14 @@ impl GpuBootstrap {
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
+        self.frame_pacer.reset();
     }
 
     pub fn render_loading_frame<F>(
         &mut self,
         clear_color: [f32; 3],
         overlay: F,
-    ) -> Result<(), wgpu::SurfaceError>
+    ) -> Result<(), SurfaceFrameError>
     where
         F: FnOnce(
             &wgpu::Device,
@@ -1857,6 +1817,7 @@ impl GpuBootstrap {
 
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("loading clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -1892,9 +1853,9 @@ impl GpuBootstrap {
             self.config.height,
         );
 
-        let submission = self.queue.submit(Some(encoder.finish()));
-        self.frame_pacer.submitted(submission);
-        frame.present();
+        self.queue.submit(Some(encoder.finish()));
+        self.frame_pacer.track_submission(&self.queue);
+        self.queue.present(frame);
         Ok(())
     }
 
@@ -1910,6 +1871,8 @@ impl GpuBootstrap {
             lighting_buffer: None,
             lighting_layout: None,
             lighting_bind_group: None,
+            torch_blockage: None,
+            sky_volume: None,
             atmosphere_layout: None,
             atmosphere_runtime: None,
             shadow_renderer: None,
@@ -1944,6 +1907,7 @@ impl GpuBootstrap {
             cloud_temporal_bind_group: None,
 
             depth: None,
+            terrain_backstop_depth: None,
 
             cloud_shader: None,
             cloud_composite_shader: None,
@@ -1959,13 +1923,16 @@ impl GpuBootstrap {
             sky_pipeline: None,
             cloud_temporal_pipeline: None,
             world_pipeline: None,
+            terrain_backstop: None,
             line_pipeline: None,
             line_invert_pipeline: None,
+            survey_line_pipeline: None,
             ui_pipeline: None,
             scene_passes: None,
 
             outline_stream: None,
             invert_outline_stream: None,
+            survey_outline_stream: None,
             ui_stream: None,
 
         }
@@ -2018,7 +1985,7 @@ impl GpuPendingInit {
         &mut self,
         clear_color: [f32; 3],
         overlay: F,
-    ) -> Result<(), wgpu::SurfaceError>
+    ) -> Result<(), SurfaceFrameError>
     where
         F: FnOnce(
             &wgpu::Device,
@@ -2043,10 +2010,10 @@ impl GpuPendingInit {
             .context("renderer bootstrap missing")?
             .device
             .clone();
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let started = std::time::Instant::now();
         let result = self.step_inner();
-        if let Some(error) = pollster::block_on(device.pop_error_scope()) {
+        if let Some(error) = pollster::block_on(validation_scope.pop()) {
             anyhow::bail!("Renderer initialization failed at {stage:?}: {error}");
         }
         println!(
@@ -2080,6 +2047,11 @@ impl GpuPendingInit {
                         resident_coverage: coverage::ResidentCoverage::default(),
                         render_origin: [0; 4],
                         eye_from_origin: [0.0; 4],
+                        planet: [[0.0; 4]; 8],
+                        portal_clip: [0.0; 4],
+                        planet_flat: [[0.0; 4]; 3],
+                        sky_axes: [[0.0; 4]; 3],
+                        terrain_arrival: coverage::TerrainArrival::default(),
                     }),
                     usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 });
@@ -2131,6 +2103,51 @@ impl GpuPendingInit {
                                 multisampled: false,
                             },
                             count: None,
+                        }, wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        }, wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Uint,
+                                view_dimension: wgpu::TextureViewDimension::D3,
+                                multisampled: false,
+                            },
+                            count: None,
+                        }, wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        }, wgpu::BindGroupLayoutEntry {
+                            binding: 5,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Uint,
+                                view_dimension: wgpu::TextureViewDimension::D3,
+                                multisampled: false,
+                            },
+                            count: None,
+                        }, wgpu::BindGroupLayoutEntry {
+                            binding: 6,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
                         }],
                     });
 
@@ -2150,6 +2167,9 @@ impl GpuPendingInit {
                     });
 
                 let kit_atlas = viewmodel_texture::atlas(device, &bootstrap.queue);
+                let torch_blockage = torch_occlusion::State::new(device);
+                let sky_volume = sky_volume_gpu::SkyVolumeGpu::new(device);
+                let [fine_probes, fine_window, coarse_probes, coarse_window] = sky_volume.bindings();
                 let lighting_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("lighting bind group"),
                     layout: &lighting_layout,
@@ -2159,6 +2179,21 @@ impl GpuPendingInit {
                     }, wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(&kit_atlas),
+                    }, wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: torch_blockage.buffer().as_entire_binding(),
+                    }, wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: fine_probes,
+                    }, wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: fine_window,
+                    }, wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: coarse_probes,
+                    }, wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: coarse_window,
                     }],
                 });
 
@@ -2205,7 +2240,7 @@ impl GpuPendingInit {
                                     | wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Float {
-                                        filterable: false,
+                                        filterable: device.features().contains(wgpu::Features::FLOAT32_FILTERABLE),
                                     },
                                     view_dimension: wgpu::TextureViewDimension::D2Array,
                                     multisampled: false,
@@ -2241,6 +2276,16 @@ impl GpuPendingInit {
                                     ty: wgpu::BufferBindingType::Uniform,
                                     has_dynamic_offset: false,
                                     min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 7,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                ty: wgpu::BindingType::Texture {
+                                    sample_type: wgpu::TextureSampleType::Depth,
+                                    view_dimension: wgpu::TextureViewDimension::D2,
+                                    multisampled: false,
                                 },
                                 count: None,
                             },
@@ -2440,6 +2485,8 @@ impl GpuPendingInit {
                 self.lighting_buffer = Some(lighting_buffer);
                 self.lighting_layout = Some(lighting_layout);
                 self.lighting_bind_group = Some(lighting_bind_group);
+                self.torch_blockage = Some(torch_blockage);
+                self.sky_volume = Some(sky_volume);
                 self.atmosphere_layout = Some(atmosphere_layout);
 
                 self.world_surface_layout = Some(world_surface_layout);
@@ -2523,7 +2570,7 @@ impl GpuPendingInit {
                     address_mode_w: wgpu::AddressMode::ClampToEdge,
                     mag_filter: wgpu::FilterMode::Linear,
                     min_filter: wgpu::FilterMode::Linear,
-                    mipmap_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::MipmapFilterMode::Linear,
                     ..Default::default()
                 });
 
@@ -2534,7 +2581,7 @@ impl GpuPendingInit {
                     address_mode_w: wgpu::AddressMode::Repeat,
                     mag_filter: wgpu::FilterMode::Linear,
                     min_filter: wgpu::FilterMode::Linear,
-                    mipmap_filter: wgpu::FilterMode::Linear,
+                    mipmap_filter: wgpu::MipmapFilterMode::Linear,
                     ..Default::default()
                 });
 
@@ -2594,6 +2641,7 @@ impl GpuPendingInit {
                 );
 
                 let depth = Gpu::create_depth(device, config);
+                let terrain_backstop_depth = Gpu::create_terrain_backstop_depth(device, config);
                 let cloud_render_bind_group = Gpu::create_cloud_render_bind_group(
                     device,
                     self.cloud_render_layout.as_ref().unwrap(),
@@ -2642,6 +2690,7 @@ impl GpuPendingInit {
                 self.cloud_temporal_bind_group = Some(cloud_temporal_bind_group);
 
                 self.depth = Some(depth);
+                self.terrain_backstop_depth = Some(terrain_backstop_depth);
                 self.atmosphere_runtime = Some(atmosphere_runtime);
 
                 self.stage = GpuInitStage::ShaderModules;
@@ -2672,14 +2721,22 @@ impl GpuPendingInit {
                     }));
                 self.sky_shader = Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("sky shader"),
-                    source: wgpu::ShaderSource::Wgsl(sky_shader_source().into()),
+                    source: wgpu::ShaderSource::Wgsl(sky_shader_source_for_filtering(
+                        device.features().contains(wgpu::Features::FLOAT32_FILTERABLE)).into()),
                 }));
-                let world_source=world_shader_source();
+                let hardware_weather_filtering = device.features().contains(wgpu::Features::FLOAT32_FILTERABLE)
+                    && !std::env::args().any(|arg| arg == "--benchmark-reference-weather-filtering");
+                let world_source=world_shader_source_for_filtering(hardware_weather_filtering);
                 let world_fingerprint=format!("{:016x}",crate::shader_sources::source_fingerprint(&world_source));
-                let validated=env!("VOXEL_VALIDATED_WORLD_FNV");
-                anyhow::ensure!(world_fingerprint==validated,
+                let validated=if hardware_weather_filtering { env!("VOXEL_VALIDATED_FILTERED_WORLD_FNV") }
+                    else { env!("VOXEL_VALIDATED_WORLD_FNV") };
+                // A stale build is fatal; a VOXEL_SHADER_DEV_DIR override is expected to
+                // differ and is validated by wgpu when the module is created below.
+                let build_match = world_fingerprint == validated;
+                let dev_override = std::env::var_os("VOXEL_SHADER_DEV_DIR").is_some();
+                anyhow::ensure!(build_match || dev_override,
                     "Build/runtime WGSL source mismatch: built validator={validated}, runtime={world_fingerprint}");
-                println!("[shader-validation] world_fnv1a64={world_fingerprint} build_match=true");
+                println!("[shader-validation] world_fnv1a64={world_fingerprint} build_match={build_match} dev_override={dev_override} hardware_weather_filtering={hardware_weather_filtering}");
                 self.world_shader =
                     Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                         label: Some("world shader"),
@@ -2718,69 +2775,69 @@ impl GpuPendingInit {
                 let cloud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("cloud layout"),
                     bind_group_layouts: &[
-                        self.camera_layout.as_ref().unwrap(),
-                        self.lighting_layout.as_ref().unwrap(),
-                        self.atmosphere_layout.as_ref().unwrap(),
-                        self.cloud_render_layout.as_ref().unwrap(),
+                        Some(self.camera_layout.as_ref().unwrap()),
+                        Some(self.lighting_layout.as_ref().unwrap()),
+                        Some(self.atmosphere_layout.as_ref().unwrap()),
+                        Some(self.cloud_render_layout.as_ref().unwrap()),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
                 let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("sky layout"),
                     bind_group_layouts: &[
-                        self.camera_layout.as_ref().unwrap(),
-                        self.lighting_layout.as_ref().unwrap(),
-                        self.atmosphere_layout.as_ref().unwrap(),
-                        self.world_surface_layout.as_ref().unwrap(),
+                        Some(self.camera_layout.as_ref().unwrap()),
+                        Some(self.lighting_layout.as_ref().unwrap()),
+                        Some(self.atmosphere_layout.as_ref().unwrap()),
+                        Some(self.world_surface_layout.as_ref().unwrap()),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
                 let cloud_composite_layout =
                     device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("cloud composite layout"),
                         bind_group_layouts: &[
-                            self.lighting_layout.as_ref().unwrap(),
-                            self.cloud_texture_layout.as_ref().unwrap(),
-                            self.atmosphere_layout.as_ref().unwrap(),
-                            self.cloud_render_layout.as_ref().unwrap(),
+                            Some(self.lighting_layout.as_ref().unwrap()),
+                            Some(self.cloud_texture_layout.as_ref().unwrap()),
+                            Some(self.atmosphere_layout.as_ref().unwrap()),
+                            Some(self.cloud_render_layout.as_ref().unwrap()),
                         ],
-                        push_constant_ranges: &[],
+                        immediate_size: 0,
                     });
 
                 let world_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("world layout"),
                     bind_group_layouts: &[
-                        self.camera_layout.as_ref().unwrap(),
-                        self.lighting_layout.as_ref().unwrap(),
-                        self.atmosphere_layout.as_ref().unwrap(),
-                        self.world_surface_layout.as_ref().unwrap(),
+                        Some(self.camera_layout.as_ref().unwrap()),
+                        Some(self.lighting_layout.as_ref().unwrap()),
+                        Some(self.atmosphere_layout.as_ref().unwrap()),
+                        Some(self.world_surface_layout.as_ref().unwrap()),
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
                 let line_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("line layout"),
-                    bind_group_layouts: &[self.camera_layout.as_ref().unwrap()],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(self.camera_layout.as_ref().unwrap())],
+                    immediate_size: 0,
                 });
 
                 let ui_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("ui layout"),
                     bind_group_layouts: &[],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 });
 
                 let cloud_temporal_pipeline_layout =
                     device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("cloud temporal pipeline layout"),
                         bind_group_layouts: &[
-                            self.camera_layout.as_ref().unwrap(),
-                            self.lighting_layout.as_ref().unwrap(),
-                            self.cloud_temporal_layout.as_ref().unwrap(),
+                            Some(self.camera_layout.as_ref().unwrap()),
+                            Some(self.lighting_layout.as_ref().unwrap()),
+                            Some(self.cloud_temporal_layout.as_ref().unwrap()),
                         ],
-                        push_constant_ranges: &[],
+                        immediate_size: 0,
                     });
 
                 // A pass with no vertex buffers that draws one full-screen triangle.
@@ -2812,22 +2869,26 @@ impl GpuPendingInit {
                         primitive: wgpu::PrimitiveState::default(),
                         depth_stencil,
                         multisample: Default::default(),
-                        multiview: None,
+                        multiview_mask: None,
                         cache: pipeline_cache,
                     })
                 };
 
                 let world_shader = self.world_shader.as_ref().unwrap();
-                let world_pipeline = || {
+                let world_pipeline = |backstop| {
+                    let backstop_constant = if backstop { 1.0 } else { 0.0 };
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                        label: Some("world pipeline"),
+                        label: Some(if backstop { "terrain depth backstop" } else { "world pipeline" }),
                         layout: Some(&world_layout),
                         vertex: wgpu::VertexState {
                             module: world_shader,
                             entry_point: Some("vs_main"),
-                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            compilation_options: wgpu::PipelineCompilationOptions {
+                                constants: &[("TERRAIN_BACKSTOP", backstop_constant)],
+                                ..Default::default()
+                            },
                             buffers: &[
-                                wgpu::VertexBufferLayout {
+                                Some(wgpu::VertexBufferLayout {
                                     array_stride: std::mem::size_of::<Vertex3>() as u64,
                                     step_mode: wgpu::VertexStepMode::Vertex,
                                     attributes: &wgpu::vertex_attr_array![
@@ -2837,15 +2898,19 @@ impl GpuPendingInit {
                                         3 => Float32x4,
                                         4 => Float32
                                     ],
-                                },
-                                DrawTransform::LAYOUT,
+                                }),
+                                Some(DrawTransform::LAYOUT),
                             ],
                         },
                         fragment: Some(wgpu::FragmentState {
                             module: world_shader,
                             entry_point: Some("fs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions {
-                                constants: &[("LEAN_SHADING", if lean_shading() { 1.0 } else { 0.0 })],
+                                constants: &[
+                                    ("LEAN_SHADING", if lean_shading() { 1.0 } else { 0.0 }),
+                                    ("CAVE_WATER_FAST", if std::env::var("VOXEL_CAVE_WATER_FAST").as_deref() == Ok("0") { 0.0 } else { 1.0 }),
+                                    ("TERRAIN_BACKSTOP", backstop_constant),
+                                ],
                                 ..Default::default()
                             },
                             targets: &[
@@ -2862,24 +2927,24 @@ impl GpuPendingInit {
                             ],
                         }),
                         primitive: wgpu::PrimitiveState {
-                            cull_mode: Some(wgpu::Face::Back),
+                            cull_mode: (!backstop).then_some(wgpu::Face::Back),
                             ..Default::default()
                         },
                         depth_stencil: Some(wgpu::DepthStencilState {
                             format: wgpu::TextureFormat::Depth32Float,
-                            depth_write_enabled: true,
-                            depth_compare: wgpu::CompareFunction::Greater,
+                            depth_write_enabled: Some(true),
+                            depth_compare: Some(wgpu::CompareFunction::Greater),
                             stencil: Default::default(),
                             bias: Default::default(),
                         }),
                         multisample: Default::default(),
-                        multiview: None,
+                        multiview_mask: None,
                         cache: pipeline_cache,
                     })
                 };
 
                 let line_shader = self.line_shader.as_ref().unwrap();
-                let line_pipeline = |label: &str, blend: wgpu::BlendState| {
+                let line_pipeline = |label: &str, blend: wgpu::BlendState, depth_compare| {
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: Some(label),
                         layout: Some(&line_layout),
@@ -2887,11 +2952,11 @@ impl GpuPendingInit {
                             module: line_shader,
                             entry_point: Some("vs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[wgpu::VertexBufferLayout {
+                            buffers: &[Some(wgpu::VertexBufferLayout {
                                 array_stride: std::mem::size_of::<LineVertex>() as u64,
                                 step_mode: wgpu::VertexStepMode::Vertex,
                                 attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-                            }],
+                            })],
                         },
                         fragment: Some(wgpu::FragmentState {
                             module: line_shader,
@@ -2909,13 +2974,13 @@ impl GpuPendingInit {
                         },
                         depth_stencil: Some(wgpu::DepthStencilState {
                             format: wgpu::TextureFormat::Depth32Float,
-                            depth_write_enabled: false,
-                            depth_compare: wgpu::CompareFunction::GreaterEqual,
+                            depth_write_enabled: Some(false),
+                            depth_compare: Some(depth_compare),
                             stencil: Default::default(),
                             bias: Default::default(),
                         }),
                         multisample: Default::default(),
-                        multiview: None,
+                        multiview_mask: None,
                         cache: pipeline_cache,
                     })
                 };
@@ -2929,11 +2994,11 @@ impl GpuPendingInit {
                             module: ui_shader,
                             entry_point: Some("vs_main"),
                             compilation_options: wgpu::PipelineCompilationOptions::default(),
-                            buffers: &[wgpu::VertexBufferLayout {
+                            buffers: &[Some(wgpu::VertexBufferLayout {
                                 array_stride: std::mem::size_of::<UiVertex>() as u64,
                                 step_mode: wgpu::VertexStepMode::Vertex,
                                 attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3],
-                            }],
+                            })],
                         },
                         fragment: Some(wgpu::FragmentState {
                             module: ui_shader,
@@ -2948,7 +3013,7 @@ impl GpuPendingInit {
                         primitive: wgpu::PrimitiveState::default(),
                         depth_stencil: None,
                         multisample: Default::default(),
-                        multiview: None,
+                        multiview_mask: None,
                         cache: pipeline_cache,
                     })
                 };
@@ -2968,8 +3033,8 @@ impl GpuPendingInit {
                 };
                 let sky_depth = wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: false,
-                    depth_compare: wgpu::CompareFunction::Equal,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::Equal),
                     stencil: Default::default(),
                     bias: Default::default(),
                 };
@@ -2987,13 +3052,13 @@ impl GpuPendingInit {
                 // pipelines are built on parallel threads. Post-processing and
                 // bounce lighting join them here instead of compiling in series
                 // in `Complete`, which reuses them if the window size still matches.
-                let (cloud, sky, composite, temporal, world, (line, line_invert), ui, shadow, scene_passes) =
+                let (cloud, sky, composite, temporal, world, backstop, (line, line_invert, survey_line), ui, shadow, scene_passes) =
                     std::thread::scope(|scope| {
                         let scene_passes = scope.spawn(|| {
                             let key = scene_pass_key(config);
-                            let postprocess = postprocess::PostProcess::new(device, config, blue_noise_view);
+                            let postprocess = postprocess::PostProcess::new(device, config, blue_noise_view, pipeline_cache);
                             let indirect = indirect::IndirectLighting::new(
-                                device, &scene_config(config), camera_layout, depth, &postprocess.scene);
+                                device, &scene_config(config), camera_layout, depth, &postprocess.scene, pipeline_cache);
                             (key, postprocess, indirect)
                         });
                         let cloud = scope.spawn(|| {
@@ -3014,15 +3079,17 @@ impl GpuPendingInit {
                                 temporal_shader, wgpu::TextureFormat::Rgba16Float,
                                 Some(wgpu::BlendState::REPLACE), None)
                         });
-                        let world = scope.spawn(world_pipeline);
+                        let world = scope.spawn(|| world_pipeline(false));
+                        let backstop = scope.spawn(|| world_pipeline(true));
                         let lines = scope.spawn(|| {
                             (
-                                line_pipeline("line pipeline", wgpu::BlendState::ALPHA_BLENDING),
-                                line_pipeline("line invert pipeline", invert_blend),
+                                line_pipeline("line pipeline", wgpu::BlendState::ALPHA_BLENDING, wgpu::CompareFunction::GreaterEqual),
+                                line_pipeline("line invert pipeline", invert_blend, wgpu::CompareFunction::GreaterEqual),
+                                line_pipeline("survey line pipeline", wgpu::BlendState::ALPHA_BLENDING, wgpu::CompareFunction::Always),
                             )
                         });
                         let ui = scope.spawn(ui_pipeline);
-                        let shadow = scope.spawn(|| shadow::ShadowRenderer::new(device, shadow_shader));
+                        let shadow = scope.spawn(|| shadow::ShadowRenderer::new(device, shadow_shader, pipeline_cache));
                         let failed = "pipeline creation thread panicked";
                         (
                             cloud.join().expect(failed),
@@ -3030,6 +3097,7 @@ impl GpuPendingInit {
                             composite.join().expect(failed),
                             temporal.join().expect(failed),
                             world.join().expect(failed),
+                            backstop.join().expect(failed),
                             lines.join().expect(failed),
                             ui.join().expect(failed),
                             shadow.join().expect(failed),
@@ -3047,8 +3115,10 @@ impl GpuPendingInit {
                 self.cloud_composite_pipeline = Some(composite);
                 self.cloud_temporal_pipeline = Some(temporal);
                 self.world_pipeline = Some(world);
+                self.terrain_backstop = Some(backstop);
                 self.line_pipeline = Some(line);
                 self.line_invert_pipeline = Some(line_invert);
+                self.survey_line_pipeline = Some(survey_line);
                 self.ui_pipeline = Some(ui);
                 self.shadow_renderer = Some(shadow);
 
@@ -3070,6 +3140,11 @@ impl GpuPendingInit {
                     "invert outline stream",
                     64,
                 ));
+                self.survey_outline_stream = Some(DynamicVertexBuffer::new::<LineVertex>(
+                    device,
+                    "survey outline stream",
+                    64,
+                ));
                 self.ui_stream = Some(DynamicVertexBuffer::new::<UiVertex>(
                     device,
                     "ui stream",
@@ -3086,6 +3161,7 @@ impl GpuPendingInit {
                     self.cloud_shadow_view.as_ref().unwrap(),
                     self.cloud_field_sampler.as_ref().unwrap(),
                     &horizon_detail,
+                    self.terrain_backstop_depth.as_ref().unwrap(),
                 );
                 self.world_surface_bind_group = Some(world_surface_bind_group);
                 self.horizon_detail = Some(horizon_detail);
@@ -3107,10 +3183,12 @@ impl GpuPendingInit {
                         (postprocess, indirect)
                     }
                     _ => {
+                        let pipeline_cache = bootstrap.pipeline_cache.as_ref().map(pipeline_cache::DiskCache::cache);
                         let postprocess = postprocess::PostProcess::new(
                             &bootstrap.device,
                             &bootstrap.config,
                             self.blue_noise_view.as_ref().unwrap(),
+                            pipeline_cache,
                         );
                         let indirect = indirect::IndirectLighting::new(
                             &bootstrap.device,
@@ -3118,17 +3196,25 @@ impl GpuPendingInit {
                             self.camera_layout.as_ref().unwrap(),
                             self.depth.as_ref().unwrap(),
                             &postprocess.scene,
+                            pipeline_cache,
                         );
                         (postprocess, indirect)
                     }
                 };
 
                 let initial_cloud_scale = cloud_scale_request(bootstrap.config.width, bootstrap.config.height);
+                let portal_stage = portals::Stage::new(&bootstrap.device, self.camera_layout.clone().unwrap());
                 let mut gpu = Gpu {
-                    underwater: false,
-                    water_surface_m: 12.0,
+                    portals: portal_stage,
+                    camera_medium: CameraMedium::Air,
                     water_level_m: 0.0,
                     screen_magic: [0.0; 4],
+            motion_boost: 0.0,
+            camera_roll: 0.0,
+            camera_up: Vec3::Y,
+            finite_world: false,
+            realm_sky: false,
+            manyfold_axis_y: 0.0,
                     zone_grade: crate::world::zones::NO_GRADE,
                     postprocess,
                     indirect,
@@ -3145,7 +3231,10 @@ impl GpuPendingInit {
                     device: bootstrap.device,
                     queue: bootstrap.queue,
                     device_lost: bootstrap.device_lost,
+                    upload_staging: Arc::default(),
+                    chunk_upload_credits: Default::default(),
                     frame_pacer: bootstrap.frame_pacer,
+                    unthrottled_present_mode: bootstrap.unthrottled_present_mode,
                     config: bootstrap.config,
                     size: bootstrap.size,
                     adapter_summary: bootstrap.adapter_summary,
@@ -3155,6 +3244,8 @@ impl GpuPendingInit {
 
                     lighting_buffer: self.lighting_buffer.take().unwrap(),
                     lighting_bind_group: self.lighting_bind_group.take().unwrap(),
+                    torch_blockage: self.torch_blockage.take().unwrap(),
+                    sky_volume: self.sky_volume.take().unwrap(),
                     atmosphere: self.atmosphere_runtime.take().unwrap(),
 
                     shadow_renderer: self.shadow_renderer.take().unwrap(),
@@ -3195,26 +3286,35 @@ impl GpuPendingInit {
                     cloud_composite_pipeline: self.cloud_composite_pipeline.take().unwrap(),
                     sky_pipeline: self.sky_pipeline.take().unwrap(),
                     world_pipeline: self.world_pipeline.take().unwrap(),
+                    terrain_backstop: self.terrain_backstop.take().unwrap(),
                     horizon: horizon::Horizon::default(),
+                    planet_mesh: None,
+                    outgoing_planet_mesh: None,
+                    terrain_arrival: coverage::TerrainArrival::default(),
+                    planet_progress: None,
+                    planet_build: None,
                     scene_stream: None,
                     posed_assets: None,
                     scene_vertices: 0,
                     line_pipeline: self.line_pipeline.take().unwrap(),
                     line_invert_pipeline: self.line_invert_pipeline.take().unwrap(),
+                    survey_line_pipeline: self.survey_line_pipeline.take().unwrap(),
                     ui_pipeline: self.ui_pipeline.take().unwrap(),
 
                     outline_stream: self.outline_stream.take().unwrap(),
                     invert_outline_stream: self.invert_outline_stream.take().unwrap(),
+                    survey_outline_stream: self.survey_outline_stream.take().unwrap(),
                     ui_stream: self.ui_stream.take().unwrap(),
 
                     depth: self.depth.take().unwrap(),
+                    terrain_backstop_depth: self.terrain_backstop_depth.take().unwrap(),
 
                     clear_color: bootstrap.clear_color,
                     current_lighting: bootstrap.default_lighting,
                     current_debug_view: RenderDebugView::None,
                     last_camera_pos: Vec3::ZERO,
                     last_camera_residual: Vec3::ZERO,
-                    last_cascade_view: shadow::CascadeView::IDENTITY,
+                    planet_eye: None,
                     last_rotation_view_proj: Mat4::IDENTITY,
                     last_camera_forward: Vec3::NEG_Z,
                     last_world_scale: 1.0,
@@ -3279,6 +3379,20 @@ impl Gpu {
         self.zone_grade = grade;
     }
 
+    /// Dash / slide screen boost, 0..1 (speed streaks and edge smear).
+    pub fn set_motion_boost(&mut self, boost: f32) {
+        self.motion_boost = if boost.is_finite() { boost.clamp(0.0, 1.0) } else { 0.0 };
+    }
+
+    /// View roll in radians (wall-run lean). Rendering only; culling stays upright.
+    pub fn set_camera_up(&mut self, up: Vec3) {
+        self.camera_up = up.try_normalize().unwrap_or(Vec3::Y);
+    }
+
+    pub fn set_camera_roll(&mut self, roll: f32) {
+        self.camera_roll = if roll.is_finite() { roll.clamp(-0.5, 0.5) } else { 0.0 };
+    }
+
     pub fn set_screen_magic(&mut self, intensity: f32, color: [f32; 3]) {
         self.screen_magic = [
             color[0].clamp(0.0, 2.0),
@@ -3297,9 +3411,11 @@ impl Gpu {
             self.config.present_mode = if enabled {
                 wgpu::PresentMode::AutoVsync
             } else {
-                wgpu::PresentMode::AutoNoVsync
+                self.unthrottled_present_mode
             };
+            println!("[present] mode={:?}", self.config.present_mode);
             self.surface.configure(&self.device, &self.config);
+            self.frame_pacer.reset();
         }
     }
 
@@ -3348,6 +3464,7 @@ impl Gpu {
         cloud_shadow: &wgpu::TextureView,
         cloud_field_sampler: &wgpu::Sampler,
         horizon_detail: &horizon::detail::Gpu,
+        terrain_backstop_depth: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("world surface bind group"),
@@ -3381,6 +3498,10 @@ impl Gpu {
                     binding: 6,
                     resource: horizon_detail.params.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(terrain_backstop_depth),
+                },
             ],
         })
     }
@@ -3402,7 +3523,27 @@ impl Gpu {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn create_terrain_backstop_depth(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+    ) -> wgpu::TextureView {
+        let (width, height) = scene_dims(config.width, config.height);
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("terrain backstop scene depth"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default())
@@ -3570,148 +3711,13 @@ impl Gpu {
     }
 
     /// Upload pre-computed shape noise data (128³, RGBA8) to a GPU texture.
-    fn create_shape_noise_3d(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        data: Vec<u8>,
-    ) -> wgpu::TextureView {
-        let size = 64u32;
-
-        // Compute mip count for 64³
-        let mip_count = (64f32).log2() as u32 + 1; // 7 mips for 64
-
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shape noise 3D"),
-            size: wgpu::Extent3d {
-                width: size,
-                height: size,
-                depth_or_array_layers: size,
-            },
-            mip_level_count: mip_count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D3,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        // Write mip 0
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * size),
-                rows_per_image: Some(size),
-            },
-            wgpu::Extent3d {
-                width: size,
-                height: size,
-                depth_or_array_layers: size,
-            },
-        );
-
-        // Generate and upload mip levels via box filter
-        let mut prev = data;
-        let mut s = size;
-        for mip in 1..mip_count {
-            let ns = (s / 2).max(1);
-            let nvoxels = (ns * ns * ns) as usize;
-            let mut mip_data = vec![0u8; nvoxels * 4];
-            for mz in 0..ns {
-                for my in 0..ns {
-                    for mx in 0..ns {
-                        let di = ((mz * ns * ns + my * ns + mx) * 4) as usize;
-                        for ch in 0..4usize {
-                            let mut sum = 0u32;
-                            for dz in 0..2u32 {
-                                for dy in 0..2u32 {
-                                    for dx in 0..2u32 {
-                                        let sx2 = mx * 2 + dx;
-                                        let sy2 = my * 2 + dy;
-                                        let sz2 = mz * 2 + dz;
-                                        let si = ((sz2 * s * s + sy2 * s + sx2) * 4) as usize;
-                                        sum += prev[si + ch] as u32;
-                                    }
-                                }
-                            }
-                            mip_data[di + ch] = (sum / 8) as u8;
-                        }
-                    }
-                }
-            }
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &tex,
-                    mip_level: mip,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &mip_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * ns),
-                    rows_per_image: Some(ns),
-                },
-                wgpu::Extent3d {
-                    width: ns,
-                    height: ns,
-                    depth_or_array_layers: ns,
-                },
-            );
-            prev = mip_data;
-            s = ns;
-        }
-
-        tex.create_view(&wgpu::TextureViewDescriptor::default())
+    fn create_shape_noise_3d(device: &wgpu::Device, queue: &wgpu::Queue, data: Vec<u8>) -> wgpu::TextureView {
+        cloud_noise::upload(device, queue, data, 64).create_view(&Default::default())
     }
 
-    /// Upload pre-computed detail noise data (48³, RGBA8) to a GPU texture.
-    fn create_detail_noise_3d(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        data: Vec<u8>,
-    ) -> wgpu::TextureView {
-        let size = 32u32;
-
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("detail noise 3D"),
-            size: wgpu::Extent3d {
-                width: size,
-                height: size,
-                depth_or_array_layers: size,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D3,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * size),
-                rows_per_image: Some(size),
-            },
-            wgpu::Extent3d {
-                width: size,
-                height: size,
-                depth_or_array_layers: size,
-            },
-        );
-        tex.create_view(&wgpu::TextureViewDescriptor::default())
+    /// Upload pre-computed detail noise data (32³, RGBA8) with filtered mips to a GPU texture.
+    fn create_detail_noise_3d(device: &wgpu::Device, queue: &wgpu::Queue, data: Vec<u8>) -> wgpu::TextureView {
+        cloud_noise::upload(device, queue, data, 32).create_view(&Default::default())
     }
 
     fn create_blue_noise_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
@@ -3837,14 +3843,30 @@ impl Gpu {
         if new_size.width == 0 || new_size.height == 0 {
             return;
         }
-        self.cloud_render_scale = cloud_scale_request(new_size.width, new_size.height);
         self.size = new_size;
         self.config.width = new_size.width;
         self.config.height = new_size.height;
         self.surface.configure(&self.device, &self.config);
+        self.frame_pacer.reset();
+        self.resize_scene_targets();
+    }
+
+    fn resize_scene_targets(&mut self) {
         let (scene_width, scene_height) = scene_dims(self.config.width, self.config.height);
         self.atmosphere.resize(&self.queue, scene_width, scene_height);
         self.depth = Self::create_depth(&self.device, &self.config);
+        self.terrain_backstop_depth = Self::create_terrain_backstop_depth(&self.device, &self.config);
+        self.world_surface_bind_group = Self::create_world_surface_bind_group(
+            &self.device,
+            &self.world_pipeline.get_bind_group_layout(3),
+            &self.shadow_renderer.uniform_buffer,
+            &self.shadow_renderer.depth_view,
+            &self.shadow_renderer.depth_sampler,
+            &self.cloud_shadow_view,
+            &self.cloud_field_sampler,
+            &self.horizon_detail,
+            &self.terrain_backstop_depth,
+        );
         self.postprocess.resize(&self.device, &self.config);
         self.indirect.resize(
             &self.device,
@@ -3903,6 +3925,20 @@ impl Gpu {
         self.cloud_history_valid = false;
     }
 
+    /// Portal graph drawn as windows this frame; cloned only on a new revision.
+    pub fn set_portals(&mut self, network: &crate::world::portals::Network, revision: u64,
+        realm_gates: Vec<crate::world::portals::realm::Gate>) {
+        self.portals.set_network(network, revision);
+        self.portals.set_realm_gates(realm_gates);
+    }
+
+    pub fn request_acceptance_capture(&mut self, path: std::path::PathBuf) {
+        capture::watch(path.clone());
+        self.request_capture(path);
+    }
+
+    pub fn horizon_budget_exhausted(&self, world: &crate::world::World) -> bool { self.horizon.budget_exhausted_for(world) }
+
     pub fn request_capture(&mut self, path: std::path::PathBuf) {
         self.capture_path = Some(path);
     }
@@ -3921,18 +3957,28 @@ impl Gpu {
             forward,
             projection: REVERSE_Z * projection,
             sun_dir: self.current_lighting.sun_dir,
+            moon_dir: self.current_lighting.moon_dir,
+            moon_intensity: self.current_lighting.moon_intensity,
             focal_px,
             sky_time_s: self.effect_time,
             clouds: day.cloud_controls(),
             weather_seed: day.weather_seed(),
+            weather_days: crate::world::synoptic::days(day),
             clock_s: self.globe_clock.elapsed().as_secs_f64(),
+            debug_view: self.current_debug_view.as_u32(),
         };
         let clusters = || globe::shell::factory_clusters(world);
         self.globe_driver.update(globe, &self.queue, world.sample_config(), &crate::world::storage::save_directory, &view, &clusters);
         if self.globe_driver.running() {
             let chunk_m = CHUNK_SIZE as f32 * world.voxel_scale.meters();
-            // The fade only blends over horizon rings; with them cleared it would show sky.
-            let radius = if self.horizon_globe_only { 0.0 } else { self.globe_disc_radius_m };
+            // Fade only over a horizon which will actually be submitted. A
+            // pending/disabled horizon, or a planet cover replaced by this
+            // globe, cannot fill the transparent band beneath it.
+            let horizon_drawn = !self.horizon_globe_only && !self.globe_driver.orbit_view()
+                && self.planet_mesh.is_none() && self.horizon.mesh.is_some()
+                && self.horizon.published_source() == Some(world.sample_config())
+                && !render_isolation().skip_horizon;
+            let radius = if horizon_drawn { self.globe_disc_radius_m } else { 0.0 };
             let mask = globe::band::GlobeMask::new(*self.horizon.resident_coverage(), chunk_m, radius, eye_m);
             globe.set_mask(&self.queue, &mask);
         }
@@ -3951,17 +3997,117 @@ impl Gpu {
         desired_resident: coverage::ResidentCoverage,
         cache:&streaming::ChunkCache,
         fov_degrees:f32,
+        fast_start: bool,
     ) {
+        let cfg = world.sample_config();
+        self.terrain_arrival = coverage::TerrainArrival::default();
+        self.finite_world = cfg.world_type == crate::world::WorldType::Manyfold;
+        self.realm_sky = cfg.world_type == crate::world::WorldType::Nether;
+        self.manyfold_axis_y = if self.finite_world {
+            engine_worldgen::manyfold::axis_y(cfg.generator_version)
+        } else {
+            0.0
+        };
+        if self.outgoing_planet_mesh.as_ref().is_some_and(|(mesh, started)| {
+            mesh.cfg != cfg || lod_transition_phase(*started, Instant::now()).is_none()
+        }) {
+            self.outgoing_planet_mesh = None;
+        }
+        if self.finite_world {
+            self.planet_mesh = None;
+            if let Some(job) = self.planet_build.take() { job.cancel.store(true, Ordering::Relaxed); }
+            self.horizon.clear_mesh();
+            return;
+        }
+        if render_isolation().skip_horizon_work {
+            return;
+        }
+        // Both planet covers and ordinary horizons join the installed perimeter.
+        // Capture the same publication proof before selecting either world path.
+        let root=&world.regions.view.root;
+        if !self.horizon.collar_observation_current(cache.gpu_mesh_revision,cfg,root,&resident) {
+            let input=cache.collar_input(self.horizon.current_collar(),&resident);
+            self.horizon.set_collar_observation(input,cache.gpu_mesh_revision,cfg,Arc::clone(root),resident);
+        }
+        if cfg.is_planet() {
+            // `eye` arrives in metres. Check the target before publishing a
+            // worker result, since a teleport can change it mid-build.
+            let anchor = planet::anchor_for(&cfg, eye);
+            if self.planet_mesh.as_ref().is_some_and(|mesh| mesh.cfg != cfg) { self.planet_mesh = None; }
+            if let Some(job) = &self.planet_build && (job.cfg != cfg || job.anchor != anchor) {
+                job.cancel.store(true, Ordering::Relaxed);
+            }
+            if self.planet_build.as_ref().is_some_and(|job| job.cfg != cfg) { self.planet_build = None; }
+            // The shell is not a horizon mesh, but it uses the same residency
+            // mask. Without this the cover never yields, so its facets stay
+            // drawn through the ground after the player has arrived.
+            self.horizon.set_resident_coverage(resident, desired_resident);
+            // Both stages arrive as complete mapped buffers. Keep the previous
+            // cover until the replacement is ready to crossfade.
+            let mut published_startup = false;
+            if self.outgoing_planet_mesh.is_none() {
+                let ready = if self.planet_build.as_ref().is_some_and(|job| job.worker.is_finished()) {
+                    self.planet_build.take().and_then(|job| job.worker.join().ok().flatten())
+                } else {
+                    self.planet_build.as_ref().filter(|job| !job.cancel.load(Ordering::Relaxed))
+                        .and_then(|job| job.terrain.try_recv().ok().map(|mesh| {
+                            eprintln!("[planet-cover-publish] stage=terrain anchor={:?} elapsed_ms={:.1}",
+                                job.anchor, job.started.elapsed().as_secs_f64() * 1000.0);
+                            mesh
+                        }))
+                };
+                if let Some(mesh) = ready && mesh.cfg == cfg && mesh.anchor == anchor {
+                    published_startup = !mesh.refined;
+                    self.outgoing_planet_mesh = self.planet_mesh.replace(mesh)
+                        .map(|previous| (previous, Instant::now()));
+                }
+            }
+            let input = self.horizon.current_collar().cloned();
+            let stale = self.planet_mesh.as_ref().is_none_or(|mesh| !mesh.refined || mesh.anchor != anchor
+                || (input.is_some() && self.horizon.collar_settled(Instant::now())
+                    && !mesh.matches_collar(input.as_ref())));
+            if stale && !published_startup && self.planet_build.is_none() {
+                let startup = fast_start && self.planet_mesh.is_none()
+                    && engine_worldgen::planetary::active(&cfg);
+                let source = self.planet_mesh.as_ref().filter(|m| m.refined && m.anchor == anchor)
+                    .map(|m| Arc::clone(&m.source));
+                let shells = self.planet_mesh.as_ref().map(|m| m.shells.clone()).unwrap_or_default();
+                let device = self.device.clone();
+                let progress = Arc::new(planet::progress::Progress::new(6 + u32::from(anchor.is_some())));
+                self.planet_progress = Some(Arc::clone(&progress));
+                let (send_terrain, terrain) = std::sync::mpsc::sync_channel(1);
+                let cancel = Arc::new(AtomicBool::new(false));
+                let cancel_worker = Arc::clone(&cancel);
+                let started = Instant::now();
+                let worker = std::thread::spawn(move || {
+                    let stage = if startup { "startup" } else if source.is_some() { "join" } else { "refined" };
+                    let terrain_ready = |cpu: planet::Cpu| {
+                        if cancel_worker.load(Ordering::Relaxed) { return; }
+                        let terrain = planet::Mesh::upload(&device, cpu);
+                        let _ = send_terrain.try_send(terrain);
+                    };
+                    let mesh = if startup { planet::build_startup_with_progress(cfg, anchor, Some(&progress)) }
+                        else { planet::build_with_progress(cfg, anchor, input, source, shells, Some(&progress),
+                            Some(planet::Streaming { terrain_ready: &terrain_ready, cancel: &cancel_worker })) };
+                    if cancel_worker.load(Ordering::Relaxed) { return None; }
+                    eprintln!("[planet-cover] stage={stage} anchor={anchor:?} triangles={} build_ms={:.1}",
+                        mesh.indices.len() / 3, started.elapsed().as_secs_f64() * 1000.0);
+                    progress.begin("Terrain Upload", 0);
+                    Some(planet::Mesh::upload(&device, mesh))
+                });
+                self.planet_build = Some(planet::CoverJob { cfg, anchor, cancel, started, terrain, worker });
+            }
+            let globe_drawn = self.globe.is_some() && self.globe_visible && self.globe_driver.ground_ready_for(cfg);
+            if !globe_drawn && self.planet_mesh.is_some() {
+                self.terrain_arrival = cache.terrain_arrival(&resident, |_| true);
+            }
+            return;
+        }
+        self.planet_mesh = None;
+        if let Some(job) = self.planet_build.take() { job.cancel.store(true, Ordering::Relaxed); }
         self.horizon.set_device_loss_signal(&self.device_lost);
         if !self.device_usable() || crate::low_spec::active() { return; }
         self.horizon.set_refinement_projection(self.config.height as f32/(2.0*(fov_degrees.to_radians()*0.5).tan()));
-        let cfg=world.sample_config();
-        let root=&world.regions.view.root;
-        if !self.horizon.collar_observation_current(cache.gpu_mesh_revision,cfg,root,&resident,cache.quality_column_iter()) {
-            let preferred=cache.quality_columns();
-            let input=cache.collar_input(self.horizon.current_collar(),&resident,&preferred);
-            self.horizon.set_collar_observation(input,cache.gpu_mesh_revision,cfg,Arc::clone(root),resident,preferred);
-        }
         self.horizon.set_resident_coverage(resident, desired_resident);
         let scale = world.voxel_scale.meters();
         let revision = world.revision();
@@ -3978,9 +4124,12 @@ impl Gpu {
         self.globe_disc_radius_m = hidden_radius;
         if globe::active() {
             let (clip, keep) = globe::band::horizon_clip(self.tier, eye.as_dvec3());
-            self.horizon.set_chart_clip(clip);
-            self.horizon_globe_only = !keep;
-            if !keep {
+            let globe_ready = self.globe_visible && self.globe_driver.ground_ready_for(cfg);
+            // At a chart edge the neighbouring part of the horizon is the
+            // only cover until the current world's globe tiles can draw.
+            self.horizon.set_chart_clip(if globe_ready { clip } else { None });
+            self.horizon_globe_only = !keep && globe_ready;
+            if self.horizon_globe_only {
                 // Above the load stop the globe alone draws the ground.
                 self.horizon.clear_mesh();
                 return;
@@ -3993,12 +4142,17 @@ impl Gpu {
             revision,
             eye,
             hidden_radius,
+            fast_start,
         );
+        if !render_isolation().skip_horizon && !(self.globe_visible && self.globe_driver.orbit_view()) {
+            self.terrain_arrival = cache.terrain_arrival(&resident, |column| self.horizon.covers_streaming_column(cfg, column));
+        }
         if let Some(update) = self.horizon.take_detail_update() {
             self.horizon_detail.apply(&self.queue, update.as_deref());
         }
     }
     pub fn horizon_quality_columns(&mut self,cfg:crate::world::WorldSampleConfig,eye:Vec3,forward:Vec3,fov_degrees:f32)->Vec<(i32,i32)> {
+        if render_isolation().skip_horizon_work { return Vec::new(); }
         let focal=self.config.height as f32/(2.0*(fov_degrees.to_radians()*0.5).tan());
         let ordinary_lod0_m=render_distance_settings().lod_start_chunks as f32*32.0*cfg.voxel_meters();
         self.horizon.quality_columns(cfg,eye,forward,focal,[self.config.width,self.config.height],ordinary_lod0_m)
@@ -4007,14 +4161,39 @@ impl Gpu {
         self.horizon.quality_parent_valid(snapshot,eye,columns)
     }
     pub fn horizon_retention_columns(&self) -> Vec<(i32,i32)> { self.horizon.retention_columns() }
+    pub fn planet_loading_progress(&self, cfg: crate::world::WorldSampleConfig) -> Option<(&'static str, u64, u64)> {
+        let job = self.planet_build.as_ref()?;
+        if job.cfg != cfg || job.cancel.load(Ordering::Relaxed) { return None; }
+        if job.worker.is_finished() { return Some(("Terrain Publication", 0, 0)); }
+        let p = self.planet_progress.as_ref()?.snapshot();
+        Some((p.name, p.done, p.total))
+    }
+
     pub fn horizon_work_stage(&self) -> &'static str { self.horizon.work_stage() }
+    pub fn horizon_upload_pages(&self) -> Option<(usize, usize)> { self.horizon.upload_pages() }
+    pub fn horizon_building_base(&self) -> bool { self.horizon.building_base() }
+    pub fn globe_enabled(&self) -> bool { self.globe.is_some() }
     pub fn horizon_published_source(&self) -> Option<crate::world::WorldSampleConfig> { self.horizon.published_source() }
     pub fn horizon_published_revision(&self) -> Option<u64> { self.horizon.published_revision() }
     pub fn horizon_baked_columns(&self, columns:&[(i32,i32)]) -> std::collections::HashSet<(i32,i32)> { self.horizon.baked_columns(columns) }
 
     pub fn horizon_ready(&self) -> bool {
-        let resident = self.globe.as_ref().map_or(0, globe::gpu::Globe::resident);
-        globe::band::horizon_ready(globe::active(), self.tier, self.horizon.mesh.is_some(), resident)
+        // Minimum-spec mode deliberately disables horizon generation. Waiting
+        // for its mesh there leaves an otherwise loaded world behind the loader.
+        let resident = usize::from(self.globe_driver.ground_ready());
+        self.finite_world || crate::low_spec::active() || self.planet_mesh.is_some() || render_isolation().skip_horizon_work
+            || globe::band::horizon_ready(globe::active(), self.tier, self.horizon.mesh.is_some(), resident)
+    }
+
+    pub fn planet_detail_ready(&self) -> bool {
+        self.planet_mesh.as_ref().is_none_or(|mesh| mesh.refined
+            && self.planet_build.as_ref().is_none_or(|job| job.anchor == mesh.anchor))
+    }
+
+    /// True once the current world has a far-field mesh. A later rebuild
+    /// (edits, walking) must not show the terrain loader over gameplay.
+    pub fn horizon_loaded_this_world(&self) -> bool {
+        self.finite_world || self.horizon.loaded_this_world() || self.planet_mesh.is_some() || render_isolation().skip_horizon_work
     }
 
     pub fn upload_camera(
@@ -4025,6 +4204,7 @@ impl Gpu {
         projection: Mat4,
         world_seed: u32,
         generator_version: u32,
+        planet_tick: u64,
         coverage_radius: f32,
     ) {
         self.horizon.set_refinement_projection(self.config.height as f32 * projection.y_axis.y.abs() * 0.5);
@@ -4043,19 +4223,28 @@ impl Gpu {
         let render_origin = RenderOrigin::follow(self.render_origin, eye_voxels, origin::origin_bias_voxels());
         self.render_origin = Some(render_origin);
         let eye_from_origin = render_origin.eye_uniform(precise_eye, f64::from(world_scale), residual);
+        self.planet_eye = self.planet_mesh.is_some()
+            .then(|| planet_frame::Eye::new(precise_eye, planet_frame::far_m(f64::from(world_scale))));
         let cur_forward = forward.normalize();
         // Callers supply a conventional 0 = near, 1 = far projection. The scene is
         // drawn reverse-Z into a 32-bit float depth buffer: 24-bit forward-Z gave
         // steps of ~1 m at 1 km and ~76 m at 8 km, so distant shoreline terrain and
         // water z-fought. Shaders that reconstruct depth read the reversed matrix.
+        // Camera roll (wall run lean) tilts only the up vector.
+        let roll = self.camera_roll;
+        let up_axis = if roll.abs() > 1e-5 {
+            glam::Quat::from_axis_angle(cur_forward, roll) * self.camera_up
+        } else {
+            self.camera_up
+        };
         let standard_view_proj = projection
-            * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y)
+            * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, cur_forward, up_axis)
             * Mat4::from_translation(-residual);
         let standard_inv_view_proj = Mat4::from_translation(eye) * standard_view_proj.inverse();
         // Cascades fit around the precise eye; f32 absolute corners lose
         // centimetres far from spawn.
         let cascade_view = shadow::CascadeView {
-            inv_view_proj: (projection * Mat4::look_to_rh(Vec3::ZERO, cur_forward, Vec3::Y)).inverse(),
+            inv_view_proj: (projection * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, cur_forward, up_axis)).inverse(),
             eye_m: precise_eye,
             origin: render_origin,
         };
@@ -4063,7 +4252,7 @@ impl Gpu {
         let rotation_view_proj = REVERSE_Z * standard_view_proj;
         // REVERSE_Z is its own inverse, so the reversed inverse needs no second inversion.
         let inv_view_proj = standard_inv_view_proj * REVERSE_Z;
-        let right = cur_forward.cross(Vec3::Y).normalize() / projection.x_axis.x;
+        let right = cur_forward.cross(up_axis).normalize() / projection.x_axis.x;
         let up = right.normalize().cross(cur_forward) / projection.y_axis.y;
         let prev_forward = self.last_camera_forward;
 
@@ -4083,23 +4272,10 @@ impl Gpu {
 
         self.frame_index = self.frame_index.wrapping_add(1);
 
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::bytes_of(&CameraUniform {
+        let uniform = CameraUniform {
                 // Terrain and outlines subtract the eye before projection.
                 view_proj: rotation_view_proj.to_cols_array_2d(),
-                // w encodes 'submerged' as 1 + the surface height, so `w > 0.5` still means underwater.
-                camera_pos: [
-                    eye.x,
-                    eye.y,
-                    eye.z,
-                    if self.underwater {
-                        1.0 + self.water_surface_m.max(0.0)
-                    } else {
-                        0.0
-                    },
-                ],
+                camera_pos: [eye.x, eye.y, eye.z, self.camera_medium.uniform()],
                 inv_view_proj: inv_view_proj.to_cols_array_2d(),
                 world_params: [
                     world_scale,
@@ -4124,7 +4300,12 @@ impl Gpu {
                     } else {
                         visible_world
                     },
-                    self.horizon.exclusion_radius(),
+                    // Planet cover yields only to published resident columns.
+                    if self.planet_eye.is_some() {
+                        0.0
+                    } else {
+                        self.horizon.exclusion_radius()
+                    },
                 ],
                 resident_coverage: *self.horizon.resident_coverage(),
                 // Previous projection has no translation; temporal uses camera deltas.
@@ -4145,8 +4326,41 @@ impl Gpu {
                 ],
                 render_origin: render_origin.voxel.extend(0).to_array(),
                 eye_from_origin: eye_from_origin.extend(0.0).to_array(),
-            }),
-        );
+                planet: {
+                    let mesh_planet = self.planet_mesh.is_some();
+                    let globe_sky = self.globe.is_some() && self.globe_visible && self.globe_driver.running();
+                    // The globe needs the same eye/body frame for its limb even
+                    // when no legacy planet cover mesh is enabled. Keep the mesh
+                    // flag separate so this does not change terrain projection.
+                    let mut planet = crate::planet::camera(precise_eye, mesh_planet || globe_sky, planet_tick);
+                    if !mesh_planet { planet[0][3] = 0.0; }
+                    if self.realm_sky {
+                        planet[0][3] = if self.current_lighting.hell { 2.0 } else { -1.0 };
+                        if self.current_lighting.hell {
+                            // Hell's moons need the observer frame even when
+                            // the distant globe is inactive at ground level.
+                            let frame = engine_core::cube_sphere::atlas::frame(precise_eye);
+                            planet[1][3] = precise_eye.y as f32;
+                            planet[2] = frame.x_axis.as_vec3().extend(0.0).to_array();
+                            planet[3] = frame.y_axis.as_vec3().extend(0.0).to_array();
+                            planet[4] = frame.z_axis.as_vec3().extend(0.0).to_array();
+                            planet[5..8].copy_from_slice(&crate::planet::hell_moons::sky(world_seed, precise_eye, planet_tick));
+                        }
+                    }
+                    planet
+                },
+                portal_clip: [0.0; 4],
+                planet_flat: self.planet_eye.as_ref().map_or([[0.0; 4]; 3], planet_frame::Eye::shader_rows),
+                terrain_arrival: self.terrain_arrival,
+                sky_axes: if self.planet_mesh.is_some()
+                    || (self.globe.is_some() && self.globe_visible && self.globe_driver.running()) {
+                    crate::planet::sky_axes(precise_eye, true, planet_tick)
+                } else {
+                    crate::planet::flat_sky_axes(self.current_lighting.sun_dir)
+                },
+            };
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        self.portals.set_root(uniform, precise_eye, cur_forward, up_axis, projection, world_scale, render_origin);
 
         let hard_cut = translation_delta.length() > 24.0 * world_scale.max(1.0)
             || angular_motion > 0.18
@@ -4158,7 +4372,6 @@ impl Gpu {
 
         self.last_camera_pos = eye;
         self.last_camera_residual = residual;
-        self.last_cascade_view = cascade_view;
         self.last_rotation_view_proj = rotation_view_proj;
         self.last_camera_forward = cur_forward;
         self.last_world_scale = world_scale;
@@ -4169,23 +4382,30 @@ impl Gpu {
             0.05 * world_scale,
             world_scale,
         );
-        self.atmosphere
-            .sync_camera(&self.device, &self.queue, &self.camera_bind_group, eye.y);
-        if self.atmosphere.needs_aerial_perspective() {
-            self.atmosphere.update_aerial_perspective(
-                &self.device,
-                &self.queue,
-                &self.camera_bind_group,
-                eye.y,
-                visible_world,
-            );
-        }
+        self.atmosphere.sync_camera(
+            &self.device,
+            &self.queue,
+            &self.camera_bind_group,
+            eye.y,
+            visible_world,
+        );
+    }
+
+    /// Opaque voxels around `eye` (voxel coordinates) for torch ray tests.
+    pub fn upload_torch_blockage(&mut self, cache: &ChunkCache, eye: Vec3, scale: f32) {
+        self.torch_blockage.upload(&self.queue, cache, eye, scale);
+        self.sky_volume.update(&self.device, &self.queue, cache, eye);
+    }
+
+    pub fn upload_extinguished_torches(&mut self, cells: Vec<[i32; 3]>) {
+        self.torch_blockage.upload_extinguished(&self.queue, cells);
     }
 
     pub fn upload_lighting(
         &mut self,
         lighting: &LightingState,
         cloud_controls: &CloudControls,
+        surface_wind: glam::Vec2,
         sky_time: f32,
         held_torch: Option<TorchLight>,
         torch_lights: &[TorchLight],
@@ -4193,6 +4413,8 @@ impl Gpu {
         debug_view: RenderDebugView,
         atmosphere_mode: AtmosphereMode,
     ) {
+        let frame = (sky_time - self.effect_time).clamp(0.0, 0.1);
+        crate::mesh::water_motion::set_clock(sky_time, frame);
         self.effect_time = sky_time;
         let mut review_lighting = *lighting;
         if let Some(exposure) = crate::terrain_review::fixed_exposure() {
@@ -4220,12 +4442,10 @@ impl Gpu {
                 radius: 18.0, color: [1.0, 0.56, 0.22], strength: 4.4, moving: true,
             });
         }
-        let detail_wind_angle = cloud_controls.wind_dir_angle.to_radians();
-        self.shadow_renderer.set_detail_wind(sky_time, [
-            detail_wind_angle.cos() * cloud_controls.wind_speed,
-            detail_wind_angle.sin() * cloud_controls.wind_speed,
-        ]);
-        let uniform = lighting_uniform_from_state(
+        self.shadow_renderer.set_detail_wind(
+            sky_time, surface_wind.to_array(),
+        );
+        let mut uniform = lighting_uniform_from_state(
             lighting,
             cloud_controls,
             sky_time,
@@ -4234,6 +4454,20 @@ impl Gpu {
             cloud_weather_uniform_state(weather_field),
             debug_view,
         );
+        // Planet has continuous far terrain. Its air must not become denser
+        // when the chunk view distance is lowered; weather owns visibility.
+        if self.planet_mesh.is_some() || self.planet_build.is_some() {
+            uniform.fog_params[0] = lighting.fog_start.max(0.0);
+            uniform.fog_params[1] = lighting.fog_end.max(uniform.fog_params[0] + 24.0);
+        }
+        // Previously unused fog word: finite Manyfold environment fill. Keep
+        // the uniform layout stable while giving its enclosed sky a spectrum.
+        // Values above 2 are the shell axis in metres. 1 keeps the stage-A axis.
+        uniform.fog_color_density[3] = if self.finite_world { self.manyfold_axis_y.max(1.0) } else { 0.0 };
+        // Previously unused surface words: the ground wind in real m/s
+        // (`world::wind_at`), the same vector the shadow pass sways with.
+        uniform.surface_weather[2] = surface_wind.x;
+        uniform.surface_weather[3] = surface_wind.y;
         self.queue
             .write_buffer(&self.lighting_buffer, 0, bytemuck::bytes_of(&uniform));
         self.atmosphere.set_state(
@@ -4247,12 +4481,7 @@ impl Gpu {
         self.current_lighting = *lighting;
         self.current_debug_view = debug_view;
 
-        self.shadow_renderer.update(
-            self.current_lighting.sun_dir,
-            self.last_cascade_view,
-            0.05 * self.last_world_scale,
-            self.last_world_scale,
-        );
+        // Camera upload fits shadows once, with the new camera and lighting.
         self.clear_color = [
             lighting.sky_horizon[0] * 0.72 + lighting.sky_top[0] * 0.28,
             lighting.sky_horizon[1] * 0.72 + lighting.sky_top[1] * 0.28,
@@ -4373,6 +4602,37 @@ impl Gpu {
         self.config.width as f32 / self.config.height.max(1) as f32
     }
 
+    /// Apply backpressure before streaming and uniform uploads, while letting
+    /// the caller keep servicing gameplay and networking on every redraw.
+    pub fn ready_for_frame(&self) -> bool {
+        self.frame_pacer.ready(&self.device)
+    }
+
+    pub fn flush_chunk_uploads(&self) {
+        let credits = std::mem::take(&mut *self.chunk_upload_credits.lock().unwrap());
+        if !credits.is_empty() && self.device_usable() {
+            self.queue.submit([]);
+            upload_staging::release_after_submit(&self.queue, credits);
+        }
+    }
+
+    pub fn flush_pending_frame_work(&mut self) {
+        let bakes = self.sky_volume.take_pending();
+        let credits = std::mem::take(&mut *self.chunk_upload_credits.lock().unwrap());
+        if self.device_usable() && (!credits.is_empty() || bakes.iter().any(Option::is_some)) {
+            self.queue.submit(bakes.into_iter().flatten());
+            upload_staging::release_after_submit(&self.queue, credits);
+        }
+    }
+
+    fn submit_frame(&mut self, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
+        let credits = std::mem::take(&mut *self.chunk_upload_credits.lock().unwrap());
+        let bakes = self.sky_volume.take_pending();
+        let submission = self.queue.submit(bakes.into_iter().flatten().chain([encoder.finish()]));
+        upload_staging::release_after_submit(&self.queue, credits);
+        submission
+    }
+
     pub fn size(&self) -> PhysicalSize<u32> {
         self.size
     }
@@ -4380,7 +4640,7 @@ impl Gpu {
         &mut self,
         clear_color: [f32; 3],
         overlay: F,
-    ) -> Result<(), wgpu::SurfaceError>
+    ) -> Result<(), SurfaceFrameError>
     where
         F: FnOnce(
             &wgpu::Device,
@@ -4397,7 +4657,10 @@ impl Gpu {
             frame_id: self.render_frame_id,
             ..Default::default()
         };
-        let frame = acquire_surface_frame(&self.surface,&self.device_lost,&self.frame_pacer,&self.device)?;
+        let acquire_start = Instant::now();
+        let result = acquire_surface_frame(&self.surface,&self.device_lost,&self.frame_pacer,&self.device);
+        self.last_render_stats.surface_acquire_ms = acquire_start.elapsed().as_secs_f32() * 1000.0;
+        let frame = result?;
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -4410,6 +4673,7 @@ impl Gpu {
 
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("loading clear pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -4456,10 +4720,10 @@ impl Gpu {
             }
             capture::PendingCapture::encode(&self.device, &mut encoder, &frame.texture, &self.config, path)
         });
-        let submission = self.queue.submit(Some(encoder.finish()));
-        self.frame_pacer.submitted(submission);
+        self.submit_frame(encoder);
+        self.frame_pacer.track_submission(&self.queue);
         if let Some(mut capture)=capture { capture.map(); self.pending_captures.push(capture); }
-        frame.present();
+        self.queue.present(frame);
         Ok(())
     }
 
@@ -4469,10 +4733,11 @@ impl Gpu {
         draw_list: &[ChunkKey],
         outline_vertices: &[LineVertex],
         invert_outline_vertices: &[LineVertex],
+        survey_outline_vertices: &[LineVertex],
         ui_vertices: &[UiVertex],
         paused: bool,
         overlay: F,
-    ) -> Result<(), wgpu::SurfaceError>
+    ) -> Result<(), SurfaceFrameError>
     where
         F: FnOnce(
             &wgpu::Device,
@@ -4484,10 +4749,13 @@ impl Gpu {
         ),
     {
         if CLOUD_ADAPTIVE_ENABLED.load(Ordering::Relaxed)
+            && !paused && draw_clouds()
+            && self.last_render_stats.cloud_raymarch_passes != 0
             && self.last_render_stats.gpu_sample_count != 0
             && self.last_render_stats.gpu_sample_config_id == self.last_render_stats.config_id
-            && self.cloud_governor.update(
+            && self.cloud_governor.update_cloud_cost(
             self.last_render_stats.gpu_pass_total_ms,
+            self.last_render_stats.gpu_cloud_raymarch_ms,
             self.last_frame_instant.elapsed().as_secs_f32(),
         ) {
             CLOUD_AUTO_BUMP.store(self.cloud_governor.bump(), Ordering::Relaxed);
@@ -4502,13 +4770,15 @@ impl Gpu {
             );
         }
         self.last_frame_instant = Instant::now();
+        let mut preflight_trace = crate::gameplay_trace::Trace::new();
         if self.cloud_render_scale != cloud_scale_request(self.size.width, self.size.height) {
             if self.cloud_render_scale / 8 == scene_scale_percent() {
                 self.resize_cloud_targets();
             } else {
-                self.resize(self.size);
+                self.resize_scene_targets();
             }
         }
+        preflight_trace.mark("render-target-resize");
         if self
             .gpu_profiler
             .as_mut()
@@ -4517,6 +4787,7 @@ impl Gpu {
             // Drop all slots together; no failed map can be reused next frame.
             self.gpu_profiler = None;
         }
+        preflight_trace.mark("render-gpu-poll");
 
         let acquire_start = Instant::now();
         let frame = acquire_surface_frame(&self.surface,&self.device_lost,&self.frame_pacer,&self.device)?;
@@ -4538,8 +4809,10 @@ impl Gpu {
             frame_stats.gpu_cloud_raymarch_ms = gpu_timings.cloud_raymarch_ms;
             frame_stats.gpu_cloud_temporal_ms = gpu_timings.cloud_temporal_ms;
             frame_stats.gpu_sky_ms = gpu_timings.sky_ms;
+            frame_stats.gpu_sky_probe_ms = gpu_timings.sky_probe_ms;
             frame_stats.gpu_cloud_composite_ms = gpu_timings.cloud_composite_ms;
             frame_stats.gpu_outline_ms = gpu_timings.outline_ms;
+            frame_stats.gpu_postprocess_ms = gpu_timings.postprocess_ms;
             frame_stats.gpu_ui_ms = gpu_timings.ui_ms;
             frame_stats.gpu_timestamps_supported = true;
         }
@@ -4585,12 +4858,28 @@ impl Gpu {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let upload_start = Instant::now();
+        let projected_outlines;
+        let projected_invert_outlines;
+        let projected_survey_outlines;
+        let survey_outline_vertices = if let Some(frame) = &self.planet_eye {
+            projected_survey_outlines = planet::outlines(survey_outline_vertices, frame, self.last_world_scale);
+            projected_survey_outlines.as_slice()
+        } else {
+            survey_outline_vertices
+        };
+        let (outline_vertices, invert_outline_vertices) = if let Some(frame) = &self.planet_eye {
+            projected_outlines = planet::outlines(outline_vertices, frame, self.last_world_scale);
+            projected_invert_outlines = planet::outlines(invert_outline_vertices, frame, self.last_world_scale);
+            (projected_outlines.as_slice(), projected_invert_outlines.as_slice())
+        } else { (outline_vertices, invert_outline_vertices) };
         let has_outline = self
             .outline_stream
             .upload(&self.device, &self.queue, outline_vertices);
         let has_invert_outline =
             self.invert_outline_stream
                 .upload(&self.device, &self.queue, invert_outline_vertices);
+        let has_survey_outline = self.survey_outline_stream
+            .upload(&self.device, &self.queue, survey_outline_vertices);
         let has_ui = self
             .ui_stream
             .upload(&self.device, &self.queue, ui_vertices);
@@ -4627,15 +4916,36 @@ impl Gpu {
             && self
                 .shadow_renderer
                 .apply_update_if_needed(
-                    &self.queue,
+                    &mut encoder,
                     chunk_cache.shadow_caster_revision,
                     chunk_cache.shadow_caster_columns_since(self.shadow_renderer.last_mesh_revision).as_deref(),
                 );
 
         // The main pass and every shadow cascade draw in the render-origin frame.
         let origin = self.render_origin.unwrap_or(RenderOrigin { voxel: IVec3::ZERO });
-        let chunk_transform = |c: IVec3| DrawTransform { offset: origin.chunk_offset(c), ..DrawTransform::IDENTITY };
-        self.draw_offsets.begin_frame(DrawTransform { offset: origin.absolute_offset(), ..DrawTransform::IDENTITY });
+        let voxel_m = f64::from(self.last_world_scale);
+        let planet_eye = self.planet_eye;
+        let arrival = self.terrain_arrival;
+        let planet_corners = std::cell::RefCell::new(crate::fast_hash::FastMap::default());
+        let planet_corners = &planet_corners;
+        let chunk_transform = move |c: IVec3| {
+            let mut transform = if let Some(eye) = &planet_eye {
+                let eye_origin = eye.chart_m() - origin.voxel.as_dvec3() * voxel_m;
+                let mut corners = planet_corners.borrow_mut();
+                planet_frame::chunk_draw_with_corners(origin, c, eye, voxel_m, |corner| {
+                    *corners.entry(corner).or_insert_with(|| {
+                        eye.relative(corner.as_dvec3() * f64::from(crate::world::CHUNK_SIZE) * voxel_m)
+                            + eye_origin
+                    })
+                })
+            } else {
+                DrawTransform::flat(origin.chunk_offset(c))
+            };
+            // Bit 0 selects chart bending, bits 1 through 8 hold the mesh LOD transition.
+            transform.offset[3] += (arrival.phase(c.x, c.z) << 9) as f32;
+            transform
+        };
+        self.draw_offsets.begin_frame(DrawTransform::flat(origin.absolute_offset()));
         if redraw_shadow_map {
             self.shadow_renderer.build_cascade_draw_lists(chunk_cache, self.horizon.mesh.as_ref());
             self.shadow_renderer.prepare_draws(
@@ -4650,13 +4960,41 @@ impl Gpu {
         // offset table must be complete before any pass binds it. This work and
         // the upload count toward terrain encode time, not shadow time.
         let main_prepare_start = Instant::now();
+        let mut resident_transitions = Vec::new();
+        let mut transitioning = HashSet::new();
+        let absolute = DrawTransform::flat(origin.absolute_offset());
+        let mut horizon_transition = None;
+        let mut planet_transition = None;
+        if !paused {
+            for key in draw_list {
+                if let Some((previous, phase)) = chunk_cache.lod_transition(key.coord, main_prepare_start) {
+                    let slots = self.draw_offsets.transition_slots(chunk_transform(key.coord), phase);
+                    resident_transitions.push((key.coord, previous, slots));
+                    transitioning.insert(key.coord);
+                }
+            }
+            horizon_transition = self.horizon.lod_transition(main_prepare_start)
+                .map(|(mesh, phase)| (mesh, self.draw_offsets.transition_slots(absolute, phase)));
+            planet_transition = self.outgoing_planet_mesh.as_ref().and_then(|(mesh, started)| {
+                let phase = lod_transition_phase(*started, main_prepare_start)?;
+                Some((mesh, self.draw_offsets.transition_slots(absolute, phase)))
+            });
+        }
         let multidraw = !paused && streaming::indirect_draws::active();
-        for key in draw_list.iter() {
-            self.draw_offsets.slot(key.coord, || chunk_transform(key.coord));
+        if !paused && !multidraw {
+            for key in draw_list {
+                self.draw_offsets.slot(key.coord, || chunk_transform(key.coord));
+            }
+        }
+        if !paused {
+            let size = scene_dims(self.config.width, self.config.height);
+            for coord in self.portals.plan(&self.device, chunk_cache, [size.0, size.1]) {
+                self.draw_offsets.slot(coord, || chunk_transform(coord));
+            }
         }
         let multidraw_counts = if multidraw {
             let offsets = &mut self.draw_offsets;
-            let coords = draw_list.iter().map(|k| k.coord);
+            let coords = draw_list.iter().map(|k| k.coord).filter(|c| !transitioning.contains(c));
             self.chunk_indirect.prepare(&self.device, &self.queue, chunk_cache, coords, |c| {
                 offsets.slot(c, || chunk_transform(c))
             })
@@ -4697,11 +5035,41 @@ impl Gpu {
         frame_stats.shadow_encode_ms = shadow_start.elapsed().as_secs_f32() * 1000.0 - main_prepare_ms;
 
         let terrain_start = Instant::now();
-        self.atmosphere.record_sky_probe(&mut encoder, &self.camera_bind_group, &self.lighting_bind_group);
+        let probe_timestamps = allocate_pass_timestamp_writes(
+            gpu_query_set.as_ref(), &mut gpu_query_count, &mut gpu_pass_queries,
+            GPU_TIMESTAMP_PASS_SKY_PROBE,
+        ).map(|writes| wgpu::ComputePassTimestampWrites {
+            query_set: writes.query_set,
+            beginning_of_pass_write_index: writes.beginning_of_pass_write_index,
+            end_of_pass_write_index: writes.end_of_pass_write_index,
+        });
+        self.atmosphere.record_sky_probe(
+            &mut encoder, &self.camera_bind_group, &self.lighting_bind_group, probe_timestamps,
+        );
         if let Some(posed) = &self.posed_assets { posed.record(&mut encoder); }
         let scene_view = &self.postprocess.scene;
+        let globe_drawn = self.globe.is_some() && self.globe_visible && self.globe_driver.ground_ready();
+        let globe_replaces_horizon = self.globe_visible && self.globe_driver.orbit_view();
+        let backstop_active = !paused && self.horizon.resident_coverage().header[3] != 0;
+        let planet_backstop = self.planet_mesh.as_ref()
+            .filter(|_| backstop_active && !globe_drawn)
+            .and_then(|mesh| mesh.backstop.as_ref().filter(|(_, count)| *count > 0)
+                .map(|backstop| (mesh, backstop)));
+        let horizon_backstop = self.horizon.mesh.as_ref().filter(|mesh| {
+            backstop_active && self.planet_mesh.is_none() && !render_isolation().skip_horizon
+                && !globe_replaces_horizon && !mesh.pages.is_empty()
+        });
+        let draw_backstop = planet_backstop.is_some() || horizon_backstop.is_some();
+        // One timing interval spans both passes and the depth copy between them.
+        let terrain_timestamps = allocate_pass_timestamp_writes(
+            gpu_query_set.as_ref(),
+            &mut gpu_query_count,
+            &mut gpu_pass_queries,
+            GPU_TIMESTAMP_PASS_TERRAIN,
+        );
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("main pass"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
@@ -4740,12 +5108,11 @@ impl Gpu {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: allocate_pass_timestamp_writes(
-                    gpu_query_set.as_ref(),
-                    &mut gpu_query_count,
-                    &mut gpu_pass_queries,
-                    GPU_TIMESTAMP_PASS_TERRAIN,
-                ),
+                timestamp_writes: terrain_timestamps.as_ref().map(|writes| wgpu::RenderPassTimestampWrites {
+                    query_set: writes.query_set,
+                    beginning_of_pass_write_index: writes.beginning_of_pass_write_index,
+                    end_of_pass_write_index: if draw_backstop { None } else { writes.end_of_pass_write_index },
+                }),
                 occlusion_query_set: None,
             });
 
@@ -4760,15 +5127,16 @@ impl Gpu {
                 if let Some(draw_offsets) = self.draw_offsets.buffer() {
                     pass.set_vertex_buffer(1, draw_offsets.slice(..));
                 }
-                // Front-to-back order stays; buffers rebind only on a page change.
-                let mut bound_page = None;
                 if multidraw {
                     self.chunk_indirect.draw(&mut pass, chunk_cache);
                     terrain_draw_calls += multidraw_counts.0;
                     terrain_indices += multidraw_counts.1;
-                }
-                for key in draw_list.iter().filter(|_| !multidraw) {
-                    if let Some(slice) = chunk_cache.draw_slice(key.coord) {
+                } else {
+                    // Keep front-to-back order and rebind only on a page change.
+                    let mut bound_page = None;
+                    for key in draw_list {
+                        if transitioning.contains(&key.coord) { continue; }
+                        let Some(slice) = chunk_cache.draw_slice(key.coord) else { continue };
                         if bound_page != Some(slice.page) {
                             pass.set_vertex_buffer(0, slice.vertices.slice(..));
                             pass.set_index_buffer(slice.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -4781,7 +5149,32 @@ impl Gpu {
                         terrain_draw_calls += 1;
                     }
                 }
-                if let Some(globe) = self.globe.as_ref().filter(|_| self.globe_visible && self.globe_driver.running()) {
+                for (coord, previous, (old_slot, new_slot)) in resident_transitions {
+                    for (slice, slot) in [(previous, old_slot), (chunk_cache.draw_slice(coord), new_slot)] {
+                        let Some(slice) = slice else { continue; };
+                        pass.set_vertex_buffer(0, slice.vertices.slice(..));
+                        pass.set_index_buffer(slice.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        terrain_indices += slice.index_range.len();
+                        pass.draw_indexed(slice.index_range, slice.base_vertex, slot..slot + 1);
+                        terrain_draw_calls += 1;
+                    }
+                }
+                // A Planet backstop protects resident/scene pixels, not farther
+                // ordinary cover. Defer that cover until after the depth copy.
+                if let Some(mesh) = self.planet_mesh.as_ref()
+                    .filter(|_| !globe_drawn && planet_backstop.is_none()) {
+                    let current_slot = planet_transition.as_ref().map_or(ABSOLUTE_SLOT, |(_, (_, slot))| *slot);
+                    let previous = planet_transition.map(|(mesh, (slot, _))| (mesh, slot));
+                    for (mesh, slot) in previous.into_iter().chain([(mesh, current_slot)]) {
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        let indices = mesh.index_range(self.horizon.current_collar(), self.horizon.resident_coverage());
+                        terrain_indices += indices.len();
+                        pass.draw_indexed(indices, 0, slot..slot + 1);
+                        terrain_draw_calls += 1;
+                    }
+                }
+                if let Some(globe) = self.globe.as_ref().filter(|_| globe_drawn) {
                     globe.draw(&mut pass);
                     // The globe replaced the pipeline and group 0; the draws below use the world's.
                     pass.set_pipeline(&self.world_pipeline);
@@ -4792,27 +5185,30 @@ impl Gpu {
                 }
                 // The flat horizon sits at the globe's sea level and occludes all but the disc centre
                 // from orbit; Task 10 replaces this with the full altitude transition.
-                let globe_replaces_horizon = self.globe_visible && self.globe_driver.orbit_view();
-                if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| !render_isolation().skip_horizon && !globe_replaces_horizon) {
+                if let Some(mesh) = self.horizon.mesh.as_ref().filter(|_| self.planet_mesh.is_none() && !render_isolation().skip_horizon && !globe_replaces_horizon) {
                     let planes =
                         streaming::extract_planes(REVERSE_Z * self.last_rotation_view_proj);
-                    for page in &mesh.pages {
-                        pass.set_vertex_buffer(0, page.vertices.slice(..));
-                        pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        let clip = self.horizon.chart_clip();
-                        if mesh.cull || clip.is_some() || page.batches.iter().any(|b|b.conditional()) {
-                            for batch in &page.batches {
-                                if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) || clip.is_some_and(|c| !batch.within_clip(c)) {
-                                    continue;
+                    let current_slot = horizon_transition.as_ref().map_or(ABSOLUTE_SLOT, |(_, (_, slot))| *slot);
+                    let previous = horizon_transition.map(|(mesh, (slot, _))| (mesh, slot));
+                    for (mesh, slot) in previous.into_iter().chain([(mesh, current_slot)]) {
+                        for page in &mesh.pages {
+                            pass.set_vertex_buffer(0, page.vertices.slice(..));
+                            pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            let clip = self.horizon.chart_clip();
+                            if mesh.cull || clip.is_some() || page.batches.iter().any(|b|b.conditional()) {
+                                for batch in &page.batches {
+                                    if !batch.selected(mesh.collared) || (mesh.cull && !batch.visible(self.last_camera_pos, &planes)) || clip.is_some_and(|c| !batch.within_clip(c)) {
+                                        continue;
+                                    }
+                                    pass.draw_indexed(batch.indices.clone(), 0, slot..slot + 1);
+                                    terrain_draw_calls += 1;
+                                    terrain_indices += batch.indices.len();
                                 }
-                                pass.draw_indexed(batch.indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
+                            } else {
+                                pass.draw_indexed(0..page.count, 0, slot..slot + 1);
                                 terrain_draw_calls += 1;
-                                terrain_indices += batch.indices.len();
+                                terrain_indices += page.count as usize;
                             }
-                        } else {
-                            pass.draw_indexed(0..page.count, 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
-                            terrain_draw_calls += 1;
-                            terrain_indices += page.count as usize;
                         }
                     }
                 }
@@ -4831,7 +5227,110 @@ impl Gpu {
                 frame_stats.terrain_indices = terrain_indices;
             }
         }
+        if draw_backstop {
+            // Planet cover is deferred: protect resident chunks (including exact
+            // edit proxies), scene and posed draws before any procedural parent.
+            // Flat-world horizon ordering stays unchanged, retaining its exact
+            // edit geometry in the copied protection mask too.
+            encoder.copy_texture_to_texture(
+                self.depth.texture().as_image_copy(),
+                self.terrain_backstop_depth.texture().as_image_copy(),
+                self.depth.texture().size(),
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
+                label: Some("terrain backstop pass"),
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: scene_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &self.indirect.receiver,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: terrain_timestamps.map(|mut writes| {
+                    writes.beginning_of_pass_write_index = None;
+                    writes
+                }),
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(if planet_backstop.is_some() {
+                &self.world_pipeline
+            } else {
+                &self.terrain_backstop
+            });
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.lighting_bind_group, &[]);
+            pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
+            pass.set_bind_group(3, &self.world_surface_bind_group, &[]);
+            if let Some(draw_offsets) = self.draw_offsets.buffer() {
+                pass.set_vertex_buffer(1, draw_offsets.slice(..));
+            }
+            if let Some((mesh, (indices, count))) = planet_backstop {
+                // Ordinary unowned/collared cover draws first. The backstop may
+                // replace farther cover at a resident-owned footprint, while the
+                // copied mask keeps resident terrain and scene objects untouched.
+                let current_slot = planet_transition.as_ref().map_or(ABSOLUTE_SLOT, |(_, (_, slot))| *slot);
+                let previous = planet_transition.map(|(mesh, (slot, _))| (mesh, slot));
+                for (cover, slot) in previous.into_iter().chain([(mesh, current_slot)]) {
+                    pass.set_vertex_buffer(0, cover.vertices.slice(..));
+                    pass.set_index_buffer(cover.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    let range = cover.index_range(self.horizon.current_collar(), self.horizon.resident_coverage());
+                    frame_stats.terrain_indices += range.len();
+                    pass.draw_indexed(range, 0, slot..slot + 1);
+                    frame_stats.terrain_draw_calls += 1;
+                }
+                pass.set_pipeline(&self.terrain_backstop);
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..*count, 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
+                frame_stats.terrain_draw_calls += 1;
+                frame_stats.terrain_indices += *count as usize;
+            }
+            if let Some(mesh) = horizon_backstop {
+                let planes = streaming::extract_planes(REVERSE_Z * self.last_rotation_view_proj);
+                let margin = 8 + render_distance_settings().view_distance_chunks;
+                let reach = margin as f32 * CHUNK_SIZE as f32 * self.last_world_scale;
+                for page in &mesh.pages {
+                    pass.set_vertex_buffer(0, page.vertices.slice(..));
+                    pass.set_index_buffer(page.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    for batch in &page.batches {
+                        if !batch.selected(false)
+                            || !batch.nearby(self.last_camera_pos, reach)
+                            || !batch.visible(self.last_camera_pos, &planes)
+                            || self.horizon.chart_clip().is_some_and(|c| !batch.within_clip(c))
+                        {
+                            continue;
+                        }
+                        pass.draw_indexed(batch.indices.clone(), 0, ABSOLUTE_SLOT..ABSOLUTE_SLOT + 1);
+                        frame_stats.terrain_draw_calls += 1;
+                        frame_stats.terrain_indices += batch.indices.len();
+                    }
+                }
+            }
+        }
         frame_stats.terrain_encode_ms = terrain_start.elapsed().as_secs_f32() * 1000.0 + main_prepare_ms;
+        let mut lighting_trace = crate::gameplay_trace::Trace::new();
         if !paused && indirect_lighting_enabled() {
             let timestamps = allocate_pass_timestamp_writes(
                 gpu_query_set.as_ref(),
@@ -4853,6 +5352,7 @@ impl Gpu {
             );
         }
 
+        lighting_trace.mark("render-indirect");
         let cloud_start = Instant::now();
         if !paused {
             let cloud_extent = wgpu::Extent3d {
@@ -4873,13 +5373,14 @@ impl Gpu {
 
             // Above the top slab the globe's cloud shell replaces the march and its composite.
             let march_handoff = !(self.globe_visible && self.globe.is_some()) || self.globe_driver.march_allowed();
-            let march = draw_clouds() && march_handoff;
-            if !march_handoff {
+            let march = draw_clouds() && march_handoff && !self.current_lighting.hell && self.camera_medium == CameraMedium::Air;
+            if !march {
                 // History from before the handoff would blend old clouds in on descent.
                 self.cloud_history_valid = false;
             }
-            {
+            if march {
                 let mut cloud_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("cloud raymarch pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &self.cloud_current_view,
@@ -4904,14 +5405,13 @@ impl Gpu {
                 cloud_pass.set_bind_group(1, &self.lighting_bind_group, &[]);
                 cloud_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 cloud_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                if march {
-                    cloud_pass.draw(0..3, 0..1);
-                }
+                cloud_pass.draw(0..3, 0..1);
             }
             frame_stats.cloud_raymarch_passes = usize::from(march);
 
-            if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid && march_handoff {
+            if CLOUD_TEMPORAL_ENABLED && self.cloud_history_valid && march {
                 let mut temporal_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("cloud temporal pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &self.cloud_target,
@@ -4937,7 +5437,7 @@ impl Gpu {
                 temporal_pass.set_bind_group(2, &self.cloud_temporal_bind_group, &[]);
                 temporal_pass.draw(0..3, 0..1);
                 frame_stats.cloud_temporal_passes = 1;
-            } else {
+            } else if march {
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.cloud_current_tex,
@@ -4955,7 +5455,7 @@ impl Gpu {
                 );
             }
 
-            if CLOUD_TEMPORAL_ENABLED {
+            if CLOUD_TEMPORAL_ENABLED && march {
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &self.cloud_target_tex,
@@ -4978,6 +5478,7 @@ impl Gpu {
 
             {
                 let mut sky_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("sky pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: scene_view,
@@ -5012,8 +5513,9 @@ impl Gpu {
                 sky_pass.draw(0..3, 0..1);
             }
 
-            {
+            if march {
                 let mut composite_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("cloud composite pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: scene_view,
@@ -5038,13 +5540,14 @@ impl Gpu {
                 composite_pass.set_bind_group(1, &self.cloud_bind_group, &[]);
                 composite_pass.set_bind_group(2, self.atmosphere.bind_group(), &[]);
                 composite_pass.set_bind_group(3, &self.cloud_render_bind_group, &[]);
-                if !self.underwater && march_handoff {
-                    composite_pass.draw(0..3, 0..1);
-                }
+                composite_pass.draw(0..3, 0..1);
             }
+            self.record_portals(&mut encoder, chunk_cache);
+            let scene_view = &self.postprocess.scene;
 
-            if has_outline || has_invert_outline {
+            if has_outline || has_invert_outline || has_survey_outline {
                 let mut outline_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("outline pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: scene_view,
@@ -5071,6 +5574,16 @@ impl Gpu {
                     ),
                     occlusion_query_set: None,
                 });
+
+                if has_survey_outline {
+                    outline_pass.set_pipeline(&self.survey_line_pipeline);
+                    outline_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                    outline_pass.set_vertex_buffer(
+                        0,
+                        self.survey_outline_stream.slice::<LineVertex>(survey_outline_vertices.len()),
+                    );
+                    outline_pass.draw(0..survey_outline_vertices.len() as u32, 0..1);
+                }
 
                 if has_outline {
                     outline_pass.set_pipeline(&self.line_pipeline);
@@ -5100,9 +5613,10 @@ impl Gpu {
         // Native stylised resolve. The previous art-pixel downscale was the
         // dominant source of the "cheap low-resolution" read: it discarded
         // most of the scene's material and lighting detail before presentation.
-        // Keep the 16-bit float resolve + native present dither, but no block
+        // Keep the 16-bit float precision + native write dither, but no block
         // sampling, palette quantization, or block contour by default.
         let pixel_scale = 1.0;
+        let mut resolve_trace = crate::gameplay_trace::Trace::new();
         self.postprocess.render(
             &self.device,
             &self.queue,
@@ -5126,7 +5640,7 @@ impl Gpu {
                     1.0
                 },
                 pixel_scale,
-                0.85, // native 8x8 ordered dither, one 8-bit code at most
+                0.85, // optional palette dither; final write uses native blue noise
                 0.0,  // no palette quantization: preserve the authored ramps
                 0.0,  // no block contour: lighting owns the silhouettes
                 if crate::terrain_review::fixed_exposure().is_some() {
@@ -5153,11 +5667,21 @@ impl Gpu {
                 self.zone_grade.1[1],
                 self.zone_grade.1[2],
                 self.zone_grade.1[3],
+                self.motion_boost,
+                sky_volume::ssao_scale(),
+                if self.current_lighting.hell { 1.0 } else { 0.0 },
+                0.0,
             ],
+            allocate_pass_timestamp_writes(
+                gpu_query_set.as_ref(), &mut gpu_query_count, &mut gpu_pass_queries,
+                GPU_TIMESTAMP_PASS_POSTPROCESS,
+            ),
         );
+        resolve_trace.mark("render-postprocess");
         let ui_start = Instant::now();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("ui pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -5204,10 +5728,13 @@ impl Gpu {
         );
         frame_stats.overlay_encode_ms = overlay_start.elapsed().as_secs_f32() * 1000.0;
 
+        let mut readback_trace = crate::gameplay_trace::Trace::new();
         if !self.pending_captures.is_empty() {
             let _ = self.device.poll(wgpu::PollType::Poll);
+            readback_trace.mark("capture-poll");
             self.pending_captures
                 .retain(|capture| !capture.finish_if_ready());
+            readback_trace.mark("capture-readback");
         }
         let capture = self.capture_path.take().and_then(|path| {
             if self.pending_captures.len() >= capture::MAX_PENDING_READBACKS {
@@ -5222,6 +5749,7 @@ impl Gpu {
                 path,
             )
         });
+        readback_trace.mark("capture-encode");
 
         if let Some(slot_index) = gpu_timestamp_slot
             && gpu_query_count != 0 {
@@ -5233,8 +5761,8 @@ impl Gpu {
 
         frame_pacer::debug_stall(&self.device, &mut encoder, frame_stats.frame_id);
         let submit_start = Instant::now();
-        let submission = self.queue.submit(Some(encoder.finish()));
-        self.frame_pacer.submitted(submission);
+        self.submit_frame(encoder);
+        self.frame_pacer.track_submission(&self.queue);
         if let Some(slot_index) = gpu_timestamp_slot
             && let Some(profiler) = self.gpu_profiler.as_mut() {
                 profiler.mark_submitted(slot_index, gpu_query_count, gpu_pass_queries,
@@ -5248,7 +5776,7 @@ impl Gpu {
         }
 
         let present_start = Instant::now();
-        frame.present();
+        self.queue.present(frame);
         frame_stats.present_ms = present_start.elapsed().as_secs_f32() * 1000.0;
         frame_stats.cloud_history_invalidations = self.cloud_history_frame_stats.invalidations;
         frame_stats.cloud_history_camera_invalidations =
@@ -5263,3 +5791,7 @@ impl Gpu {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "render/sky_probe_timing_tests.rs"]
+mod sky_probe_timing_tests;

@@ -9,14 +9,39 @@ use glam::{IVec3, Quat, Vec3};
 use std::sync::LazyLock;
 
 
-static FURNACE: LazyLock<Mesh> = LazyLock::new(|| {
-    Mesh::load(include_str!("../../../../../assets/models/machines/furnace.ron"), "furnace")
-});
+macro_rules! machine {
+    ($name:literal) => {
+        LazyLock::new(|| Mesh::load(include_str!(concat!("../../../../../assets/models/machines/", $name, ".ron")), $name))
+    };
+}
 
-/// Authored block casing for a kind, when one exists. It replaces the procedural casing.
-pub(super) fn authored(kind: Kind) -> Option<&'static Mesh> {
+static FURNACE: LazyLock<Mesh> = machine!("furnace");
+static CRUSHER: [LazyLock<Mesh>; 2] = [machine!("crusher"), machine!("crusher_1")];
+static GENERATOR: [LazyLock<Mesh>; 2] = [machine!("generator"), machine!("generator_1")];
+static PUMP: [LazyLock<Mesh>; 2] = [machine!("pump"), machine!("pump_1")];
+static FABRICATOR: [LazyLock<Mesh>; 2] = [machine!("fabricator"), machine!("fabricator_1")];
+
+/// Authored block casing for a node, when its kind has one. It replaces the
+/// procedural casing and modules; animated kinds step between two frames
+/// while running, as the voxel modules do.
+pub(super) fn authored(n: &Node, active: bool) -> Option<&'static Mesh> {
+    // VOXEL_REVIEW_LEGACY_CASING=1 keeps the procedural casing on the newly
+    // authored kinds, for same-exe before/after captures.
+    static LEGACY: LazyLock<bool> = LazyLock::new(|| std::env::var("VOXEL_REVIEW_LEGACY_CASING").is_ok_and(|v| v == "1"));
+    if *LEGACY && n.kind != Kind::Furnace {
+        return None;
+    }
+    authored_frame(n.kind, if active { (n.phase * 3.0) as usize & 1 } else { 0 })
+}
+
+fn authored_frame(kind: Kind, frame: usize) -> Option<&'static Mesh> {
+    let frame = frame & 1;
     match kind {
         Kind::Furnace => Some(&FURNACE),
+        Kind::Crusher => Some(&CRUSHER[frame]),
+        Kind::Generator => Some(&GENERATOR[frame]),
+        Kind::Pump => Some(&PUMP[frame]),
+        Kind::Fabricator => Some(&FABRICATOR[frame]),
         _ => None,
     }
 }
@@ -24,19 +49,36 @@ pub(super) fn authored(kind: Kind) -> Option<&'static Mesh> {
 /// Places an authored casing on its cell with the front toward the facing. The
 /// asset is one unit block, so its corner is the cell corner and the rotation
 /// pivots on the block centre.
-pub(super) fn draw_authored(mesh: &mut Model, asset: &Mesh, o: Vec3, n: &Node, active: bool) {
+/// The status ink is the furnace's fire colour, or the family trim for the
+/// other kinds; the arcane pile keeps its core light above the casing.
+pub(super) fn draw_authored(mesh: &mut Model, asset: &Mesh, o: Vec3, n: &Node, active: bool, time: f32) {
     let block = Vec3::splat(mesh.scale_meters());
     let front = if n.facing.y.abs() > 0 { Vec3::NEG_Z } else { n.facing.as_vec3() };
     let rotation = Quat::from_rotation_arc(Vec3::Z, front);
     let origin = o + block * 0.5 - rotation * (block * 0.5);
+    let lit = if n.kind == Kind::Furnace { [1.0, 0.70, 0.25] } else { trim(n.kind, n.mode) };
     let status = if !n.enabled {
         [0.42, 0.12, 0.10]
     } else if active {
-        [1.0, 0.70, 0.25]
+        lit
     } else {
-        [0.55, 0.38, 0.14]
+        lit.map(|c| c * 0.55)
     };
-    asset.draw(mesh, origin, rotation, block, status, [1.0; 3]);
+    // Tint 2 is the family trim band, so a mode that changes the trim (the
+    // arcane pile) recolours the authored casing too.
+    asset.draw(mesh, origin, rotation, block, status, trim(n.kind, n.mode));
+    if n.kind == Kind::Generator && n.mode == 1 {
+        pile_core(mesh, o, n, time);
+    }
+}
+
+/// Arcane pile: the core runs cyan when cool and white-orange as heat climbs
+/// toward meltdown, and its pulse quickens.
+fn pile_core(mesh: &mut Model, o: Vec3, n: &Node, time: f32) {
+    let heat = (n.progress as f32 / 1000.0).clamp(0.0, 1.0);
+    let core = [0.35 + 0.65 * heat, 0.95 - 0.45 * heat, 1.0 - 0.85 * heat];
+    let pulse = 0.8 + 0.2 * (time * (2.0 + 7.0 * heat)).sin();
+    mesh.glow_orb(o + Vec3::new(0.5, 1.0, 0.5), 0.12 + 0.06 * heat, core, (1.6 + 3.2 * heat) * pulse, 0.85);
 }
 
 /// Trim colour per machine family, as a tier band would read in a tech mod.
@@ -45,7 +87,8 @@ pub(super) fn trim(kind: Kind, mode: u32) -> [f32; 3] {
         Kind::Generator if mode == 1 => [0.60, 0.35, 0.95],
         Kind::Generator | Kind::Battery | Kind::Transformer => [0.95, 0.42, 0.18],
         Kind::Crusher | Kind::Washer | Kind::MiningDrill => [0.30, 0.55, 0.95],
-        Kind::Furnace | Kind::AlloyKiln => [0.95, 0.65, 0.20],
+        Kind::Quarry => [0.92, 0.68, 0.25],
+        Kind::Furnace | Kind::AlloyKiln => crate::mesh::prop_palette::BRASS,
         Kind::Pump | Kind::Tank => [0.25, 0.70, 0.85],
         Kind::Bioreactor | Kind::Cultivator => [0.35, 0.80, 0.40],
         Kind::Fabricator | Kind::Assembler => [0.80, 0.45, 0.90],
@@ -59,13 +102,13 @@ pub(super) fn closed(kind: Kind) -> bool {
     matches!(
         kind,
         Kind::Feeder | Kind::Storage | Kind::Battery | Kind::Transformer | Kind::Fabricator
-            | Kind::Furnace | Kind::AlloyKiln | Kind::Bioreactor | Kind::Cultivator
+            | Kind::Furnace | Kind::AlloyKiln | Kind::Bioreactor | Kind::Cultivator | Kind::Quarry
     )
 }
 
 macro_rules! asset {
     ($name:literal) => {
-        VoxelModel::parse(include_str!(concat!("../../../../../assets/models/factory/", $name, ".vox")), $name)
+        VoxelModel::with_preview(include_str!(concat!("../../../../../assets/models/factory/", $name, ".vox")), $name)
     };
 }
 
@@ -138,13 +181,14 @@ fn draw_quarry(mesh: &mut Model, o: Vec3, n: &Node, size: i32, tint: &Tint) {
     q.corner.draw(mesh, at(half, 0, half), Quat::from_rotation_y(PI), tint);
     q.corner.draw(mesh, at(-half, 0, half), Quat::from_rotation_y(FRAC_PI_2), tint);
 
-    let cursor = factory::quarry::offset(n.excavation as i32, size, n.mode);
+    let index = (n.excavation as i32).min(factory::quarry::limit(size, n.mode, n.target) - 1);
+    let cursor = factory::quarry::offset(index, size, n.mode);
     let (cx, cz) = (cursor.x.div_euclid(size), cursor.z.div_euclid(size));
     for x in -half..=half {
         q.beam.draw(mesh, at(x, 0, cz), Quat::IDENTITY, tint);
     }
     q.cart.draw(mesh, at(cx, 0, cz), Quat::IDENTITY, tint);
-    let depth = factory::quarry::depth_m(n.excavation as i32, size, n.mode);
+    let depth = factory::quarry::depth_m(index, size, n.mode);
     for k in 1..depth {
         q.rod.draw(mesh, at(cx, -k, cz), Quat::IDENTITY, tint);
     }
@@ -165,12 +209,7 @@ pub(super) fn module(mesh: &mut Model, o: Vec3, n: &Node, active: bool, time: f3
         Kind::Generator => {
             m.generator[frame].draw(mesh, o, yaw, &tint);
             if n.mode == 1 {
-                // Arcane pile: the core runs cyan when cool and white-orange as
-                // heat climbs toward meltdown, and its pulse quickens.
-                let heat = (n.progress as f32 / 1000.0).clamp(0.0, 1.0);
-                let core = [0.35 + 0.65 * heat, 0.95 - 0.45 * heat, 1.0 - 0.85 * heat];
-                let pulse = 0.8 + 0.2 * (time * (2.0 + 7.0 * heat)).sin();
-                mesh.glow_orb(o + Vec3::new(0.5, 1.0, 0.5), 0.12 + 0.06 * heat, core, (1.6 + 3.2 * heat) * pulse, 0.85);
+                pile_core(mesh, o, n, time);
             }
         }
         Kind::Crusher => m.crusher[frame].draw(mesh, o, yaw, &tint),
@@ -191,6 +230,7 @@ pub(super) fn module(mesh: &mut Model, o: Vec3, n: &Node, active: bool, time: f3
             let charge = n.energy as f32 / factory::power::battery_capacity(n.upgrade) as f32;
             let lit = (charge.clamp(0.0, 1.0) * 4.0).ceil() as usize;
             m.gauge[lit].draw(mesh, o + yaw * Vec3::X * 0.004, yaw, &Tint { stripe: trim, trim: [0.30, 0.85, 1.0], glow: 1.0 });
+            draw_battery_side_gauges(mesh, o, yaw, charge.clamp(0.0, 1.0));
             if n.mode == 3 && n.enabled && n.energy > 0 {
                 // Mana font: a slow violet wisp above the bank.
                 let pulse = 0.75 + 0.25 * (time * 2.2).sin();
@@ -198,6 +238,21 @@ pub(super) fn module(mesh: &mut Model, o: Vec3, n: &Node, active: bool, time: f3
             }
         }
         _ => {}
+    }
+}
+
+/// Vertical charge bars sit beside the centered sockets on both side panels.
+fn draw_battery_side_gauges(mesh: &mut Model, o: Vec3, yaw: Quat, charge: f32) {
+    const HEIGHT: f32 = 0.52;
+    let color = if charge <= 0.25 { [0.96, 0.53, 0.16] } else { [0.30, 0.88, 0.98] };
+    for side in [-1.0, 1.0] {
+        let panel = o + Vec3::splat(0.5) + yaw * Vec3::new(0.29, 0.0, side * 0.503);
+        mesh.cuboid(panel, Vec3::new(0.118, HEIGHT + 0.05, 0.022), yaw, [0.08, 0.10, 0.12], 0.0);
+        if charge > 0.0 {
+            let fill = HEIGHT * charge;
+            let center = panel + Vec3::Y * ((fill - HEIGHT) * 0.5) + yaw * Vec3::Z * (side * 0.014);
+            mesh.cuboid(center, Vec3::new(0.07, fill, 0.014), yaw, color, 0.75);
+        }
     }
 }
 
@@ -229,7 +284,7 @@ mod tests {
 
     #[test]
     fn authored_furnace_casing_fills_its_unit_block() {
-        let asset = authored(Kind::Furnace).expect("furnace has an authored casing");
+        let asset = authored_frame(Kind::Furnace, 0).expect("furnace has an authored casing");
         let mut model = Model::with_vertices(1.0, Vec::new());
         asset.draw(&mut model, Vec3::ZERO, Quat::IDENTITY, Vec3::ONE, [1.0; 3], [1.0; 3]);
         assert!(!model.vertices.is_empty(), "casing asset failed to load");

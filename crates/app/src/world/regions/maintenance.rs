@@ -302,6 +302,9 @@ impl World {
         }))
     }
     pub fn apply_checkpoint(&mut self, coord: IVec3, record: Record) {
+        if self.regions.view.records.get(&coord).is_some_and(|current| current.version > record.version) {
+            return;
+        }
         let version = record.version;
         Arc::make_mut(&mut self.regions.view.records).insert(coord, record);
         if self.regions.dirty.get(&coord) == Some(&version) {

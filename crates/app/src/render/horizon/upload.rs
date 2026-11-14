@@ -1,11 +1,15 @@
 //! Incremental staging. Publish a backdrop only after every page is complete.
 use super::{GpuMesh, GpuPage, Samples, pages::Page};
+use std::sync::Arc;
 use std::{collections::VecDeque, time::Instant, future::Future, pin::Pin,
     task::{Context, Poll, Waker},sync::atomic::{AtomicBool,Ordering}};
 
 type Check = Pin<Box<dyn Future<Output=Option<String>>>>;
 
 const FRAME_BYTES: usize = 8 * 1024 * 1024;
+const LIVE_FRAME_BYTES: usize = 2 * 1024 * 1024;
+const LIVE_WRITE_BYTES: usize = 1024 * 1024;
+const LIVE_TIME: std::time::Duration = std::time::Duration::from_micros(1_250);
 
 struct Current {
     source: Page,
@@ -19,15 +23,16 @@ pub(super) struct Upload {
     waiting: VecDeque<Page>,
     current: Option<Current>,
     finished: Vec<GpuPage>,
-    samples: Samples,
+    samples: Arc<Samples>,
     center: Option<(i32, i32)>,
     frames: usize,
     bytes: usize,
+    live: bool,
     started: Instant,
 }
 
 impl Upload {
-    pub fn new(pages: Vec<Page>, samples: Samples, center: Option<(i32, i32)>) -> Self {
+    pub fn new(pages: Vec<Page>, samples: Arc<Samples>, center: Option<(i32, i32)>) -> Self {
         Self {
             check: None,
             waiting: pages.into(),
@@ -37,8 +42,26 @@ impl Upload {
             center,
             frames: 0,
             bytes: 0,
+            live: false,
             started: Instant::now(),
         }
+    }
+
+    pub(super) fn with_live_budget(mut self, live: bool) -> Self {
+        self.live = live;
+        self
+    }
+
+    /// These pages have no GPU buffers yet. Current and finished pages already
+    /// own their full buffers, even when writes to current are still in flight.
+    pub(super) fn unallocated_gpu_bytes(&self) -> usize {
+        self.waiting.iter().map(|page| super::mesh_bytes(&page.mesh)).sum()
+    }
+
+    /// Pages staged and the bundle's page count.
+    pub fn pages(&self) -> (usize, usize) {
+        let done = self.finished.len();
+        (done, done + self.waiting.len() + usize::from(self.current.is_some()))
     }
 
     /// One scoped batch at a time. Pop every scope on the creating frame;
@@ -58,13 +81,13 @@ impl Upload {
             }
         }
         if self.current.is_none() && self.waiting.is_empty() {return Ok(true);}
-        device.push_error_scope(wgpu::ErrorFilter::Internal);
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
-        device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal_scope = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         self.write_batch(device,queue);
-        let memory=device.pop_error_scope();
-        let validation=device.pop_error_scope();
-        let internal=device.pop_error_scope();
+        let memory=memory_scope.pop();
+        let validation=validation_scope.pop();
+        let internal=internal_scope.pop();
         self.check=Some(Box::pin(async move {
             let errors=[memory.await,validation.await,internal.await];
             let messages:Vec<_>=errors.into_iter().flatten().map(|e|e.to_string()).collect();
@@ -77,14 +100,17 @@ impl Upload {
         self.frames += 1;
         // Review-only pressure injection uses the normal queue-ordered path.
         // It never introduces a device-idle wait or early partial publication.
+        let limit = if self.live { LIVE_FRAME_BYTES } else { FRAME_BYTES };
         let frame_bytes = std::env::var("VOXEL_HORIZON_UPLOAD_BYTES")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(FRAME_BYTES)
-            .clamp(4, FRAME_BYTES)
+            .unwrap_or(limit)
+            .clamp(4, limit)
             / 4
             * 4;
         let mut budget = frame_bytes;
+        let started = Instant::now();
+        let write_limit = if self.live { LIVE_WRITE_BYTES } else { frame_bytes };
         while budget > 0 {
             if self.current.is_none() {
                 let Some(source) = self.waiting.pop_front() else {
@@ -128,21 +154,23 @@ impl Upload {
                 (&current.gpu.vertices, vertices, &mut current.vertex_offset),
                 (&current.gpu.indices, indices, &mut current.index_offset),
             ] {
-                let count = (bytes.len() - *offset).min(budget);
+                let count = (bytes.len() - *offset).min(budget).min(write_limit);
                 if count > 0 {
                     queue.write_buffer(buffer, *offset as u64, &bytes[*offset..*offset + count]);
                     *offset += count;
                     budget -= count;
                     self.bytes += count;
+                    if self.live && started.elapsed() >= LIVE_TIME { break; }
                 }
             }
             if current.vertex_offset == vertices.len() && current.index_offset == indices.len() {
                 self.finished.push(self.current.take().unwrap().gpu);
             }
+            if self.live && started.elapsed() >= LIVE_TIME { break; }
         }
     }
 
-    pub fn finish(self) -> (GpuMesh, Samples, Option<(i32, i32)>) {
+    pub fn finish(self) -> (GpuMesh, Arc<Samples>, Option<(i32, i32)>) {
         assert!(self.check.is_none() && self.current.is_none() && self.waiting.is_empty(),
             "horizon upload must be fully validated before publication");
         println!(
@@ -150,7 +178,7 @@ impl Upload {
             self.finished.len(),
             self.bytes,
             self.frames,
-            FRAME_BYTES,
+            if self.live { LIVE_FRAME_BYTES } else { FRAME_BYTES },
             self.started.elapsed().as_secs_f64() * 1000.0
         );
         (
@@ -190,7 +218,7 @@ mod validation_contract {
         let lost=super::super::super::install_device_loss_signal(&device);
         // No profiler/capture callback and no Wait poll: queue ordering plus the
         // production nonblocking poll must complete the successful transaction.
-        let mut valid=Upload::new(vec![page(3)],Samples::new(),Some((0,0)));
+        let mut valid=Upload::new(vec![page(3)],Arc::default(),Some((0,0)));
         assert!(!valid.advance(&device,&queue,&lost).unwrap(),"queued bytes alone cannot authorize publication");
         let deadline=Instant::now()+std::time::Duration::from_secs(5);
         loop {
@@ -204,7 +232,7 @@ mod validation_contract {
         let mut horizon=super::super::Horizon::default();
         horizon.set_device_loss_signal(&lost);
         horizon.mesh=Some(published);
-        horizon.upload=Some(Upload::new(vec![page(4096)],Samples::new(),Some((512,0))));
+        horizon.upload=Some(Upload::new(vec![page(4096)],Arc::default(),Some((512,0))));
         let deadline=Instant::now()+std::time::Duration::from_secs(5);
         loop {
             queue.submit(std::iter::empty());
@@ -225,7 +253,7 @@ mod validation_contract {
             assert!(Instant::now()<deadline,"profiler-independent loss callback did not progress");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        let mut after_loss=Upload::new(vec![page(3)],Samples::new(),Some((1024,0)));
+        let mut after_loss=Upload::new(vec![page(3)],Arc::default(),Some((1024,0)));
         assert!(after_loss.advance(&device,&queue,&lost).is_err());
         assert_eq!(after_loss.bytes,0,"known device loss must not start staging");
         println!("[horizon-upload-contract] intentional device destruction detected without timestamp profiler; staging refused");

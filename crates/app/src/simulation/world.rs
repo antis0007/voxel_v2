@@ -47,6 +47,12 @@ const MAX_CELLS: usize = 8192;
 const SEED_RADIUS: i32 = 4;
 const SEED_DEPTH: i32 = 1;
 const MAX_DORMANT: usize = 8192;
+// Chunks a tool edit touched are visited first on every cellular tick for this
+// long. In the near lane they waited their turn in a rotation of up to 125
+// backlogged chunks, so a broken block's sand or water moved about once per
+// half second and physics looked paused.
+const EDIT_PRIORITY_TICKS: u64 = 64;
+const MAX_EDIT_CHUNKS: usize = 32;
 struct Recovery {
     rx: mpsc::Receiver<Option<IVec3>>,
     generation: u64,
@@ -58,16 +64,19 @@ pub struct WorldSimulation {
     enabled: bool,
     scale: VoxelScalePreset,
     sources: Residency,
+    tool_source: super::tool_source::Source,
     accumulator: f32,
     stats: FluidStats,
     near: VecDeque<IVec3>,
     ready: VecDeque<IVec3>,
     ready_set: HashSet<IVec3>,
     next_near: Instant,
-    near_center: Option<IVec3>,
+    near_centers: Vec<IVec3>,
     recovery: Option<Recovery>,
     next_recovery: Instant,
     machine_cursor: usize,
+    smeltery_work: world::smeltery::Work,
+    springs: super::springs::Springs,
     visited: HashSet<IVec3>,
     touched: HashSet<IVec3>,
     // Reused per-chunk snapshot of pending cells; avoids a fresh allocation each tick.
@@ -75,7 +84,10 @@ pub struct WorldSimulation {
     // Load-time seeds outside `SEED_RADIUS`, merged when the player approaches.
     // Runtime only: a reload re-seeds from the streamed chunks.
     dormant: crate::fast_hash::FastMap<IVec3, Box<Mask>>,
-    seed_center: Option<IVec3>,
+    seed_centers: Vec<IVec3>,
+    // Edited chunk -> last cellular tick it keeps priority. Runtime only.
+    edited: crate::fast_hash::FastMap<IVec3, u64>,
+    edit_cells: VecDeque<IVec3>,
     pub status: Option<String>,
 }
 impl WorldSimulation {
@@ -83,15 +95,20 @@ impl WorldSimulation {
     pub(crate) fn prepare_step(&mut self) -> bool {
         if self.authority_error.is_some() { return false; }
         let result = self.player_tick.next().ok_or_else(|| "player tick exhausted".to_string())
-            .and_then(|tick| match (&self.cpu_region, tick.cellular_tick()) {
+            .and_then(|tick| match (&mut self.cpu_region, tick.cellular_tick()) {
                 (Some(region), Some(ca_tick)) => region.ready(ca_tick),
-                _ => Ok(()),
+                _ => Ok(true),
             });
+        if matches!(result, Ok(false)) {
+            self.status = Some("Waiting for GPU cellular result".into());
+            return false;
+        }
         if let Err(error) = result {
             self.status = Some(error.clone());
             self.authority_error = Some(error);
             return false;
         }
+        if self.cpu_region.is_some() { self.status = None; }
         true
     }
     /// The per-frame wall-clock budget the windowed game grants a pass.
@@ -106,23 +123,44 @@ impl WorldSimulation {
             enabled: true,
             scale: VoxelScalePreset::OneMeter,
             sources: Residency::default(),
+            tool_source: Default::default(),
             accumulator: 0.0,
             stats: FluidStats::default(),
             near: VecDeque::new(),
             ready: VecDeque::new(),
             ready_set: HashSet::new(),
             next_near: Instant::now(),
-            near_center: None,
+            near_centers: Vec::new(),
             recovery: None,
             next_recovery: Instant::now(),
             status: None,
             machine_cursor: 0,
+            smeltery_work: Default::default(),
+            springs: Default::default(),
             visited: HashSet::with_capacity(MAX_CELLS),
             touched: HashSet::with_capacity(128),
             batch: Vec::with_capacity(256),
             dormant: Default::default(),
-            seed_center: None,
+            seed_centers: Vec::new(),
+            edited: Default::default(),
+            edit_cells: VecDeque::new(),
         }
+    }
+    /// Gives the chunks an edit at `p` can wake priority for a few seconds.
+    fn prioritize_edit(&mut self, tick: u64, p: IVec3) {
+        let until = tick.saturating_add(EDIT_PRIORITY_TICKS);
+        for d in std::iter::once(IVec3::ZERO).chain(world::activity::WAKE_NEIGHBORS) {
+            let c = chunk_coord_from_world_block(p + d);
+            if let Some(t) = self.edited.get_mut(&c) {
+                *t = until;
+            } else if self.edited.len() < MAX_EDIT_CHUNKS {
+                self.edited.insert(c, until);
+            }
+        }
+    }
+    #[cfg(test)]
+    pub fn edit_priority_chunks(&self) -> usize {
+        self.edited.len()
     }
     /// Wakes a streamed chunk's candidate cells now if near `player`, else later.
     pub fn seed(&mut self, world: &mut World, player: IVec3, c: IVec3, mask: Box<Mask>) {
@@ -148,14 +186,16 @@ impl WorldSimulation {
             }
         }
         self.dormant.insert(c, mask);
+        self.seed_centers.clear();
     }
-    fn wake_dormant(&mut self, world: &mut World, center: IVec3) {
-        if self.seed_center == Some(center) || self.dormant.is_empty() {
-            self.seed_center = Some(center);
+    fn wake_dormant(&mut self, world: &mut World, centers: &[IVec3]) {
+        if self.seed_centers == centers {
             return;
         }
-        self.seed_center = Some(center);
-        let near: Vec<IVec3> = self.dormant.keys().copied().filter(|&c| within_seed_radius(center, c)).collect();
+        self.seed_centers.clear();
+        self.seed_centers.extend_from_slice(centers);
+        let near: Vec<IVec3> = self.dormant.keys().copied()
+            .filter(|&c| centers.iter().any(|&center| within_seed_radius(center, c))).collect();
         for c in near {
             if let Some(mask) = self.dormant.remove(&c) {
                 world.activity.merge(c, &mask);
@@ -171,19 +211,24 @@ impl WorldSimulation {
         self.authority_error = None;
         self.scale = scale;
         self.sources.reset();
+        self.tool_source.reset();
         self.accumulator = 0.0;
         self.machine_cursor = 0;
+        self.smeltery_work = Default::default();
+        self.springs = Default::default();
         self.stats = FluidStats::default();
         self.near.clear();
         self.ready.clear();
         self.ready_set.clear();
         self.recovery = None;
         self.next_near = Instant::now();
-        self.near_center = None;
+        self.near_centers.clear();
         self.next_recovery = Instant::now();
         self.status = None;
         self.dormant.clear();
-        self.seed_center = None;
+        self.seed_centers.clear();
+        self.edited.clear();
+        self.edit_cells.clear();
     }
     /// Block until every requested chunk has been generated and queued. Used
     /// by headless runs so a tick never depends on worker timing.
@@ -201,19 +246,48 @@ impl WorldSimulation {
         }
     }
     pub fn set_enabled(&mut self, v: bool) {
-        self.enabled = v;
+        self.enabled = self.cpu_region.is_some() || v;
     }
-    // Gameplay uses the same bounded asynchronous source loader as simulation.
-    // First contact with a fine-resolution chunk must not generate it on the
-    // render thread before the first voxel can be mined or placed.
-    pub fn prepare_tool_edit(&mut self, world: &mut World, p: IVec3) -> bool {
-        let coord = chunk_coord_from_world_block(p);
-        if world.chunks.contains_key(&coord) {
-            return true;
+    /// Cold player sources have an independent bounded worker. The stroke
+    /// stays queued while it runs; no generation or disk wait enters the frame.
+    pub fn prefetch_tool_edit(&mut self, world: &mut World, p: IVec3) {
+        // Start cold generation during the swing, rather than after break time.
+        // This loads source data only; it grants no terrain edit admission.
+        if let super::tool_source::Admission::Failed(error) = self.tool_source.prepare(world, p) {
+            self.status = Some(error);
         }
-        self.sources.poll(world);
-        self.sources.request(world, coord) && self.sources.prepare(world, &[p])
     }
+
+    pub fn prepare_tool_edit(&mut self, world: &mut World, p: IVec3) -> bool {
+        self.prioritize_edit(world.activity.tick, p);
+        match self.tool_source.prepare(world,p) {
+            super::tool_source::Admission::Ready=>{
+                if !world.activity.can_wake_edit(p) {
+                    self.tool_source.waiting = true;
+                    return false;
+                }
+                world.environment.make_player_room(p);
+                world.environment.player_edit=true;
+                let affected=[p,p+IVec3::Y,p-IVec3::Y,p+IVec3::X,p-IVec3::X,p+IVec3::Z,p-IVec3::Z];
+                if crate::world::environment::State::enabled(world.generator_version)
+                    && (!world.environment.can_wake(&affected) || !world.environment.can_refine(&affected)
+                        || !world.environment.can_invalidate_light(p)) {
+                    world.environment.player_edit=false;
+                    self.tool_source.waiting=true;
+                    false
+                }else{
+                    for d in std::iter::once(IVec3::Y).chain(std::iter::once(IVec3::ZERO)).chain(world::activity::WAKE_NEIGHBORS) {
+                        let cell=p+d;
+                        if self.edit_cells.len()<256 && !self.edit_cells.contains(&cell) { self.edit_cells.push_back(cell); }
+                    }
+                    true
+                }
+            },
+            super::tool_source::Admission::Waiting=>false,
+            super::tool_source::Admission::Failed(error)=>{self.status=Some(error);false}
+        }
+    }
+    pub fn tool_edit_waiting(&self)->bool { self.tool_source.waiting }
     pub fn enabled(&self) -> bool {
         self.enabled
     }
@@ -300,6 +374,7 @@ impl WorldSimulation {
         chunks: &mut HashSet<IVec3>,
         budget: super::Budget,
     ) {
+        let mut trace=crate::gameplay_trace::Trace::new();
         let Some(tick) = self.player_tick.next() else {
             self.authority_error = Some("player tick exhausted".into());
             return;
@@ -310,8 +385,9 @@ impl WorldSimulation {
                     self.authority_error = Some(error);
                     return;
                 }
-                world.ca_view = Some(region.published.clone());
+                world.publish_ca_view(region.published.clone(), blocks, chunks);
             }
+            region.settle_results(world);
             self.player_tick = tick;
             return; // No legacy, factory extraction, rigid, thermal or residency writer.
         }
@@ -322,11 +398,27 @@ impl WorldSimulation {
         for c in self.sources.completed() {
             self.queue_ready(world, c);
         }
-        self.wake_dormant(world, chunk_coord_from_world_block(player.pos.floor().as_ivec3()));
+        trace.mark("simulation-sources");
+        let anchor = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
+        let mut centers = vec![anchor];
+        #[cfg(feature = "multiplayer")]
+        if let Some(context) = &world.multiplayer {
+            let scale = world.voxel_scale.meters();
+            centers.extend(context.players.iter().map(|p|
+                chunk_coord_from_world_block((p.feet / scale).floor().as_ivec3())));
+            centers.sort_unstable_by_key(|p| (p.x, p.y, p.z));
+            centers.dedup();
+        }
+        self.wake_dormant(world, &centers);
         world.activity.promote();
         let waiting_for_writeback = self.recover(world);
         if !waiting_for_writeback {
-            world::factory::tick_world(
+            world::smeltery::tick(
+                world, dt, &mut self.sources, &mut self.smeltery_work,
+                budget.child(Duration::from_micros(350)).min(budget),
+                blocks, chunks,
+            );
+            if world.rules.systems.automation() { world::factory::tick_world(
                 world,
                 player,
                 dt,
@@ -335,12 +427,15 @@ impl WorldSimulation {
                 budget.child(FACTORY_BUDGET).min(budget),
                 blocks,
                 chunks,
-            );
+            ); }
         }
+        trace.mark("simulation-factory-recovery");
         self.status = self.sources.error.clone().or(self.status.take());
         if self.enabled && !waiting_for_writeback && dt.is_finite() && dt > 0.0 {
+            self.springs.update(world, &mut self.sources, player.pos, dt, budget);
             super::environment::update(world, &mut self.sources, player.pos.floor().as_ivec3(), blocks, chunks,
                 budget.child(Duration::from_micros(500)).min(budget));
+            trace.mark("environment");
             let rigid_end = budget.child(RIGID_BUDGET).min(budget);
             if rigid_end.has_time() {
                 super::rigid::tick(
@@ -358,6 +453,7 @@ impl WorldSimulation {
                     chunks,
                 );
             }
+            trace.mark("rigid");
             // Fine voxel worlds are not rendered at 50-60 fluid Hz. A 30 Hz
             // floor keeps flow responsive without paying a full simulation
             // catch-up cost every rendered frame.
@@ -373,24 +469,17 @@ impl WorldSimulation {
                 // Rebuild the near list when the player crosses a chunk, or
                 // every half second. Rebuilding it every 125 ms at quarter
                 // scale scanned thousands of inactive chunk coordinates.
-                if self.near_center != Some(center) || Instant::now() >= self.next_near {
+                if self.near_centers != centers || Instant::now() >= self.next_near {
                     self.near.clear();
                     let r = (48.0 / (32.0 * self.scale.meters())).ceil() as i32;
-                    for y in -r..=r {
-                        for z in -r..=r {
-                            for x in -r..=r {
-                                let c = center + IVec3::new(x, y, z);
-                                if world.activity.contains(c) {
-                                    self.near.push_back(c);
-                                }
-                            }
-                        }
-                    }
-                    self.near.make_contiguous().sort_unstable_by_key(|c| {
-                        let d = (*c - center).as_i64vec3();
-                        (d.length_squared(), c.y, c.z, c.x)
+                    self.near.extend(world.activity.active_chunks().filter(|&c|
+                        centers.iter().any(|&a| (c - a).abs().max_element() <= r)));
+                    self.near.make_contiguous().sort_by_cached_key(|c| {
+                        let d = centers.iter().map(|&a| (*c - a).as_i64vec3().length_squared())
+                            .min().unwrap_or(0);
+                        (d, c.y, c.z, c.x)
                     });
-                    self.near_center = Some(center);
+                    self.near_centers.clone_from(&centers);
                     self.next_near = Instant::now() + Duration::from_millis(500);
                 }
                 let body = world::player_aabb(
@@ -401,17 +490,48 @@ impl WorldSimulation {
                 );
                 self.visited.clear();
                 self.touched.clear();
+                let tick = world.activity.tick;
+                self.edited.retain(|_, until| *until >= tick);
+                let mut edited: Vec<IVec3> =
+                    self.edited.keys().copied().filter(|&c| world.activity.contains(c)).collect();
+                edited.sort_unstable_by_key(|c| {
+                    let d = (*c - center).as_i64vec3();
+                    (d.length_squared(), c.y, c.z, c.x)
+                });
                 let mut cells = 0;
+                // Nearby reactions must not wait behind a saved chunk's tens
+                // of thousands of older wake bits. Use the same conservative
+                // rules and wall budget, with the foreground event reserve.
+                for _ in 0..self.edit_cells.len().min(64) {
+                    if !water_end.has_time() { break; }
+                    let p=self.edit_cells.pop_front().unwrap();
+                    let c=chunk_coord_from_world_block(p);
+                    if !self.sources.request_for(world,c,c) {
+                        self.edit_cells.push_back(p);
+                        continue;
+                    }
+                    if !world.activity.take_cell(p) { continue; }
+                    if !self.visited.insert(p) { world.activity.wake(p); continue; }
+                    let foreground=world.environment.player_edit;
+                    world.environment.player_edit=true;
+                    let changed=cellular::step(&mut self.sources,world,p,body,&mut self.visited,blocks,chunks);
+                    world.environment.player_edit=foreground;
+                    self.stats.applied_updates_last_step+=changed;
+                    cells+=1;
+                    // A failed conservative admission leaves the wake durable.
+                    if changed==0 { self.edit_cells.push_back(p); }
+                }
                 for visit in 0..128 {
                     if cells >= MAX_CELLS || !water_end.has_time() {
                         break;
                     }
-                    let preferred = if visit % 4 != 0 {
+                    let edit = edited.get(visit).copied();
+                    let preferred = if edit.is_none() && visit % 4 != 0 {
                         self.near.pop_front()
                     } else {
                         None
                     };
-                    let c = preferred.or_else(|| {
+                    let c = edit.or(preferred).or_else(|| {
                         if (visit / 4 + world.activity.tick as usize).is_multiple_of(2)
                             && let Some(c) = self.ready.pop_front() {
                                 self.ready_set.remove(&c);
@@ -432,7 +552,7 @@ impl WorldSimulation {
                         continue;
                     }
                     // Admit the central source before consuming work bits.
-                    let admitted = if preferred.is_some() {
+                    let admitted = if edit.is_some() || preferred.is_some() {
                         self.sources.request_for(world, c, c)
                     } else {
                         self.sources.request_distant(world, c, c)
@@ -441,13 +561,17 @@ impl WorldSimulation {
                         continue;
                     }
                     // Snapshot the chunk's whole pending set before stepping any of
-                    // it. Cells woken by this tick's transfers wait for the next
-                    // tick, so a front still advances one cell per tick, while a
-                    // backlog drains in one pass instead of 256 cells per tick.
+                    // it. Work created by transfers in this chunk waits for a
+                    // later pass, while the existing backlog can drain in one
+                    // pass instead of 256 cells per tick.
                     let mut batch = std::mem::take(&mut self.batch);
                     batch.clear();
-                    while cells + batch.len() < MAX_CELLS {
-                        let part = world.activity.take(c, MAX_CELLS - cells - batch.len());
+                    // Bound both snapshot construction and the deadline-expiry
+                    // requeue. Draining 8192 bits then reawakening almost all of
+                    // them escaped the wall budget on large mined/wet chunks.
+                    let batch_limit=(MAX_CELLS-cells).min(1024);
+                    while batch.len() < batch_limit && water_end.has_time() {
+                        let part = world.activity.take(c, batch_limit - batch.len());
                         if part.is_empty() {
                             break;
                         }
@@ -482,6 +606,7 @@ impl WorldSimulation {
             }
             world.advance_ripples(dt);
         }
+        trace.mark("cellular");
         self.stats.active_chunks = world.activity.chunks();
         self.stats.pending_updates = world.activity.pending();
         self.stats.inflight_chunks = self.sources.pending();
@@ -511,7 +636,7 @@ pub(crate) fn discover(chunk: &GeneratedChunk) -> Option<Box<Mask>> {
             for x in 0..32usize {
                 let i = row + x;
                 let b = chunk.blocks[i];
-                if !matches!(b, B::Water | B::Sand | B::Gravel | B::Ash | B::RigidCore)
+                if !matches!(b, B::Water | B::SulfuricAcid | B::Sand | B::Gravel | B::Ash | B::RigidCore)
                     && !super::thermal::active(b)
                 {
                     continue;
@@ -519,36 +644,43 @@ pub(crate) fn discover(chunk: &GeneratedChunk) -> Option<Box<Mask>> {
                 let down = chunk.blocks[i - PLANE];
                 let unstable = if super::thermal::active(b) || b == B::RigidCore {
                     true
+                } else if b == B::SulfuricAcid {
+                    down == B::Air || [i - 1, i + 1, i - S, i + S]
+                        .into_iter().any(|side| chunk.blocks[side] == B::Air)
+                        || [i - PLANE, i + PLANE, i - 1, i + 1, i - S, i + S]
+                            .into_iter().any(|side| super::thermal::acid_reaction(chunk.blocks[side]).is_some())
                 } else if b == B::Water {
                     let p = chunk.chunk * crate::world::CHUNK_SIZE
                         + IVec3::new(x as i32, y as i32, z as i32);
-                    let volume = chunk.water_levels.get(&p).copied().unwrap_or(8);
-                    down == B::Air
+                    // Saved seepage/river films can differ inside the same
+                    // legacy eighth. Seed the exact surface gradient too.
+                    let fill = chunk.water_fill(p);
+                    let unstable = down == B::Air
                         || (down == B::Water
-                            && chunk
-                                .water_levels
-                                .get(&(p - IVec3::Y))
-                                .copied()
-                                .unwrap_or(8)
-                                < 8)
+                            && chunk.water_fill(p - IVec3::Y) < 1.0)
                         || [i - 1, i + 1, i - S, i + S]
                             .iter()
                             .zip([IVec3::NEG_X, IVec3::X, IVec3::NEG_Z, IVec3::Z])
                             .any(|(&n, d)| {
                                 let target = if chunk.blocks[n] == B::Water {
-                                    chunk.water_levels.get(&(p + d)).copied().unwrap_or(8)
+                                    chunk.water_fill(p + d)
                                 } else {
-                                    0
+                                    0.0
                                 };
                                 matches!(chunk.blocks[n], B::Air | B::Water)
-                                    && (volume.saturating_sub(target) > 1
-                                        || (volume == 1
-                                            && target == 0
+                                    && (fill > target + 0.000001
+                                        || (fill > 0.0 && fill <= 0.125
+                                            && target == 0.0
                                             && matches!(
                                                 chunk.blocks[n - PLANE],
                                                 B::Air | B::Water
                                             )))
-                            })
+                            });
+                    unstable && !chunk.flora_config.is_some_and(|cfg| {
+                        p.y > cfg.water_level()
+                            && engine_worldgen::steady_water_column(&cfg, p.x, p.z)
+                                .is_some_and(|(bed, head)| p.y > bed && (p.y as f32) < head)
+                    })
                 } else {
                     matches!(down, B::Air | B::Water)
                         || [i - 1, i + 1, i - S, i + S].iter().any(|&n| {
@@ -569,3 +701,6 @@ pub(crate) fn discover(chunk: &GeneratedChunk) -> Option<Box<Mask>> {
 #[cfg(test)]
 #[path = "seed_tests.rs"]
 mod seed_tests;
+#[cfg(test)]
+#[path = "edit_priority_tests.rs"]
+mod edit_priority_tests;

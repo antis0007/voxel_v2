@@ -23,7 +23,7 @@ pub(super) fn redo(ed: &mut Editor) {
 }
 
 pub(super) fn keys(ctx: &egui::Context, ed: &mut Editor) {
-    if ctx.wants_keyboard_input() {
+    if ctx.egui_wants_keyboard_input() {
         return;
     }
     ctx.input(|i| {

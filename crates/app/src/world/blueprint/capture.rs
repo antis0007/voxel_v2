@@ -59,7 +59,7 @@ impl Capture {
             // A machine's node state cannot travel in a blueprint, and bedrock
             // or tombstones would paste as cells a player cannot remove.
             let owned = world.factory.nodes.contains_key(&factory::anchor(p, machine));
-            if owned || matches!(b, BlockId::Bedrock | BlockId::TombStone) {
+            if owned || (b == BlockId::Bedrock || b.is_seal()) {
                 self.skipped += usize::from(b != BlockId::Air);
             } else {
                 self.blueprint.cells[self.index] = b;

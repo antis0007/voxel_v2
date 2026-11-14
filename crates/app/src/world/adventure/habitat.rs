@@ -31,10 +31,46 @@ pub struct Habitat {
     pub realms: Vec<Realm>,
     #[serde(default = "any")]
     pub time: Time,
+    /// Lowest danger tier (0-3, see `assets/danger.ron`) where the row rises.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub danger: u8,
 }
 
 fn any() -> Time {
     Time::Any
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct DangerTable {
+    ring_m: [f32; 3],
+    day_tier: u8,
+    #[serde(default)]
+    biome_hazard: std::collections::HashMap<String, u8>,
+}
+
+const DANGER_RON: &str = include_str!("../../../../../assets/danger.ron");
+static DANGER: std::sync::LazyLock<DangerTable> = std::sync::LazyLock::new(|| {
+    ron::from_str(DANGER_RON).unwrap_or_else(|error| panic!("assets/danger.ron: {error}"))
+});
+
+/// Danger tier at which open-ground daylight stops keeping hostiles away.
+pub fn day_tier() -> u8 {
+    DANGER.day_tier
+}
+
+/// Danger tier (0-3) for a spot `from_spawn_m` metres from the realm spawn
+/// point in `biome`. Positional and seed-free, so every peer agrees.
+pub fn danger(from_spawn_m: f32, biome: Option<Biome>) -> u8 {
+    let table = &*DANGER;
+    let ring = table.ring_m.iter().filter(|&&m| from_spawn_m >= m).count() as u8;
+    let hazard = biome
+        .and_then(|b| table.biome_hazard.iter().find(|(name, _)| Biome::from_name(name) == Some(b)).map(|(_, &h)| h))
+        .unwrap_or(0);
+    (ring + hazard).min(3)
 }
 
 /// A cell under more than this much ground counts as underground.
@@ -45,6 +81,8 @@ pub struct Context {
     pub biome: Option<Biome>,
     pub realm: Realm,
     pub night: bool,
+    /// Danger tier of the spot; 0 unless the spawner sets it.
+    pub danger: u8,
 }
 
 impl Context {
@@ -54,10 +92,11 @@ impl Context {
         let realm = match world.world_type {
             WorldType::Nether => Realm::Nether,
             WorldType::Manyfold | WorldType::Hall => Realm::Shell,
-            _ => {
-                let depth = (world.terrain_height_at(cell.x, cell.z) - cell.y) as f32 * world.voxel_scale.meters();
-                if roofed && depth > UNDERGROUND_M { Realm::Underground } else { Realm::Surface }
-            }
+            // The Lightless is all cave: underground spawns, every one in the dark.
+            WorldType::Realm(kind) if !kind.has_sky() => Realm::Underground,
+            _ if roofed && (world.terrain_height_at(cell.x, cell.z) - cell.y) as f32
+                * world.voxel_scale.meters() > UNDERGROUND_M => Realm::Underground,
+            _ => Realm::Surface,
         };
         let biome = match realm {
             Realm::Surface | Realm::Underground => {
@@ -65,7 +104,7 @@ impl Context {
             }
             _ => None,
         };
-        Self { biome, realm, night }
+        Self { biome, realm, night, danger: 0 }
     }
 }
 
@@ -83,6 +122,7 @@ impl Habitat {
 
     fn admits_realm_and_time(&self, ctx: &Context) -> bool {
         self.realms.contains(&ctx.realm)
+            && ctx.danger >= self.danger
             && match self.time {
                 Time::Any => true,
                 Time::Night => ctx.night,
@@ -94,14 +134,20 @@ impl Habitat {
 /// One kind for `roll`, weighted over the rows `ctx` admits and `keep` accepts.
 /// Rows are walked in file order so the same roll maps to the same kind.
 pub fn pick(ctx: &Context, roll: u32, keep: impl Fn(u32) -> bool) -> Option<u32> {
-    pick_rows(roll, ROWS.iter().filter(|(kind, h)| keep(*kind) && h.admits(ctx)))
+    pick_rows(roll, ROWS.iter().filter(|(kind, h)| present(*kind) && keep(*kind) && h.admits(ctx)))
 }
 
 /// `pick` with the biome ignored: realm and time still hold. Grazer patches
 /// use it when their biome lists no grazer, so a grass bank in an odd biome
 /// still has animals.
 pub fn pick_any_biome(ctx: &Context, roll: u32, keep: impl Fn(u32) -> bool) -> Option<u32> {
-    pick_rows(roll, ROWS.iter().filter(|(kind, h)| keep(*kind) && h.admits_realm_and_time(ctx)))
+    pick_rows(roll, ROWS.iter().filter(|(kind, h)| present(*kind) && keep(*kind) && h.admits_realm_and_time(ctx)))
+}
+
+/// A generated kind whose bestiary row was removed keeps its spawn rows
+/// harmless until the panel or an agent cleans them up.
+fn present(kind: u32) -> bool {
+    !super::bestiary::generated(kind) || super::bestiary::species(kind).is_some()
 }
 
 fn pick_rows<'a>(roll: u32, rows: impl Iterator<Item = &'a (u32, Habitat)> + Clone) -> Option<u32> {

@@ -6,7 +6,7 @@ pub struct Inscription {
     pub spell: u32,
     pub benefit: &'static str,
 }
-pub const INSCRIPTIONS: [Inscription; 11] = [
+pub const INSCRIPTIONS: [Inscription; 24] = [
     Inscription {
         name: "Artificer's mark",
         site: "Workshop",
@@ -29,7 +29,7 @@ pub const INSCRIPTIONS: [Inscription; 11] = [
         name: "Cinder script",
         site: "Foundry",
         spell: 3,
-        benefit: "Burst shatters frozen enemies in its blast for 12 extra damage.",
+        benefit: "Frozen Shatter: +12 Damage · Fire/Lava Contact Damage: -50%",
     },
     Inscription {
         name: "Verdant covenant",
@@ -59,13 +59,13 @@ pub const INSCRIPTIONS: [Inscription; 11] = [
         name: "Prism facet",
         site: "Crystal cathedral",
         spell: 2,
-        benefit: "Frost lance slows guardians for 6 seconds instead of 4.",
+        benefit: "Frost Slow: 6s · Levitation: 1.5s · Ground Recharge: 2s · Hold Jump",
     },
     Inscription {
         name: "Undertow knot",
         site: "Drowned grotto",
         spell: 4,
-        benefit: "Mirror ward lasts 9 seconds; its three charges remain unchanged.",
+        benefit: "Mirror Ward: 9s · Breath: 24s",
     },
     Inscription {
         name: "Keeper's passage",
@@ -73,6 +73,23 @@ pub const INSCRIPTIONS: [Inscription; 11] = [
         spell: 4,
         benefit: "Mirror ward gains a fourth charge.",
     },
+    Inscription { name: "Lamplighter's tally", site: "Buried scriptorium", spell: 51,
+        benefit: "Light Shot learned · Mana cost: -3" },
+    Inscription { name: "Banked ember", site: "Buried gate", spell: 28,
+        benefit: "Ember Seed learned · Active ward: 25% less fire/lava contact damage" },
+    Inscription { name: "Traveller's countermark", site: "Return passage", spell: 4,
+        benefit: "Mirror Ward duration: +2s" },
+    Inscription { name: "Counterweight rule", site: "Manyfold tube", spell: 65,
+        benefit: "Gravity learned · Mana cost: -1" },
+    Inscription { name: "Grave watch", site: "Forgotten catacombs", spell: 51, benefit: "Light Shot learned" },
+    Inscription { name: "Winter sluice", site: "Sunken undercroft", spell: 81, benefit: "Freezing Shard learned" },
+    Inscription { name: "Furnace conductor", site: "Cinder forge-halls", spell: 83, benefit: "Lightning Arc learned" },
+    Inscription { name: "Root covenant", site: "Mycelial warren", spell: 5, benefit: "Spore field learned" },
+    Inscription { name: "Etcher's quarantine", site: "Labyrinth of Sealed Doors", spell: 82, benefit: "Acid Glob learned" },
+    Inscription { name: "Orbit keeper", site: "Hall of Wandering Stars", spell: 84, benefit: "Lodestone learned" },
+    Inscription { name: "Surveyor's descent", site: "Hall of the Hollow Floor", spell: 65, benefit: "Gravity learned" },
+    Inscription { name: "Pilgrim's ricochet", site: "Sanctum landing", spell: 85, benefit: "Bouncing Burst learned" },
+    Inscription { name: "Excavator's warrant", site: "Buried engine works", spell: 86, benefit: "Dig Bolt learned" },
 ];
 pub fn cost(spell: u32, discovered: u32) -> f32 {
     (spell_cost(spell)
@@ -80,7 +97,9 @@ pub fn cost(spell: u32, discovered: u32) -> f32 {
             2.0
         } else {
             0.0
-        })
+        }
+        - if spell == 51 && discovered & (1 << 11) != 0 { 3.0 } else { 0.0 }
+        - if spell == 65 && discovered & (1 << 14) != 0 { 1.0 } else { 0.0 }).max(0.0)
         * if discovered & (1 << 5) != 0 { 0.8 } else { 1.0 }
 }
 impl Adventure {
@@ -88,6 +107,7 @@ impl Adventure {
         self.discoveries & (1 << id) != 0
     }
     pub(super) fn restore_discoveries(&mut self, world: &World) {
+        self.discoveries |= world.progression.lore & super::chronicle::MASK;
         if self.discoveries_ready {
             return;
         }

@@ -1,4 +1,4 @@
-// Four-tap weather clipmap sample; the cloud program swaps in a hardware sampler when available.
+// Four-tap fallback; world and cloud programs use hardware filtering when supported.
 fn sample_weather_bilinear(tex: texture_2d_array<f32>, uv: vec2<f32>, level: i32) -> vec4<f32> {
     let dims_u = textureDimensions(tex);
     let dims = vec2<f32>(f32(dims_u.x), f32(dims_u.y));

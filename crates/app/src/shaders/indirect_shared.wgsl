@@ -11,14 +11,19 @@ fn depth_pixel(uv:vec2<f32>)->vec2<i32>{
 fn depth_at(uv:vec2<f32>)->f32{
  return textureLoad(depth_tex,depth_pixel(uv),0);
 }
-fn view_position(uv:vec2<f32>)->vec3<f32>{
+fn linear_depth(d:f32)->f32{
+ return cam.ray_up.w/max(d+cam.ray_right.w,1e-7);
+}
+fn view_position_at(at:vec2<i32>,linear:f32)->vec3<f32>{
  // The ray and depth must describe the SAME full-resolution texel. Using
  // an arbitrary gather UV with a rounded depth bent flat planes into bands.
- let at=depth_pixel(uv);
  let center=(vec2<f32>(at)+0.5)/vec2<f32>(textureDimensions(depth_tex));
- let d=textureLoad(depth_tex,at,0);let linear=cam.ray_up.w/max(d+cam.ray_right.w,1e-7);
  let ndc=vec2<f32>(center.x*2.0-1.0,1.0-center.y*2.0);
  return (cam.camera_forward.xyz+cam.ray_right.xyz*ndc.x+cam.ray_up.xyz*ndc.y)*linear;
+}
+fn view_position(uv:vec2<f32>)->vec3<f32>{
+ let at=depth_pixel(uv);
+ return view_position_at(at,linear_depth(textureLoad(depth_tex,at,0)));
 }
 fn surface_normal(uv:vec2<f32>,p:vec3<f32>)->vec3<f32>{
  let pixel=1.0/vec2<f32>(textureDimensions(depth_tex));

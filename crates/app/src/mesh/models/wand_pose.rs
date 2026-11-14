@@ -117,7 +117,8 @@ pub fn pose(v: &WandView) -> Pose {
         + Vec3::from_array(RIG.release_offset)*release;
     let speed=(v.motion.speed/6.0).clamp(0.0,1.5)*(1.0-inspect);
     offset.x += v.motion.sway.value.x + v.motion.gait.sin()*0.009*speed;
-    offset.y += v.motion.sway.value.y + (v.motion.gait*2.0).cos()*0.006*speed
+    // Dip at mid-sway, matching held items (`held_item::frame`).
+    offset.y += v.motion.sway.value.y - (v.motion.gait*2.0).cos()*0.006*speed
         + (time*1.3).sin()*0.0015 - v.boost*0.035 - v.motion.hit*0.025;
     offset.z -= v.boost*0.035 + v.motion.hit*0.030;
     // Holster from the wrist; changing equipment never changes gameplay timing.

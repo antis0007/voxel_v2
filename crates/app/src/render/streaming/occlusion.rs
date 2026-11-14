@@ -5,11 +5,10 @@
 //! point lies on a ray that is monotone per axis, so such a walk reaches it.
 //! Unknown chunks (unmeshed, LOD above 0, not resident) are fully open.
 use super::ChunkCache;
-use super::visibility::chunk_bounds_sphere;
 use crate::mesh::ChunkConnectivity;
 use crate::world::CHUNK_SIZE;
 use glam::{IVec3, Mat4, Vec4};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, Weak};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Above this many chunks in the walk's box the frame skips cave culling.
@@ -60,11 +59,33 @@ impl Grid {
 }
 
 /// Chunks the walk reached; anything outside the grid counts as reached.
+#[cfg(test)]
 pub(super) struct Reach {
     grid: Grid,
     reached: Vec<bool>,
 }
 
+#[derive(Default)]
+pub(super) struct Scratch {
+    topology: Option<Topology>,
+    links: Vec<Option<ChunkConnectivity>>,
+    reached: Vec<bool>,
+    entered: Vec<u8>,
+    view: Vec<u8>,
+    queue: Vec<usize>,
+    spill_candidates: Vec<usize>,
+    spill: Vec<usize>,
+    reach_valid: bool,
+}
+
+struct Topology {
+    owner: Weak<super::residency::VoxelAllocations>,
+    revision: u64,
+    camera: IVec3,
+    grid: Option<Grid>,
+}
+
+#[cfg(test)]
 impl Reach {
     pub(super) fn reaches(&self, c: IVec3) -> bool {
         self.grid.index(c).is_none_or(|i| self.reached[i])
@@ -77,22 +98,37 @@ impl Reach {
         camera: IVec3,
         in_view: impl Fn(IVec3) -> bool,
     ) -> Option<Self> {
+        let mut scratch = Scratch::default();
+        scratch.links.extend_from_slice(links);
+        scratch.spill_candidates.extend(links.iter().enumerate()
+            .filter_map(|(i, link)| link.is_some_and(ChunkConnectivity::spills).then_some(i)));
+        scratch.walk(grid, camera, in_view)?;
+        Some(Self { grid, reached: scratch.reached })
+    }
+}
+
+impl Scratch {
+    fn walk(&mut self, grid: Grid, camera: IVec3, in_view: impl Fn(IVec3) -> bool) -> Option<()> {
         let start = grid.index(camera)?;
+        let Self { links, reached, entered, view, queue, spill_candidates, spill, .. } = self;
         if links.len() != grid.cells() {
             return None;
         }
         let cells = grid.cells();
-        let mut reached = vec![false; cells];
-        let mut entered = vec![0u8; cells];
+        reached.clear();
+        reached.resize(cells, false);
+        entered.clear();
+        entered.resize(cells, 0);
         // 0 unknown, 1 inside, 2 outside.
-        let mut view = vec![0u8; cells];
+        view.clear();
+        view.resize(cells, 0);
         let mut inside = |j: usize| {
             if view[j] == 0 {
                 view[j] = if in_view(grid.coord(j)) { 1 } else { 2 };
             }
             view[j] == 1
         };
-        let mut queue = Vec::with_capacity(4096);
+        queue.clear();
         reached[start] = true;
         queue.push(start);
         let mut head = 0;
@@ -105,17 +141,22 @@ impl Reach {
             let exits = if i == start {
                 0x3f
             } else {
-                links[i].unwrap_or(ChunkConnectivity::ALL_OPEN).exits_from(entered[i])
+                links[i].map_or(0x3f, |links| links.exits_from(entered[i]))
             };
             for (d, step) in STEPS.iter().enumerate() {
                 if exits & (1 << d) == 0 {
                     continue;
                 }
-                let n = c + *step;
                 let axis = d / 2;
-                if (n[axis] - camera[axis]).abs() <= (c[axis] - camera[axis]).abs() {
+                let toward_camera = if d & 1 == 0 {
+                    c[axis] > camera[axis]
+                } else {
+                    c[axis] < camera[axis]
+                };
+                if toward_camera {
                     continue;
                 }
+                let n = c + *step;
                 let Some(j) = grid.index(n) else { continue };
                 if !inside(j) {
                     continue;
@@ -128,19 +169,20 @@ impl Reach {
             }
         }
         // Torches, fittings and models can draw past their own chunk.
-        let spill: Vec<usize> = (0..cells)
-            .filter(|&i| !reached[i] && links[i].is_some_and(ChunkConnectivity::spills) && inside(i))
+        spill.clear();
+        spill.extend(spill_candidates.iter().copied()
+            .filter(|&i| !reached[i] && inside(i))
             .filter(|&i| {
                 let c = grid.coord(i);
                 (-1..=1).any(|y| (-1..=1).any(|z| (-1..=1).any(|x| {
                     grid.index(c + IVec3::new(x, y, z)).is_some_and(|j| reached[j])
                 })))
             })
-            .collect();
-        for i in spill {
+        );
+        for &i in spill.iter() {
             reached[i] = true;
         }
-        Some(Self { grid, reached })
+        Some(())
     }
 }
 
@@ -152,19 +194,37 @@ pub(super) fn eye_from(view_proj: Mat4) -> Option<glam::Vec3> {
 }
 
 /// Per-frame cave-culling filter for `build_draw_list`.
-pub(super) struct Occlusion {
-    reach: Option<Reach>,
+pub(super) struct Occlusion<'a> {
+    reach: Option<(Grid, &'a [bool])>,
     culled: usize,
 }
 
-impl Occlusion {
-    pub(super) fn new(cache: &ChunkCache, view_proj: Mat4, planes: &[Vec4; 6]) -> Self {
-        let reach = enabled().then(|| Self::walk(cache, view_proj, planes)).flatten();
+impl<'a> Occlusion<'a> {
+    pub(super) fn new(cache: &ChunkCache, eye: Option<glam::Vec3>, scratch: &'a mut Scratch) -> Self {
+        let reach = eye.filter(|eye| enabled() && eye.is_finite()).and_then(|eye| {
+            let camera = (eye / CHUNK_SIZE as f32).floor().as_ivec3();
+            let grid = Self::topology(cache, camera, scratch)?;
+            // Frustum culling applies to the final draw list. Cutting off
+            // intermediate chunks here made reachability change as the eye
+            // turned, even for chunks that stayed inside the view.
+            if !scratch.reach_valid {
+                scratch.walk(grid, camera, |_| true)?;
+                scratch.reach_valid = true;
+            }
+            Some((grid, scratch.reached.as_slice()))
+        });
         Self { reach, culled: 0 }
     }
 
-    fn walk(cache: &ChunkCache, view_proj: Mat4, planes: &[Vec4; 6]) -> Option<Reach> {
-        let camera = (eye_from(view_proj)? / CHUNK_SIZE as f32).floor().as_ivec3();
+    fn topology(cache: &ChunkCache, camera: IVec3, scratch: &mut Scratch) -> Option<Grid> {
+        let revision = cache.gpu_mesh_revision;
+        if let Some(saved) = &scratch.topology
+            && saved.revision == revision
+            && saved.camera == camera
+            && saved.owner.as_ptr() == Arc::as_ptr(&cache.voxel_allocations)
+        {
+            return saved.grid;
+        }
         // A monotone path to a chunk stays inside the box spanning it and the
         // camera, and only LOD 0 chunks can be culled.
         let (min, max) = cache
@@ -172,26 +232,37 @@ impl Occlusion {
             .iter()
             .filter(|(_, mesh)| mesh.lod == 0)
             .fold((camera, camera), |(lo, hi), (&c, _)| (lo.min(c), hi.max(c)));
-        let grid = Grid::spanning(min, max)?;
-        let mut links = vec![None; grid.cells()];
+        let grid = Grid::spanning(min, max);
+        // Cache both an accepted grid and a box that exceeded the cell limit.
+        scratch.reach_valid = false;
+        scratch.topology = Some(Topology {
+            owner: Arc::downgrade(&cache.voxel_allocations),
+            revision,
+            camera,
+            grid,
+        });
+        let grid = grid?;
+        scratch.links.clear();
+        scratch.links.resize(grid.cells(), None);
+        scratch.spill_candidates.clear();
         for (&coord, mesh) in &cache.gpu_meshes {
             if mesh.lod == 0
                 && let Some(i) = grid.index(coord)
             {
-                links[i] = mesh.connectivity;
+                scratch.links[i] = mesh.connectivity;
+                if mesh.connectivity.is_some_and(ChunkConnectivity::spills) {
+                    scratch.spill_candidates.push(i);
+                }
             }
         }
-        let in_view = |c: IVec3| {
-            let (center, radius) = chunk_bounds_sphere(c);
-            // Same test as the draw list: no far plane.
-            planes[..5].iter().all(|p| p.truncate().dot(center) + p.w >= -radius)
-        };
-        Reach::walk(grid, &links, camera, in_view)
+        Some(grid)
     }
 
     /// Whether to drop a frustum-visible chunk; LOD above 0 is never culled.
     pub(super) fn hides(&mut self, coord: IVec3, lod: u8) -> bool {
-        let hidden = lod == 0 && self.reach.as_ref().is_some_and(|r| !r.reaches(coord));
+        let hidden = lod == 0 && self.reach.is_some_and(|(grid, reached)| {
+            grid.index(coord).is_some_and(|i| !reached[i])
+        });
         self.culled += usize::from(hidden);
         hidden
     }

@@ -17,8 +17,6 @@ const REFERENCE_CAPACITY: f32 = 2.0e6;
 /// Still air against a solid or liquid face: a thin film limits the
 /// exchange, so frost ice in 20 °C air lasts about 45 s at 1 m cells.
 const AIR_FILM: f32 = 0.05;
-/// Latent heat of fusion of water, J/kg.
-const FUSION: f32 = 334_000.0;
 const KELVIN: f32 = 273.15;
 
 #[derive(Clone, Copy, Debug)]
@@ -56,7 +54,7 @@ static TABLE: LazyLock<Vec<Heat>> = LazyLock::new(|| {
             cool_c: celsius(t.cool),
             ignite_c: celsius(t.ignite),
             fuel: t.fuel,
-            fusion_k: if t.capacity > 0.0 { FUSION / t.capacity } else { 0.0 },
+            fusion_k: if t.capacity > 0.0 { t.fusion / t.capacity } else { 0.0 },
         };
     }
     rows

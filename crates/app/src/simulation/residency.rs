@@ -1,5 +1,5 @@
 //! Simulation source residency is independent of camera/mesh residency. No frame-side I/O.
-use crate::fast_hash::FastMap;
+use crate::fast_hash::{FastMap, FastSet};
 use crate::world::{
     BlockId, ChunkData, World, WorldSampleConfig, chunk_coord_from_world_block,
     regions::{DiskChunk, RegionView},
@@ -14,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 const CAPACITY: usize = 8;
+// Let a dependency event cross the soft edit budget without allowing an
+// unbounded burst of newly resident chunks before writeback can run.
+const PRESSURE_CHUNKS_PER_POLL: usize = CAPACITY;
 const LIMIT: usize = 32 * 1024 * 1024;
 // Worst decoded chunk, partial-water hash table, read buffer and generation scratch.
 const RESERVATION: usize = 4 * 1024 * 1024;
@@ -50,6 +53,7 @@ pub(crate) struct Residency {
     ready: Vec<IVec3>,
     edited_bytes: usize,
     edited_limit: usize,
+    pressure_chunks_left: usize,
     pub memory_pressure: bool,
     pub error: Option<String>,
 }
@@ -68,6 +72,7 @@ impl Default for Residency {
             error: None,
             edited_bytes: 0,
             edited_limit: 0,
+            pressure_chunks_left: PRESSURE_CHUNKS_PER_POLL,
             memory_pressure: false,
             waiters: FastMap::default(),
             ready: Vec::new(),
@@ -132,7 +137,7 @@ impl Residency {
                         ))
                         .map_err(|_| "Simulation source job panicked".to_owned())
                         .and_then(|r| r.map_err(|e| format!("{e:#}")));
-                        let candidates = data.as_ref().ok().map(|d| candidate_mask(d, job.coord));
+                        let candidates = data.as_ref().ok().map(|d| candidate_mask(d, job.coord, &job.cfg));
                         if completed
                             .send(Done {
                                 coord: job.coord,
@@ -162,10 +167,14 @@ impl Residency {
     pub fn is_idle(&self) -> bool {
         self.pending.is_empty()
     }
-    pub fn poll(&mut self, world: &mut World) {
+    pub fn poll(&mut self, world: &mut World) { self.poll_with(world, true); }
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn poll_replica(&mut self, world: &mut World) { self.poll_with(world, false); }
+    fn poll_with(&mut self, world: &mut World, activity: bool) {
         self.edited_bytes = world.edited_resident_bytes();
         self.edited_limit = crate::world::regions::edited_budget_mib() * 1024 * 1024;
         self.memory_pressure = false;
+        self.pressure_chunks_left = PRESSURE_CHUNKS_PER_POLL;
         if self.tx.is_none() && Instant::now() >= self.retry {
             self.start();
         }
@@ -212,7 +221,7 @@ impl Residency {
                                             mask[i / 64] |= 1u64 << (i % 64);
                                         }
                                     }
-                                    world.activity.restrict(done.coord, &mask);
+                                    if activity { world.activity.restrict(done.coord, &mask); }
                                 }
                                 self.error = None;
                                 self.ready.extend(waiters);
@@ -295,6 +304,14 @@ impl Residency {
         }
         false
     }
+    /// Returns a prepared base without installing terrain or water.
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn replica_source(&self, world: &World, c: IVec3) -> Option<Arc<ChunkData>> {
+        world.chunks.get(&c).cloned().or_else(|| self.entries.get(&c)
+            .filter(|entry| entry.version == Self::version(world, c))
+            .map(|entry| entry.data.chunk.clone()))
+    }
+
     pub fn request_background(&mut self, world: &World, c: IVec3) -> bool {
         // World-facing machines leave two admission slots for cellular fronts.
         if self.pending.len() >= CAPACITY - 2
@@ -316,7 +333,13 @@ impl Residency {
         }
         self.request_for(world, c, owner)
     }
-    pub fn request_for(&mut self, world: &World, c: IVec3, owner: IVec3) -> bool {
+    fn request_tracked(&mut self, world: &World, c: IVec3, owner: IVec3, limit: usize) -> bool {
+        if self.pending.len() >= limit
+            && !world.chunks.contains_key(&c)
+            && !self.entries.contains_key(&c)
+        {
+            return false;
+        }
         let ready = self.request(world, c);
         if !ready && self.pending.contains_key(&c) {
             let waiters = self.waiters.entry(c).or_default();
@@ -325,6 +348,14 @@ impl Residency {
             }
         }
         ready
+    }
+    /// Near activity leaves two source slots for environmental dependencies.
+    pub fn request_for(&mut self, world: &World, c: IVec3, owner: IVec3) -> bool {
+        self.request_tracked(world, c, owner, CAPACITY - 2)
+    }
+    /// Environmental events may use the two slots reserved from other activity.
+    pub fn request_environment(&mut self, world: &World, c: IVec3, owner: IVec3) -> bool {
+        self.request_tracked(world, c, owner, CAPACITY)
     }
     pub fn completed(&mut self) -> Vec<IVec3> {
         std::mem::take(&mut self.ready)
@@ -358,6 +389,20 @@ impl Residency {
                 )
             })
     }
+    /// Initial river stock must agree before and after source admission.
+    pub fn water_amount(&self, world: &World, p: IVec3) -> Option<u64> {
+        self.water_cell(world, p).map(|(_, amount)| amount)
+    }
+    pub fn water_cell(&self, world: &World, p: IVec3) -> Option<(BlockId, u64)> {
+        let (b, coarse) = self.read(world, p)?;
+        if b != BlockId::Water { return Some((b, 0)); }
+        let c=chunk_coord_from_world_block(p);
+        if !world.chunks.contains_key(&c) && !world.regions.view.records.contains_key(&c)
+            && self.entries.get(&c).is_some_and(|e|e.data.chunk.modified_bounds.is_none()) {
+            if let Some(amount)=engine_worldgen::river_water_amount(&world.sample_config(),p) { return Some((b, amount)); }
+        }
+        Some((b, world.environment.exact_water(p, coarse)))
+    }
     /// Immutable authoritative source for a bounded derived geometry query.
     pub fn chunk_data<'a>(&'a self, world: &'a World, c: IVec3) -> Option<&'a ChunkData> {
         world.chunks.get(&c).map(|c| &**c).or_else(|| self.entries.get(&c)
@@ -365,32 +410,50 @@ impl Residency {
     }
     pub fn prepare(&mut self, world: &mut World, positions: &[IVec3]) -> bool {
         let mut incoming = 0;
-        for (i, &p) in positions.iter().enumerate() {
-            let c = chunk_coord_from_world_block(p);
-            if !world.chunks.contains_key(&c)
-                && !positions[..i]
-                    .iter()
-                    .any(|&p| chunk_coord_from_world_block(p) == c)
-            {
-                incoming += self.entries.get(&c).map_or(RESERVATION, |e| e.bytes);
-            }
-        }
-        if self.edited_bytes.saturating_add(incoming) > self.edited_limit {
-            self.memory_pressure = true;
-            world.request_simulation_writeback();
-            return false;
-        }
-        if positions.iter().any(|&p| self.read(world, p).is_none()) {
-            return false;
-        }
+        let mut seen = FastSet::default();
+        let mut missing = Vec::new();
+        let mut last = None;
         for &p in positions {
             let c = chunk_coord_from_world_block(p);
-            if !world.chunks.contains_key(&c) {
-                let entry = self.entries.remove(&c).unwrap();
-                self.bytes -= entry.bytes;
-                self.edited_bytes += entry.bytes;
-                world.install_simulation_chunk(c, entry.data);
+            if last == Some(c) { continue; }
+            last = Some(c);
+            if world.chunks.contains_key(&c) || (positions.len() > 2 && !seen.insert(c)) {
+                continue;
             }
+            let Some(entry) = self.entries.get(&c).filter(|e| e.version == Self::version(world, c)) else {
+                return false;
+            };
+            incoming += entry.bytes;
+            missing.push(c);
+        }
+        if !missing.is_empty() {
+            let mut initial = Vec::new();
+            for &c in &missing {
+                initial.extend(world.generated_river_amounts(c, &self.entries[&c].data.chunk));
+            }
+            if !world.environment.can_encode(&initial) { return false; }
+        }
+        let pressure = self.edited_bytes.saturating_add(incoming) > self.edited_limit;
+        if pressure {
+            self.memory_pressure = true;
+            world.request_simulation_writeback();
+            // Resident mutations consume no admission credit. Refusing them
+            // stops the oldest environment event forever while memory is full.
+            // Keep the durable dirty-backlog ceiling for newly installed chunks.
+            if !missing.is_empty()
+                && (missing.len() > self.pressure_chunks_left || world.regions.backlog_full())
+            {
+                return false;
+            }
+        }
+        if pressure {
+            self.pressure_chunks_left -= missing.len();
+        }
+        for c in missing {
+            let entry = self.entries.remove(&c).unwrap();
+            self.bytes -= entry.bytes;
+            self.edited_bytes += entry.bytes;
+            world.install_simulation_chunk(c, entry.data);
         }
         true
     }
@@ -404,7 +467,7 @@ impl Residency {
 
 // Recovery and coarse overflow may cover whole chunks. Filter sleeping solids
 // and balanced water off-thread, before the frame-side rule scheduler sees them.
-fn candidate_mask(data: &DiskChunk, c: IVec3) -> Box<crate::world::activity::Mask> {
+fn candidate_mask(data: &DiskChunk, c: IVec3, cfg: &WorldSampleConfig) -> Box<crate::world::activity::Mask> {
     let mut mask = Box::new([0; 512]);
     let base = c * crate::world::CHUNK_SIZE;
     for (i, &b) in data.chunk.blocks.iter().enumerate() {
@@ -435,7 +498,8 @@ fn candidate_mask(data: &DiskChunk, c: IVec3) -> Box<crate::world::activity::Mas
             true
         } else if b == BlockId::Water {
             let volume = data.water.get(&p).copied().unwrap_or(8);
-            down.is_none_or(|(b, v)| b == BlockId::Air || (b == BlockId::Water && v < 8))
+            engine_worldgen::river_water_amount(cfg,p).is_some()
+                || down.is_none_or(|(b, v)| b == BlockId::Air || (b == BlockId::Water && v < 8))
                 || [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
                     .iter()
                     .any(|&d| {
@@ -465,4 +529,102 @@ fn candidate_mask(data: &DiskChunk, c: IVec3) -> Box<crate::world::activity::Mas
         }
     }
     mask
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use crate::{fluid::VoxelScalePreset, world::WorldType};
+
+    #[test]
+    fn environmental_requests_keep_two_slots_from_other_activity() {
+        let world = World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 5);
+        let mut sources = Residency::default();
+        let (tx, _rx) = mpsc::sync_channel(CAPACITY);
+        sources.tx = Some(tx);
+        for i in 0..6 {
+            sources.pending.insert(IVec3::new(i, 0, 0), None);
+        }
+        assert!(!sources.request_for(&world, IVec3::new(100, 0, 0), IVec3::ZERO));
+        assert!(!sources.pending.contains_key(&IVec3::new(100, 0, 0)));
+
+        for x in 100..102 {
+            let c = IVec3::new(x, 0, 0);
+            assert!(!sources.request_environment(&world, c, IVec3::ZERO));
+            assert!(sources.pending.contains_key(&c));
+        }
+        assert!(!sources.request_environment(&world, IVec3::new(102, 0, 0), IVec3::ZERO));
+        assert!(!sources.pending.contains_key(&IVec3::new(102, 0, 0)));
+    }
+}
+
+#[cfg(test)]
+mod pressure_tests {
+    use super::*;
+    use crate::{fluid::VoxelScalePreset, world::WorldType};
+
+    fn world() -> World {
+        World::with_seed(WorldType::Superflat, VoxelScalePreset::OneMeter, 7)
+    }
+    fn stage(sources: &mut Residency, world: &World, c: IVec3) {
+        let data = DiskChunk {
+            chunk: Arc::new(engine_worldgen::generate(&world.sample_config(), c)),
+            water: Arc::default(),
+        };
+        let bytes = data.chunk.blocks.len() * 2;
+        sources.entries.insert(c, Entry { version: None, data, bytes, touched: 0 });
+        sources.bytes += bytes;
+    }
+
+    #[test]
+    fn resident_edits_progress_after_pressure_admission_is_exhausted() {
+        let mut world = world();
+        let mut sources = Residency::default();
+        sources.edited_limit = 0;
+        stage(&mut sources, &world, IVec3::ZERO);
+        assert!(sources.prepare(&mut world, &[IVec3::ZERO]));
+        sources.pressure_chunks_left = 0;
+        for x in 0..32 {
+            let p = IVec3::new(x, 0, 0);
+            assert!(sources.prepare(&mut world, &[p]));
+            world.set(p, BlockId::Air);
+            assert_eq!(world.get(p), BlockId::Air);
+        }
+        assert!(sources.memory_pressure);
+        assert!(world.simulation_writeback_pending());
+    }
+
+    #[test]
+    fn nonresident_placement_is_admitted_under_pressure() {
+        let mut world = world();
+        let mut sources = Residency::default();
+        sources.edited_bytes = 1;
+        sources.edited_limit = 0;
+        let c = IVec3::new(0, 10, 0);
+        let p = c * crate::world::CHUNK_SIZE;
+        stage(&mut sources, &world, c);
+        assert!(!world.chunks.contains_key(&c));
+        assert!(sources.prepare(&mut world, &[p, p + IVec3::X]));
+        world.set(p, BlockId::Stone);
+        assert_eq!(world.get(p), BlockId::Stone);
+        assert_eq!(sources.pressure_chunks_left, PRESSURE_CHUNKS_PER_POLL - 1);
+    }
+
+    #[test]
+    fn pressure_admission_is_bounded_and_missing_sources_keep_credit() {
+        let mut world = world();
+        let mut sources = Residency::default();
+        sources.edited_limit = 0;
+        assert!(!sources.prepare(&mut world, &[IVec3::ZERO]));
+        assert_eq!(sources.pressure_chunks_left, PRESSURE_CHUNKS_PER_POLL);
+        for x in 0..=PRESSURE_CHUNKS_PER_POLL {
+            let c = IVec3::new(x as i32, 10, 0);
+            stage(&mut sources, &world, c);
+            assert_eq!(sources.prepare(&mut world, &[c * crate::world::CHUNK_SIZE]),
+                x < PRESSURE_CHUNKS_PER_POLL);
+        }
+        assert_eq!(sources.pressure_chunks_left, 0);
+        sources.poll(&mut world);
+        assert_eq!(sources.pressure_chunks_left, PRESSURE_CHUNKS_PER_POLL);
+    }
 }

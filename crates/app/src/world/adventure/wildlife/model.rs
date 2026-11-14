@@ -1,7 +1,7 @@
 //! Metre-authored livestock: wool masses over hide, planted two-link legs.
 use super::*;
 use crate::mesh::models::Model;
-use crate::world::adventure::enemy_presentation::step;
+use crate::world::adventure::enemy_presentation::walk;
 use std::f32::consts::PI;
 
 const WOOL: f32 = 69.0;
@@ -55,6 +55,8 @@ fn limb(m: &mut Model, e: &Enemy, a: Vec3, b: Vec3, width: f32, color: [f32; 3],
 }
 
 pub(in crate::world::adventure) fn draw(e: &Enemy, m: &mut Model, time: f32) {
+    if e.kind == SALAMANDER { super::cave::draw(e, m, time); return; }
+    if crate::world::adventure::fauna::is_kind(e.kind) { crate::world::adventure::fauna::draw(e, m, time); return; }
     let mark = m.mark();
     let goat = e.kind == GOAT;
     let l = look(goat);
@@ -76,8 +78,8 @@ pub(in crate::world::adventure) fn draw(e: &Enemy, m: &mut Model, time: f32) {
     // Legs: equal-length two-link IK. Hooves stay on the ground and limb lengths never change.
     let link = (l.hip_y - 0.075) * 0.5 + 0.025;
     for side in [-1.0_f32, 1.0] { for end in [-1.0_f32, 1.0] {
-        let phase = e.phase * 3.0 + if side == end { 0.0 } else { PI };
-        let (travel, lift) = step(phase, 0.16, 0.11, e.gait);
+        let phase = if side == end { 0.0 } else { PI };
+        let (travel, lift) = walk(e, 0.16, 0.11, phase, 1.0);
         let z = if end < 0.0 { -0.33 } else { 0.36 };
         let hip = Vec3::new(side * 0.20, l.hip_y, z) + up;
         let foot = Vec3::new(side * 0.20, 0.075 + lift, z + travel);
@@ -127,7 +129,8 @@ pub(in crate::world::adventure) fn draw(e: &Enemy, m: &mut Model, time: f32) {
             for (c, tint) in v.color.iter_mut().zip([0.95, 0.85, 0.76]) { *c = *c * (1.0 - flash) + tint * flash; }
         }
     }
-    m.rotate_since(mark, e.pos, Quat::from_rotation_y(e.yaw));
+    let up = if e.up.length_squared() > 0.5 { e.up.normalize() } else { Vec3::Y };
+    m.rotate_since(mark, e.pos, Quat::from_rotation_arc(Vec3::Y, up) * Quat::from_rotation_y(e.yaw));
     if e.youth > 0.0 {
         m.scale_since(mark, e.pos, Vec3::splat(1.0 - 0.45 * e.youth.min(1.0)));
     }

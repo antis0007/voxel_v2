@@ -22,7 +22,7 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     // HUD panels are dark even on a light Windows desktop. Pin the preference
     // so the first native theme event cannot replace their readable text style.
     ctx.set_theme(egui::ThemePreference::Dark);
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     // State changes are crisp; slot movement uses the explicit integer-pixel recoil.
     style.animation_time = 0.0;
     style.visuals = egui::Visuals::dark();
@@ -82,7 +82,7 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     style
         .text_styles
         .insert(egui::TextStyle::Monospace, egui::FontId::monospace(12.0));
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 pub(super) fn controls(ui: &mut egui::Ui) {
@@ -101,8 +101,13 @@ pub(super) fn controls(ui: &mut egui::Ui) {
                 ("R / T", "Hold to cast / change spell"),
                 ("Space", "Jump / swim up / ascend in flight"),
                 ("Double Space", "Toggle creative flight"),
+                ("Space in mid-air", "Air jump (Kinetic greaves)"),
+                ("W beside a wall in mid-air", "Wall run · Space kicks off (Kinetic boots)"),
+                ("A / D while turning in mid-air", "Air strafe for speed (Kinetic boots)"),
                 ("Shift", "Sneak / dive / descend in flight"),
+                ("Shift while sprinting", "Slide · Space during a slide to slide-jump"),
                 ("Ctrl", "Sprint"),
+                ("Caps Lock / Mouse back", "Dash, also in mid-air (Kinetic greaves)"),
                 (
                     "Left / Right mouse",
                     "Strike enemy or break block / place block",
@@ -135,10 +140,12 @@ pub(super) fn controls(ui: &mut egui::Ui) {
         });
 }
 
-pub(super) fn hud_frame() -> egui::Frame {
-    egui::Frame::new()
-        .fill(INK)
-        .stroke(egui::Stroke::new(1.0, EDGE))
+pub(super) fn hud_frame(ctx: &egui::Context) -> super::prism::LitFrame {
+    let p = super::themes::current(ctx);
+    let original = super::themes::get(ctx) == 0;
+    super::prism::LitFrame(egui::Frame::new()
+        .fill(if original { INK } else { p.panel })
+        .stroke(egui::Stroke::new(1.0, if original { EDGE } else { p.edge }))
         .corner_radius(0)
-        .inner_margin(egui::Margin::symmetric(10, 7))
+        .inner_margin(egui::Margin::symmetric(10, 7)))
 }

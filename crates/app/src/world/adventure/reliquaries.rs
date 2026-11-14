@@ -2,6 +2,8 @@
 use super::*;
 
 mod access;
+mod discovery;
+pub(super) use discovery::Discovery;
 
 // These values belong to the existing save format; do not renumber them.
 const BOSS_DEFEATED: u32 = 1 << 3;
@@ -18,6 +20,7 @@ const ENEMY_FOCUS_RANGE: f32 = 26.0;
 const ENEMY_MIN_ALIGNMENT: f32 = 0.94;
 
 #[derive(Clone)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Reliquary {
     pub site: IVec3,
     pub pos: Vec3,
@@ -29,9 +32,13 @@ pub struct Reliquary {
 pub type RelicFocus = crate::world::interaction::Prompt;
 
 #[derive(Clone)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct BossView {
-    pub name: &'static str,
-    pub action: Option<&'static str>,
+    #[cfg_attr(feature="multiplayer", serde(deserialize_with="crate::multiplayer::text::string"))]
+
+    pub name: crate::world::interaction::Text,
+#[cfg_attr(feature="multiplayer", serde(deserialize_with="crate::multiplayer::text::optional"))]
+    pub action: Option<crate::world::interaction::Text>,
     pub health: f32,
     pub maximum: f32,
 }
@@ -59,6 +66,18 @@ fn relic_stage(kind: u32, state: u32) -> RelicStage {
     } else {
         RelicStage::Ready
     }
+}
+
+fn stage_for(relic: &Reliquary, state: u32) -> RelicStage {
+    // This site has no ambient guard prerequisite. Do not persist fictitious
+    // guard kills or award site-clear credit before its actual guardian falls.
+    relic_stage(relic.kind, state | if observatory::is_site(relic.site) {
+        GUARDIANS_CLEARED
+    } else { 0 })
+}
+
+fn workshop_relic(relic: &Reliquary) -> bool {
+    relic.site == IVec3::ZERO && relic.kind == 0
 }
 
 fn finite_position(p: Vec3) -> bool {
@@ -97,6 +116,19 @@ pub(super) fn place(world: &World, center: Vec3) -> Option<Vec3> {
     None
 }
 
+fn stand_up(world: &World, at: Vec3) -> Vec3 {
+    // World Y is up only at the bottom of the tube. Around the shell that
+    // offset sinks into the crust and a farther relic takes the prompt.
+    let shell = world.world_type == crate::world::WorldType::Manyfold
+        && engine_worldgen::manyfold::shell_curve(world.generator_version).is_some();
+    if !shell {
+        return Vec3::Y;
+    }
+    (-engine_worldgen::manyfold::acceleration_for(world.generator_version, at))
+        .try_normalize()
+        .unwrap_or(Vec3::Y)
+}
+
 impl Adventure {
     fn valid_relic_kind(&self, kind: u32) -> bool {
         // Use the actual field width; the parent owns the discovery mask's type.
@@ -122,17 +154,32 @@ impl Adventure {
         self.reliquaries[index].state = state;
     }
 
-    pub(super) fn update_reliquaries(&mut self, world: &mut World, feet: Vec3) {
-        self.reliquaries.clear();
+    pub(super) fn publish_reliquaries(&mut self, world: &World, feet: Vec3) {
+        let mut trace = crate::gameplay_trace::Trace::new();
         let cfg = world.sample_config();
-        let encounters = sites::encounters(&cfg, feet);
-        let nearby: Vec<IVec3> = encounters.iter().map(|e| e.0).collect();
-        for (site, center, _) in encounters {
-            let kind = sites::reward_kind(&cfg, site);
+        if self.relic_discovery.invalidate(cfg, feet) {
+            self.reliquaries.clear();
+            self.stations.clear();
+            self.relic_focus = None;
+        }
+        let Some(candidates) = self.relic_discovery.take(cfg, feet) else { return; };
+        // Keep the independently admitted Observatory until its next live refresh.
+        self.reliquaries.retain(|relic| observatory::is_site(relic.site));
+        let nearby: Vec<IVec3> = candidates.iter().map(|candidate| candidate.site).collect();
+        let shell = (world.world_type == crate::world::WorldType::Manyfold)
+            .then(|| engine_worldgen::manyfold::shell_curve(world.generator_version))
+            .flatten();
+        for discovery::Candidate { site, centre: center, kind } in candidates {
             if !self.valid_relic_kind(kind) {
                 continue;
             }
-            let Some(pos) = place(world, center) else {
+            // The stand sits in the hollow. A world-Y search walks around the
+            // cylinder and the relic jumps as new columns stream in.
+            let Some(pos) = shell
+                .map(|curve| curve.floor_point(center, 0.04))
+                .filter(|p| finite_position(*p))
+                .or_else(|| place(world, center))
+            else {
                 continue;
             };
             if !self.admit_record(site, &nearby) {
@@ -148,11 +195,28 @@ impl Adventure {
                 state,
             });
         }
-        access::tend(self, world);
-        self.update_stations(world);
+        trace.mark("reliquary-placement");
     }
 
-    fn focused_relic(&self, world: &World, eye: Vec3, forward: Vec3) -> Option<usize> {
+    pub(super) fn update_reliquaries(&mut self, world: &mut World, feet: Vec3) {
+        let mut trace = crate::gameplay_trace::Trace::new();
+        self.relic_discovery.request(world.sample_config(), feet);
+        trace.mark("reliquary-site-request");
+        self.reliquaries.retain(|relic| !observatory::is_site(relic.site));
+        observatory::append(self, world, feet);
+        access::tend(self, world);
+        self.update_stations(world);
+        trace.mark("reliquary-maintenance");
+    }
+
+    pub(crate) fn focused_relic_distance(&self, world: &World, eye: Vec3, forward: Vec3) -> Option<f32> {
+        let index = self.focused_relic(world, eye, forward)?;
+        Some(self.reliquaries.get(index)?.pos.distance(eye))
+    }
+
+    pub(crate) fn interaction_prompt(&self) -> Option<RelicFocus> { self.relic_focus }
+
+    pub(crate) fn focused_relic(&self, world: &World, eye: Vec3, forward: Vec3) -> Option<usize> {
         if !finite_position(eye) {
             return None;
         }
@@ -163,7 +227,7 @@ impl Adventure {
             if !self.valid_relic_kind(relic.kind) {
                 continue;
             }
-            let target = relic.pos + Vec3::Y * RELIC_FOCUS_HEIGHT;
+            let target = relic.pos + stand_up(world, relic.pos) * RELIC_FOCUS_HEIGHT;
             let offset = target - eye;
             let distance_squared = offset.length_squared();
             let along = offset.dot(forward);
@@ -196,22 +260,28 @@ impl Adventure {
             .map(|i| {
                 let relic = &self.reliquaries[i];
                 let state = self.relic_state(relic);
-                if relic.site == IVec3::ZERO && state & CLAIMED != 0 {
+                let rescue = self.companion.is_none() && workshop_relic(relic)
+                    && crate::world::workshop::has_lanterncap(&world.sample_config());
+                if relic.site == IVec3::ZERO && state & CLAIMED != 0 && !rescue {
                     return self.heart_focus();
                 }
                 let boss = bosses::kind(relic.kind);
                 RelicFocus {
-                    title: if boss > 0 {
+                    title: if rescue {
+                        "Trapped Lanterncap"
+                    } else if boss > 0 {
                         bosses::name(boss)
                     } else {
                         inscriptions::INSCRIPTIONS[relic.kind as usize].name
                     },
-                    action: match relic_stage(relic.kind, state) {
-                        RelicStage::Claimed => "F - Attune sanctum & trace next relic",
-                        RelicStage::Sealed => "Defeat the guardians to unseal",
-                        RelicStage::Dormant => "F - Awaken guardian",
-                        RelicStage::Awakened => "Defeat the awakened guardian",
-                        RelicStage::Ready => "F - Claim relic",
+                    action: match stage_for(relic, state) {
+                        RelicStage::Ready | RelicStage::Claimed if rescue => "[F] Free Lanterncap",
+                        RelicStage::Claimed => "[F] Attune · Next Relic",
+                        RelicStage::Sealed => "Guardians Remaining",
+                        RelicStage::Dormant => "[F] Awaken Guardian",
+                        RelicStage::Awakened => "Guardian Active",
+                        RelicStage::Ready if relic.kind == 8 => "[F] Claim Levitation",
+                        RelicStage::Ready => "[F] Claim Relic",
                     },
                 }
             });
@@ -283,17 +353,24 @@ impl Adventure {
             affixes: enemy.affixes,
             status: enemy.status,
             shield: enemy.shield,
+            combat_cue: if vault_fight::lead(enemy) {
+                if enemy.tell > 0.0 || enemy.charge > 0.0 { Some(CombatCue::Rush) }
+                else if enemy.encounter.exposed > 0.0 { Some(CombatCue::Exposed) }
+                else { None }
+            } else { None },
         });
         // Reliquaries keep priority; mechanisms only advertise themselves when
         // no relic or station is already focused.
         self.undercrown_focus = if self.relic_focus.is_some() {
             None
         } else {
-            direction.and_then(|forward| undercrown::focus(world, eye, forward))
+            direction.and_then(|forward| crate::manyfold::undercroft::focus(world, eye, forward)
+                .or_else(|| crate::manyfold::weave::focus(world, eye, forward))
+                .or_else(|| undercrown::focus(world, eye, forward)))
         };
     }
 
-    pub(super) fn interact_relic(&mut self, world: &mut World, eye: Vec3, forward: Vec3) -> bool {
+    pub(super) fn interact_relic(&mut self, world: &mut World, feet: Vec3, eye: Vec3, forward: Vec3) -> bool {
         if !finite_position(eye) {
             return false;
         }
@@ -312,18 +389,32 @@ impl Adventure {
         };
         let relic = self.reliquaries[i].clone();
         let state = self.relic_state(&relic);
-        let stage = relic_stage(relic.kind, state);
+        let stage = stage_for(&relic, state);
+        let rescue = self.companion.is_none() && workshop_relic(&relic)
+            && crate::world::workshop::has_lanterncap(&world.sample_config())
+            && matches!(stage, RelicStage::Ready | RelicStage::Claimed);
+        let rescued = rescue && growth::lanterncap::rescue(self, world, feet);
+        if rescued {
+            world.expedition.say("Lanterncap freed · Follows and lights your way");
+        } else if rescue {
+            world.expedition.say("Lanterncap · Needs room beside you");
+        }
+        if rescue && stage == RelicStage::Claimed {
+            if rescued { sound(&mut self.sounds, Cue::Treasure, Some(relic.pos), 0.75); }
+            return true;
+        }
         match stage {
             RelicStage::Claimed => {
-                self.respawn_point = Some(relic.pos + Vec3::Y * 0.45);
+                if self.puzzle_cd > 0.0 { return true; }
+                self.puzzle_cd = 1.0;
+                self.respawn_point = Some(relic.pos + stand_up(world, relic.pos) * 0.45);
                 self.health = (self.health + 18.0).min(self.max_health());
                 self.mana = (self.mana + 25.0).min(self.max_mana());
                 sound(&mut self.sounds, Cue::Mend, Some(relic.pos), 0.65);
-                self.pickup_burst(relic.pos + Vec3::Y * 0.6, [0.45, 0.95, 0.55]);
+                self.pickup_burst(relic.pos + stand_up(world, relic.pos) * 0.6, [0.45, 0.95, 0.55]);
                 if relic.site == IVec3::ZERO {
                     self.use_heart(world, relic.pos);
-                } else if self.puzzle_cd <= 0.0 {
-                    self.puzzle_cd = 1.0;
+                } else {
                     self.chart_route(world, relic.pos);
                 }
                 return true;
@@ -369,7 +460,7 @@ impl Adventure {
             self.add_weapon(weapon);
         }
         self.add_relic_flags(i, CLAIMED | PHYSICAL);
-        self.respawn_point = Some(relic.pos + Vec3::Y * 0.45);
+        self.respawn_point = Some(relic.pos + stand_up(world, relic.pos) * 0.45);
         self.health = self.max_health();
         self.mana = self.max_mana();
         self.discoveries |= 1 << relic.kind;
@@ -382,9 +473,10 @@ impl Adventure {
         }
         self.reward = Some(Reward {
             name: match relic.kind {
+                0 if rescued => "Lanterncap freed",
                 3 => "Cinderbrand recovered",
                 5 => "Rift well recovered",
-                8 => "Winterglass and Echo step recovered",
+                8 => "Prism Facet · Levitation Unlocked",
                 10 => "Keeper's passage recovered",
                 _ => "Inscription recovered",
             },
@@ -393,8 +485,9 @@ impl Adventure {
             discovery: Some(relic.kind),
         });
         sound(&mut self.sounds, Cue::Treasure, None, 0.9);
-        self.pickup_burst(relic.pos + Vec3::Y * 0.8, color);
-        self.effect(relic.pos + Vec3::Y, color, 1.5);
+        let up = stand_up(world, relic.pos);
+        self.pickup_burst(relic.pos + up * 0.8, color);
+        self.effect(relic.pos + up, color, 1.5);
         true
     }
 
@@ -436,6 +529,9 @@ impl Adventure {
             self.enemies.push(enemy);
             return true;
         }
+        if observatory::is_site(relic.site) {
+            return observatory::spawn(self, world, eye);
+        }
         for i in 0..24 {
             let a = i as f32 * 2.4;
             let p = relic.pos + Vec3::new(a.cos(), 0.0, a.sin()) * (4.0 + (i / 8) as f32);
@@ -464,7 +560,7 @@ impl Adventure {
         false
     }
 
-    pub(super) fn relic_models(&self, m: &mut Model) {
+    pub(super) fn relic_models(&self, m: &mut Model, shell: Option<u32>, eye: Vec3, lanterncap: bool) {
         use std::f32::consts::{FRAC_PI_2, TAU};
 
         self.station_models(m);
@@ -472,6 +568,11 @@ impl Adventure {
             if !self.valid_relic_kind(r.kind) {
                 continue;
             }
+            let frame = shell.and_then(|version| {
+                let up = (-engine_worldgen::manyfold::acceleration_for(version, r.pos)).try_normalize()?;
+                Some(Quat::from_rotation_arc(Vec3::Y, up))
+            }).unwrap_or(Quat::IDENTITY);
+            let loc = |p: Vec3| r.pos + frame * p;
             let state = self.relic_state(r);
             let recovered = state & CLAIMED != 0;
             let color = if r.site == IVec3::ZERO && self.heart_restored() {
@@ -482,23 +583,23 @@ impl Adventure {
                 spell_color(inscriptions::INSCRIPTIONS[r.kind as usize].spell)
             };
             m.cuboid(
-                r.pos + Vec3::Y * 0.15,
+                loc(Vec3::Y * 0.15),
                 Vec3::new(0.8, 0.3, 0.8),
-                Quat::IDENTITY,
+                frame,
                 [0.22, 0.23, 0.25],
                 0.0,
             );
             m.cuboid(
-                r.pos + Vec3::Y * 0.45,
+                loc(Vec3::Y * 0.45),
                 Vec3::new(0.48, 0.3, 0.48),
-                Quat::IDENTITY,
+                frame,
                 [0.35, 0.32, 0.26],
                 0.0,
             );
             for i in 0..4 {
                 let a = i as f32 * FRAC_PI_2;
                 let (sin_a, cos_a) = a.sin_cos();
-                let p = r.pos + Vec3::new(cos_a * 0.35, 0.64, sin_a * 0.35);
+                let p = loc(Vec3::new(cos_a * 0.35, 0.64, sin_a * 0.35));
                 m.orb(p, 0.045, color, if recovered { 0.0 } else { 1.2 });
             }
             if r.site == IVec3::ZERO && recovered {
@@ -506,15 +607,19 @@ impl Adventure {
                 for (i, bit) in [1, 2, 4].into_iter().enumerate() {
                     let c = bosses::color(6 + i as u32);
                     m.orb(
-                        r.pos + Vec3::new((i as f32 - 1.0) * 0.27, 0.85, 0.0),
+                        loc(Vec3::new((i as f32 - 1.0) * 0.27, 0.85, 0.0)),
                         0.10,
                         c,
                         if self.sigils & bit != 0 { 1.8 } else { 0.0 },
                     );
                 }
                 if self.heart_restored() {
-                    m.orb(r.pos + Vec3::Y * 1.2, 0.2, color, 2.5);
+                    m.orb(loc(Vec3::Y * 1.2), 0.2, color, 2.5);
                 }
+            }
+            if lanterncap && self.companion.is_none() && workshop_relic(r) {
+                let cap = growth::Companion::juvenile(growth::lanterncap::ID, loc(Vec3::Y * 0.80));
+                cap.model(m, self.time, eye);
             }
             if !recovered {
                 // A loose fog of voxels waiting on the relic. Claiming it throws them outward.
@@ -525,8 +630,8 @@ impl Adventure {
                     let y = 0.45 + ((t * 1.7 + seed).sin() * 0.5 + 0.5) * 0.7;
                     let a = seed + t * (0.4 + (i % 3) as f32 * 0.15);
                     let (sin_a, cos_a) = a.sin_cos();
-                    let at = r.pos + Vec3::new(cos_a * rad, y, sin_a * rad);
-                    let spin = Quat::from_rotation_y(t + seed) * Quat::from_rotation_x(seed);
+                    let at = loc(Vec3::new(cos_a * rad, y, sin_a * rad));
+                    let spin = frame * Quat::from_rotation_y(t + seed) * Quat::from_rotation_x(seed);
                     m.glow_voxel(
                         at,
                         Vec3::splat(0.026 + (i % 3) as f32 * 0.01),
@@ -536,12 +641,12 @@ impl Adventure {
                         0.7,
                     );
                 }
-                let p = r.pos + Vec3::Y * (0.96 + (self.time * 1.6).sin() * 0.045);
-                let rot = Quat::from_rotation_y(self.time * 0.4);
+                let p = loc(Vec3::Y * (0.96 + (self.time * 1.6).sin() * 0.045));
+                let rot = frame * Quat::from_rotation_y(self.time * 0.4);
                 if r.kind == 3 || r.kind == 8 {
                     m.cuboid(p, Vec3::new(0.07, 0.63, 0.04), rot, color, 0.6);
                     m.cuboid(
-                        p - Vec3::Y * 0.23,
+                        p - frame * Vec3::Y * 0.23,
                         Vec3::new(0.3, 0.05, 0.08),
                         rot,
                         [0.7, 0.48, 0.19],
@@ -565,15 +670,14 @@ impl Adventure {
                 for g in 0..3 {
                     let ga = self.time * 0.65 + g as f32 * (TAU / 3.0);
                     let (sin_ga, cos_ga) = ga.sin_cos();
-                    let gp = r.pos
-                        + Vec3::new(
-                            cos_ga * 0.56,
-                            1.18 + (self.time * 1.9 + g as f32).sin() * 0.07,
-                            sin_ga * 0.56,
-                        );
+                    let gp = loc(Vec3::new(
+                        cos_ga * 0.56,
+                        1.18 + (self.time * 1.9 + g as f32).sin() * 0.07,
+                        sin_ga * 0.56,
+                    ));
                     m.temple_glyph(
                         gp,
-                        Quat::from_rotation_y(-ga + FRAC_PI_2),
+                        frame * Quat::from_rotation_y(-ga + FRAC_PI_2),
                         r.kind + g,
                         0.024,
                         color,
@@ -586,7 +690,7 @@ impl Adventure {
                     let (sin_ma, cos_ma) = ma.sin_cos();
                     let radius = 0.32 + (m_idx % 3) as f32 * 0.12;
                     let rise = (self.time * 0.48 + m_idx as f32 * 0.17).rem_euclid(1.65);
-                    let mp = r.pos + Vec3::new(cos_ma * radius, 0.45 + rise, sin_ma * radius);
+                    let mp = loc(Vec3::new(cos_ma * radius, 0.45 + rise, sin_ma * radius));
                     // Fade geometry and glow together at both ends of the height wrap.
                     let phase = rise / 1.65;
                     let envelope = (1.0 - (phase * 2.0 - 1.0).abs()).clamp(0.0, 1.0);
@@ -597,22 +701,22 @@ impl Adventure {
                     m.glow_voxel(
                         mp,
                         Vec3::splat(0.028 * fade),
-                        Quat::from_rotation_y(ma),
+                        frame * Quat::from_rotation_y(ma),
                         color,
                         3.4,
                         0.75 * fade,
                     );
                 }
                 if matches!(
-                    relic_stage(r.kind, state),
+                    stage_for(r, state),
                     RelicStage::Sealed | RelicStage::Dormant | RelicStage::Awakened
                 ) {
                     for i in 0..4 {
                         let a = i as f32 * FRAC_PI_2 + self.time * 0.3;
                         let (sin_a, cos_a) = a.sin_cos();
                         m.glow_beam(
-                            r.pos + Vec3::new(cos_a * 0.4, 0.55, sin_a * 0.4),
-                            r.pos + Vec3::Y * 1.45,
+                            loc(Vec3::new(cos_a * 0.4, 0.55, sin_a * 0.4)),
+                            loc(Vec3::Y * 1.45),
                             0.016,
                             color,
                             1.8,
@@ -630,6 +734,7 @@ pub fn interact(world: &mut World, player: &Player) -> bool {
     let mut adventure = std::mem::take(&mut world.adventure);
     let used = adventure.interact_relic(
         world,
+        player.pos * scale,
         player.eye(world.voxel_scale) * scale,
         player.forward_dir(),
     );

@@ -18,6 +18,40 @@ pub struct WandView {
     pub motion: crate::player::viewmodel::State,
 }
 
+pub(crate) fn book(m: &mut Model, center: Vec3, rotation: Quat, color: [f32; 3], glow: f32) {
+    let part = |m: &mut Model, offset: Vec3, size: Vec3, tint, emission| {
+        m.cuboid(center + rotation * offset, size, rotation, tint, emission);
+    };
+    part(m, Vec3::ZERO, Vec3::new(0.29, 0.22, 0.045), [0.19, 0.10, 0.28], 0.0);
+    part(m, Vec3::new(0.0, 0.0, 0.022), Vec3::new(0.014, 0.213, 0.019),
+        [0.34, 0.20, 0.36], 0.0);
+    part(m, Vec3::new(0.083, -0.105, 0.029), Vec3::new(0.019, 0.037, 0.009),
+        [0.55, 0.19, 0.24], 0.0);
+    for x in [-0.069, 0.069] {
+        part(m, Vec3::new(x, 0.0, 0.025), Vec3::new(0.126, 0.196, 0.018),
+            [0.76, 0.67, 0.48], 0.0);
+        for (y, width) in [(-0.070, 0.048), (-0.055, 0.071), (0.055, 0.071), (0.070, 0.054)] {
+            part(m, Vec3::new(x, y, 0.035), Vec3::new(width, 0.004, 0.003),
+                [0.27, 0.17, 0.24], 0.0);
+        }
+    }
+    for i in 0..8 {
+        let angle = i as f32 * std::f32::consts::TAU / 8.0;
+        part(m, Vec3::new(-0.069 + 0.026 * angle.cos(), 0.026 * angle.sin(), 0.036),
+            Vec3::new(0.009, 0.009, 0.004), color, glow);
+    }
+    for (y, width) in [(-0.023, 0.034), (0.0, 0.064), (0.023, 0.049)] {
+        part(m, Vec3::new(0.069, y, 0.036), Vec3::new(width, 0.006, 0.004), color, glow);
+    }
+}
+
+pub(super) fn draw_grimoire(m: &mut Model, view: &WandView) {
+    let rotation = Quat::from_mat3(&Mat3::from_cols(view.right, view.up, -view.forward));
+    let center = view.eye + view.forward * (0.48 + view.cast * 0.045)
+        + view.right * 0.16 - view.up * 0.18;
+    book(m, center, rotation, view.spell, 0.35 + view.cast * 1.5);
+}
+
 pub fn tip_light(style: WandStyle, v: &WandView) -> (Vec3, [f32; 3], f32) {
     let p = pose(v);
     let tip=if super::wand_sprite::enabled() {super::wand_sprite::muzzle(style)}

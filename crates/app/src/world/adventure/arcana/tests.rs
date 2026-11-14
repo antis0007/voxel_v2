@@ -165,6 +165,46 @@ fn on_bounce_and_on_proximity_attach_a_payload() {
 }
 
 #[test]
+fn a_resonant_burst_swells_while_it_flies() {
+    let (mut w, mut p, eye, mut a) = rig();
+    a.emit_spell(3, eye, Vec3::NEG_Z, None);
+    let start = a.projectiles[0].mods.radius;
+    w.adventure = a;
+    run(&mut w, &mut p, 45);
+    let shot = w
+        .adventure
+        .projectiles
+        .iter()
+        .find(|s| s.spell == 3)
+        .expect("burst still in flight");
+    assert!(shot.mods.radius > start + 0.08, "radius {} from {start}", shot.mods.radius);
+}
+
+#[test]
+fn named_bolts_carry_the_element_they_are() {
+    let (_, _, eye, mut a) = rig();
+    a.emit_spell(2, eye, Vec3::NEG_Z, None);
+    a.emit_spell(12, eye, Vec3::NEG_Z, None);
+    a.emit_spell(14, eye, Vec3::NEG_Z, None);
+    a.emit_spell(0, eye, Vec3::NEG_Z, None);
+    assert_eq!(a.projectiles[0].mods.element, Some(Element::Frost));
+    assert_eq!(a.projectiles[1].mods.element, Some(Element::Fire));
+    assert_eq!(a.projectiles[2].mods.element, Some(Element::Shock));
+    assert!(a.projectiles[2].mods.chain);
+    assert!(a.projectiles[3].mods.element.is_none(), "a spark stays uncoated");
+    let coated = ShotMods {
+        element: Some(Element::Fire),
+        ..ShotMods::default()
+    };
+    a.emit_spell_modified(2, eye, Vec3::NEG_Z, None, coated);
+    assert_eq!(
+        a.projectiles.last().unwrap().mods.element,
+        Some(Element::Fire),
+        "a coat card replaces the bolt's own element"
+    );
+}
+
+#[test]
 fn freezing_shard_and_lightning_arc_carry_their_elements() {
     let (_, _, eye, mut a) = rig();
     a.emit_spell(FREEZING_SHARD, eye, Vec3::NEG_Z, None);

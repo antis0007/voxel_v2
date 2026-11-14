@@ -74,7 +74,7 @@ fn sidecar_round_trips_and_rejects_damage() {
     assert!(set_text(&mut w, SIGN, &lines(&["north", "ünïcode"])));
     let mut slots = [None; CHEST_SLOTS];
     slots[3] = Some(ItemStack::new(Item::Resource(4), 7));
-    w.block_data.put(CHEST, Entry::Chest(Box::new(slots)));
+    w.block_data.put(CHEST, Entry::Chest(Box::new(slots.to_vec())));
     tnt::arm(&mut w.block_data, IVec3::new(5, 9, 5), 77);
     let bytes = sidecar::encode(&w.block_data);
     let back = sidecar::decode(&bytes).expect("decodes");

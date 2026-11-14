@@ -472,6 +472,7 @@ fn powered_ticks(
     let Some(node) = node.filter(|n| n.kind == Kind::Fabricator) else {
         return (0, 0);
     };
+    if super::super::industry::blocked(node) {node.status="Exhaust blocked";return (0,0);}
     if !node.enabled || held {
         node.status = if held { "Held by controller" } else { "Paused" };
         return (0, 0);
@@ -487,6 +488,7 @@ fn powered_ticks(
                 break;
             }
             node.energy -= power;
+            super::super::industry::produce(node, 1);
             used += power;
             *credit = QUANTUM;
         }

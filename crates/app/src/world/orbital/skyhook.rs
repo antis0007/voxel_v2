@@ -12,6 +12,12 @@ use crate::world::{DayNightCycle, hash_u32};
 use glam::{DVec3, Vec3};
 use std::f64::consts::{PI, TAU};
 
+/// Hooks project through the flat equatorial chart, which does not describe
+/// the 20 km cube-sphere atlas (radius, face offsets, sun frame all differ).
+pub fn supported(world_type: engine_voxel::WorldType) -> bool {
+    !matches!(world_type, engine_voxel::WorldType::Planet | engine_voxel::WorldType::Nether)
+}
+
 /// Planet spin on the orbital clock: one turn per world day.
 pub const EARTH_RATE: f64 = TAU / DAY_SECONDS;
 
@@ -135,6 +141,18 @@ impl Hook {
     pub fn pass_period(&self) -> f64 {
         TAU / (self.n - EARTH_RATE)
     }
+
+    /// Conservative tensile-load estimate for a straight, uniformly distributed
+    /// reference braid. s=0 at the hub, s=1 at the tip. Includes centrifugal load
+    /// and the maximum radial gravity gradient over the braid's closest radius.
+    /// This sizes the visual structure; no live cargo or elastic state is implied.
+    pub fn design_tension_n(&self, s: f64, payload_kg: f64, line_kg_per_m: f64) -> f64 {
+        let u = s.clamp(0.0,1.0)*self.tether_m;
+        let closest = self.hub_radius_m-self.tether_m;
+        let gradient = self.spin*self.spin+2.0*MU/closest.powi(3);
+        gradient*(payload_kg.max(0.0)*self.tether_m
+            +0.5*line_kg_per_m.max(0.0)*(self.tether_m*self.tether_m-u*u))
+    }
     /// Seconds until the next cusp anywhere on the planet.
     #[cfg(test)]
     pub fn next_cusp(&self, t: f64) -> f64 {
@@ -174,12 +192,23 @@ pub struct Contact {
     /// Hub and tip in the local chart (metres, relative to the chart origin).
     pub hub: Vec3,
     pub tip: Vec3,
+    /// Next home-port cusp, projected through the same spherical chart as tip.
+    pub cusp: Vec3,
+    pub line: [Vec3;super::dynamics::LINE_NODES],
     pub tip_altitude_m: f32,
     pub hub_elevation_deg: f32,
     pub next_port_cusp_s: f32,
 }
 
 impl Contact {
+    /// Lifted pods stay upright; caught pods follow the grapple's tension axis.
+    /// The axes agree at the home-port cusp, avoiding an orientation snap.
+    pub fn pod_axis(&self) -> Vec3 {
+        if self.next_port_cusp_s < self.hook.turn_period() as f32*POD_LIFT_TURNS {
+            Vec3::Y
+        } else {(self.hub-self.tip).normalize()}
+    }
+
     /// Where the cargo pod is, if one is in flight. It rises from the ground port
     /// up a column over the port during `POD_LIFT_TURNS` of a tether turn before the cusp,
     /// rides the grapple for half a turn, then is hauled in to the hub. Pure
@@ -188,13 +217,13 @@ impl Contact {
         let turn = self.hook.turn_period() as f32;
         let to_next = self.next_port_cusp_s;
         let since = self.hook.pass_period() as f32 - to_next;
-        let ease = |t: f32| t * t * (3.0 - 2.0 * t);
+        // Zero endpoint acceleration avoids an impulse at launch and haul joins.
+        let ease = |t: f32| t*t*t*(t*(t*6.0-15.0)+10.0);
         let (lift, ride, haul) = (turn * POD_LIFT_TURNS, turn * 0.5, turn * 0.25);
         if to_next < lift {
             // The tip is far off to the side until the cusp, so the pod climbs a
             // column over the port to the cusp point, where the tip stops to meet it.
-            let cusp = Vec3::new(port.x, self.hook.size.cusp_altitude_m() as f32, port.z);
-            return Some(port.lerp(cusp, ease(1.0 - to_next / lift)));
+            return Some(port.lerp(self.cusp, ease(1.0 - to_next / lift)));
         }
         if since < ride {
             return Some(self.tip);
@@ -210,13 +239,13 @@ impl Contact {
 const POD_LIFT_TURNS: f32 = 0.3;
 
 /// Rotate an inertial point into the planet-fixed frame at clock `t`.
-fn fixed(p: DVec3, t: f64) -> DVec3 {
+pub(super) fn fixed(p: DVec3, t: f64) -> DVec3 {
     let a = EARTH_RATE * t;
     DVec3::new(p.x * a.cos() - p.y * a.sin(), p.x * a.sin() + p.y * a.cos(), p.z)
 }
 
 /// Equatorial chart: x east, y up, z south; the origin is lat 0, lon 0.
-fn local(p: DVec3, viewer: Vec3) -> Vec3 {
+pub(super) fn local(p: DVec3, viewer: Vec3) -> Vec3 {
     let lon = viewer.x as f64 / PLANET_RADIUS_M;
     let lat = -(viewer.z as f64) / PLANET_RADIUS_M;
     let up = DVec3::new(lon.sin() * lat.cos(), lon.cos() * lat.cos(), -lat.sin());
@@ -233,17 +262,36 @@ pub fn contacts(seed: u32, day: &DayNightCycle, viewer: Vec3) -> Vec<Contact> {
         .map(|hook| {
             let hub = local(fixed(hook.hub(t), t), viewer);
             let tip = local(fixed(hook.tip(t), t), viewer);
+            let next = hook.next_port_cusp(t);
+            let cusp = local(fixed(hook.tip(t+next), t+next), viewer);
             let rel = hub - viewer;
             Contact {
                 hook,
                 hub,
                 tip,
+                cusp,
+                line: std::array::from_fn(|i|hub.lerp(tip,i as f32/(super::dynamics::LINE_NODES-1) as f32)),
                 tip_altitude_m: (hook.tip(t).length() - PLANET_RADIUS_M) as f32,
                 hub_elevation_deg: (rel.y / rel.length()).clamp(-1.0, 1.0).asin().to_degrees(),
-                next_port_cusp_s: hook.next_port_cusp(t) as f32,
+                next_port_cusp_s: next as f32,
             }
         })
         .collect()
+}
+
+/// Physical rails and elastic line share one saved state. Forecasting callers
+/// may still request the nominal catalog without mutating or replaying freight.
+pub fn physical_contacts(seed:u32,day:&DayNightCycle,viewer:Vec3,state:&super::dynamics::State)->Vec<Contact> {
+    let t=clock(day);
+    contacts(seed,day,viewer).into_iter().map(|mut c| {
+        c.line=state.line(c.hook,t,viewer);
+        c.hub=c.line[0];c.tip=c.line[super::dynamics::LINE_NODES-1];
+        c.cusp=state.line(c.hook,t+c.next_port_cusp_s as f64,viewer)[super::dynamics::LINE_NODES-1];
+        c.tip_altitude_m=state.tip_altitude(c.hook,t);
+        let rel=c.hub-viewer;
+        c.hub_elevation_deg=(rel.y/rel.length()).clamp(-1.0,1.0).asin().to_degrees();
+        c
+    }).collect()
 }
 
 #[cfg(test)]
@@ -280,6 +328,8 @@ mod tests {
             hook,
             hub: Vec3::new(0.0, 60_000.0, 0.0),
             tip: Vec3::new(0.0, 20_000.0, 0.0),
+            cusp: Vec3::new(0.0, 20_000.0, 0.0),
+            line: std::array::from_fn(|i|Vec3::new(0.0,60_000.0-40_000.0*i as f32/16.0,0.0)),
             tip_altitude_m: 20_000.0,
             hub_elevation_deg: 90.0,
             next_port_cusp_s: to_next,

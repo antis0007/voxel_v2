@@ -1,12 +1,15 @@
 //! Explicit budgets for regenerable world data. Worker-held voxel allocations
 //! remain charged after cache eviction. Edited world data is never evicted here.
 use crate::mesh::GeneratedChunk;
-use crate::world::BlockId;
+use crate::world::{BlockId, CHUNK_SIZE};
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicI8, AtomicUsize, Ordering};
 
 const MIB: usize = 1024 * 1024;
+const WEATHER_COLUMNS: usize = (CHUNK_SIZE * CHUNK_SIZE) as usize;
+const WEATHER_ROOF_BYTES: usize = WEATHER_COLUMNS * std::mem::size_of::<AtomicI8>();
+const UNKNOWN_ROOF: i8 = -2;
 static CPU_MIB: AtomicUsize = AtomicUsize::new(256);
 // Leave bounded room for an incoming mesh while its old buffers remain drawable.
 pub(super) const GPU_STREAMING_RESERVE: usize = 16 * MIB;
@@ -43,10 +46,17 @@ pub struct ResidentChunk {
     allocations: Arc<VoxelAllocations>,
     bytes: usize,
     /// Torch cells, scanned on first light query and dropped on any mutable access.
-    torches: Mutex<Option<Vec<(IVec3, BlockId)>>>,
+    torches: OnceLock<Vec<(IVec3, BlockId)>>,
+    weather_roofs: OnceLock<Box<[AtomicI8]>>,
 }
 
 impl ResidentChunk {
+    pub(super) fn reaccount(&mut self, allocations: &Arc<VoxelAllocations>) {
+        let bytes = self.bytes + self.weather_roof_bytes();
+        self.allocations.0.fetch_sub(bytes, Ordering::Relaxed);
+        allocations.0.fetch_add(bytes, Ordering::Relaxed);
+        self.allocations = Arc::clone(allocations);
+    }
     pub(super) fn new(data: GeneratedChunk, allocations: &Arc<VoxelAllocations>) -> Self {
         let bytes = data.allocation_bytes();
         allocations.0.fetch_add(bytes, Ordering::Relaxed);
@@ -54,13 +64,40 @@ impl ResidentChunk {
             data,
             allocations: Arc::clone(allocations),
             bytes,
-            torches: Mutex::new(None),
+            torches: OnceLock::new(),
+            weather_roofs: OnceLock::new(),
         }
     }
 
-    pub(super) fn torch_cells(&self) -> Vec<(IVec3, BlockId)> {
-        let mut cached = self.torches.lock().unwrap_or_else(|e| e.into_inner());
-        cached.get_or_insert_with(|| self.data.torch_cells()).clone()
+    fn append_torch_cells(&self, out: &mut Vec<(IVec3, BlockId)>) {
+        out.extend_from_slice(self.torches.get_or_init(|| self.data.torch_cells()));
+    }
+
+    fn weather_roof_bytes(&self) -> usize {
+        self.weather_roofs.get().map_or(0, |_| WEATHER_ROOF_BYTES)
+    }
+
+    /// Highest solid or liquid cell in this column, or one below the chunk.
+    pub(crate) fn weather_roof(&self, p: IVec3) -> i32 {
+        let roofs = self.weather_roofs.get_or_init(|| {
+            let roofs = (0..WEATHER_COLUMNS).map(|_| AtomicI8::new(UNKNOWN_ROOF)).collect();
+            self.allocations.0.fetch_add(WEATHER_ROOF_BYTES, Ordering::Relaxed);
+            roofs
+        });
+        let index = (p.z.rem_euclid(CHUNK_SIZE) * CHUNK_SIZE + p.x.rem_euclid(CHUNK_SIZE)) as usize;
+        let bottom = self.data.chunk.y * CHUNK_SIZE;
+        let mut roof = roofs[index].load(Ordering::Relaxed);
+        if roof == UNKNOWN_ROOF {
+            roof = (0..CHUNK_SIZE)
+                .rev()
+                .find(|&y| {
+                    let block = self.data.get_world(IVec3::new(p.x, bottom + y, p.z));
+                    block.is_solid() || matches!(block, BlockId::Water | BlockId::Lava)
+                })
+                .map_or(-1, |y| y as i8);
+            roofs[index].store(roof, Ordering::Relaxed);
+        }
+        bottom + i32::from(roof)
     }
 
     pub(super) fn refresh_allocation_size(&mut self) {
@@ -78,6 +115,12 @@ impl ResidentChunk {
     }
 }
 
+// A player edit may copy a worker-held immutable source within the source
+// budget. Each copy owns its own allocation charge and releases it on drop.
+impl Clone for ResidentChunk {
+    fn clone(&self) -> Self { Self::new(self.data.clone(), &self.allocations) }
+}
+
 impl Deref for ResidentChunk {
     type Target = GeneratedChunk;
     fn deref(&self) -> &GeneratedChunk {
@@ -86,7 +129,10 @@ impl Deref for ResidentChunk {
 }
 impl DerefMut for ResidentChunk {
     fn deref_mut(&mut self) -> &mut GeneratedChunk {
-        *self.torches.get_mut().unwrap_or_else(|e| e.into_inner()) = None;
+        self.torches.take();
+        if self.weather_roofs.take().is_some() {
+            self.allocations.0.fetch_sub(WEATHER_ROOF_BYTES, Ordering::Relaxed);
+        }
         &mut self.data
     }
 }
@@ -96,29 +142,49 @@ impl Drop for ResidentChunk {
         drop(std::mem::take(&mut self.data.blocks));
         drop(std::mem::take(&mut self.data.water_levels));
         drop(std::mem::take(&mut self.data.water_deficit));
-        self.allocations.0.fetch_sub(self.bytes, Ordering::Relaxed);
+        drop(std::mem::take(&mut self.data.water_motion));
+        self.allocations.0.fetch_sub(self.bytes + self.weather_roof_bytes(), Ordering::Relaxed);
     }
 }
 
 use super::{ChunkCache, ChunkKey};
 use glam::IVec3;
 
+const MAX_COVER_RADIUS: i32 = 8;
+const COVER_RANKS: usize = (MAX_COVER_RADIUS * MAX_COVER_RADIUS + 1) as usize;
+
+// The scheduling and repair loops share one view of reclaimable GPU memory.
+#[derive(Default)]
+pub(super) struct RequestBudget {
+    pending_growth: Option<usize>,
+    cover: Option<[usize; COVER_RANKS]>,
+}
+
 impl ChunkCache {
     /// Torch cells of every resident source within `chunk_radius` chunks of `center`.
-    pub(crate) fn torch_cells_within(&self, center: IVec3, chunk_radius: i32) -> Vec<(IVec3, BlockId)> {
-        let mut out = Vec::new();
+    pub(crate) fn append_torch_cells_within(
+        &self, center: IVec3, chunk_radius: i32,
+        include_chunk: impl Fn(IVec3) -> bool, out: &mut Vec<(IVec3, BlockId)>,
+    ) {
         for (coord, source) in &self.cpu_chunks {
-            if (*coord - center).abs().max_element() <= chunk_radius {
-                out.extend(source.torch_cells());
+            if (*coord - center).abs().max_element() <= chunk_radius && include_chunk(*coord) {
+                source.append_torch_cells(out);
             }
         }
-        out
     }
 
     pub(super) fn mesh_limit(&self) -> usize {
-        self.residency_limits
-            .1
-            .saturating_sub(GPU_STREAMING_RESERVE)
+        // Keep bounded growth room for nearby edited meshes. Ordinary
+        // streaming must not consume the last bytes then protect every
+        // displayed column from eviction, permanently blocking replacement.
+        let reserve=(self.residency_limits.1/8).max(GPU_STREAMING_RESERVE).min(64*MIB);
+        self.residency_limits.1.saturating_sub(reserve)
+    }
+
+    fn replacement_limit(&self,coord:IVec3)->usize {
+        if (coord-self.center_chunk).abs().max_element()<=1 && self.gpu_meshes.contains_key(&coord) {
+            self.residency_limits.1.saturating_sub(GPU_STREAMING_RESERVE)
+        } else {self.mesh_limit()}
     }
 
     pub(super) fn trim_lod_budget(&mut self) {
@@ -141,7 +207,7 @@ impl ChunkCache {
         )
     }
 
-    fn source_limit(&self) -> usize {
+    pub(super) fn source_limit(&self) -> usize {
         self.residency_limits
             .0
             .saturating_sub(super::terrain::reservation_bytes())
@@ -156,7 +222,7 @@ impl ChunkCache {
     /// alone exceed the budget, and protecting them left nothing to evict,
     /// so admission failed and the last ring regenerated forever.
     fn trim_sources_to(&mut self, limit: usize) {
-        if self.frozen {
+        if self.frozen || self.cpu_bytes() <= limit {
             return;
         }
         let mut victims: Vec<_> = self
@@ -216,8 +282,72 @@ impl ChunkCache {
         let own_growth=bytes.saturating_sub(self.gpu_meshes.get(&key.coord).map_or(0,|m|m.bytes));
         let post=self.gpu_bytes.saturating_sub(self.gpu_meshes.get(&key.coord).map_or(0,|m|m.bytes))
             .saturating_add(bytes).saturating_add(self.pending_gpu.projected_growth(self).saturating_sub(own_growth));
-        all<=self.residency_limits.1 && post<=self.mesh_limit() && self.quality_mesh_fits(key,bytes,true)
-            && self.supplemental_gpu_bytes().saturating_add(self.pending_gpu.supplemental_bytes(self))<=super::edit_proxies::BYTE_LIMIT
+        all<=self.residency_limits.1 && post<=self.replacement_limit(key.coord) && self.quality_mesh_fits(key,bytes,true)
+            && self.supplemental_gpu_bytes().saturating_sub(
+                if self.horizon_pin_coords.contains(&key.coord)||self.edit_proxies.contains(&key.coord) {
+                    self.gpu_meshes.get(&key.coord).map_or(0,|m|m.bytes)
+                } else {0}).saturating_add(self.pending_gpu.supplemental_bytes(self))<=super::edit_proxies::BYTE_LIMIT
+    }
+
+    fn is_near_surface_request(&self, key: ChunkKey) -> bool {
+        let settings = super::render_distance_settings();
+        let radius = if self.residency_limits.1 <= 512 << 20 {
+            settings.view_distance_chunks.min(MAX_COVER_RADIUS)
+        } else {
+            settings.lod_start_chunks.clamp(2, MAX_COVER_RADIUS)
+        };
+        let delta = (key.coord - self.center_chunk).as_i64vec3();
+        delta.x * delta.x + delta.z * delta.z <= i64::from(radius).pow(2)
+            && !self.gpu_meshes.contains_key(&key.coord)
+            && self.ordinary_source_interested(key.coord)
+    }
+
+    /// A saturated cache may consist entirely of published columns. Retire a
+    /// complete, distant column so new near terrain can publish. Removing the
+    /// whole bundle also lets the horizon cover its footprint again.
+    fn distant_cover(&self) -> impl Iterator<Item = ((i32, i32), i64, usize)> + '_ {
+        self.published_columns.iter().filter_map(move |(&column, members)| {
+            let dx = i64::from(column.0) - i64::from(self.center_chunk.x);
+            let dz = i64::from(column.1) - i64::from(self.center_chunk.z);
+            if dx.abs().max(dz.abs()) <= 2 || members.iter().any(|q| {
+                self.horizon_pin_coords.contains(q) || self.edit_proxies.contains(q)
+                    || self.quality_proxies.coords.contains(q) || self.pending_gpu.contains(q)
+            }) {
+                return None;
+            }
+            let bytes = members.iter().filter_map(|q| self.gpu_meshes.get(q)).map(|mesh| mesh.bytes).sum();
+            (bytes > 0).then_some((column, dx * dx + dz * dz, bytes))
+        })
+    }
+
+    fn retire_distant_cover(&mut self, key: ChunkKey, deficit: usize) -> bool {
+        if !self.is_near_surface_request(key) { return false; }
+        let rank = self.residency_rank(key.coord).1;
+        let mut candidates: Vec<_> = self.distant_cover()
+            .filter(|&(_, distance, _)| distance > rank)
+            .collect();
+        if candidates.iter().map(|&(_, _, bytes)| bytes).sum::<usize>() < deficit {
+            return false;
+        }
+        candidates.sort_unstable_by_key(|&(column, distance, _)| std::cmp::Reverse((distance, column)));
+        let mut freed = 0;
+        for (column, _, bytes) in candidates {
+            let members = self.published_columns.remove(&column).expect("selected published column");
+            self.arriving_columns.remove(&column);
+            for coord in members {
+                self.published_coords.remove(&coord);
+                if let Some(mesh) = self.gpu_meshes.remove(&coord) {
+                    self.gpu_bytes -= mesh.bytes;
+                    self.budget_deferred.insert(ChunkKey { coord, lod: mesh.lod }, mesh.bytes);
+                    self.gpu_evictions += 1;
+                }
+            }
+            freed += bytes;
+            if freed >= deficit { break; }
+        }
+        self.publication_dirty = true;
+        self.mark_mesh_set_changed();
+        true
     }
 
     pub(super) fn admit_mesh(&mut self, key: ChunkKey, bytes: usize) -> bool {
@@ -229,11 +359,11 @@ impl ChunkCache {
         let pending_growth=self.pending_gpu.projected_growth(self);
         if self.horizon_pin_coords.contains(&key.coord) || self.edit_proxies.contains(&key.coord) {
             let pinned=self.supplemental_gpu_bytes();
-            if pinned.saturating_add(self.pending_gpu.supplemental_bytes(self)).saturating_add(bytes)>super::edit_proxies::BYTE_LIMIT {
+            if pinned.saturating_sub(replaced).saturating_add(self.pending_gpu.supplemental_bytes(self)).saturating_add(bytes)>super::edit_proxies::BYTE_LIMIT {
                 self.budget_deferred.insert(key,bytes); return false;
             }
         }
-        let limit = self.mesh_limit();
+        let limit = self.replacement_limit(key.coord);
         // Never remove the displayed mesh before upload succeeds. Reject before
         // evicting anything if even the replacement overlap cannot fit.
         if bytes.saturating_add(replaced).saturating_add(pending) > self.residency_limits.1 {
@@ -259,16 +389,19 @@ impl ChunkCache {
                         && !self.published_coords.contains(*coord)
                         && !self.edit_proxies.contains(coord)
                         && !self.pending_gpu.contains(coord)
-                        && self.residency_rank(**coord) > rank
                 })
-                .map(|(&coord, mesh)| (self.residency_rank(coord), coord, mesh.bytes))
+                .filter_map(|(&coord, mesh)| {
+                    let candidate_rank = self.residency_rank(coord);
+                    (candidate_rank > rank).then_some((candidate_rank, coord, mesh.bytes))
+                })
                 .collect();
-            victims.sort_unstable_by(|a, b| b.0.cmp(&a.0));
             // Reject before evicting anything if the candidate still cannot fit.
-            if needed.saturating_sub(victims.iter().map(|v| v.2).sum::<usize>()) > limit {
+            let deficit = needed.saturating_sub(limit).saturating_sub(victims.iter().map(|v| v.2).sum());
+            if deficit > 0 && !self.retire_distant_cover(key, deficit) {
                 self.budget_deferred.insert(key, bytes);
                 return false;
             }
+            victims.sort_unstable_by(|a, b| b.0.cmp(&a.0));
             for (_, coord, size) in victims {
                 if self
                     .gpu_bytes
@@ -304,32 +437,41 @@ impl ChunkCache {
 
     pub(super) fn sync_residency_budget(&mut self) {
         let limits = limits();
-        if self.budget_center != self.center_chunk || self.residency_limits != limits {
+        if self.residency_limits.1 != limits.1 {
             self.budget_deferred.clear();
-            self.budget_center = self.center_chunk;
+        }
+        // Keep rejected mesh sizes across movement. Admission ranks them
+        // against the current center, so newly near terrain can still retry.
+        let old_lod = self.terrain_lod_settings();
+        if self.residency_limits.1 != limits.1 {
+            self.arena.set_budget(arena_budget(limits.1));
         }
         self.residency_limits = limits;
-        self.arena.set_budget(arena_budget(limits.1));
+        let new_lod = self.terrain_lod_settings();
+        if old_lod.lod_start_chunks != new_lod.lod_start_chunks || old_lod.lod_levels != new_lod.lod_levels {
+            self.publication_dirty = true;
+            self.refresh_published_columns();
+        }
         self.trim_lod_budget();
         self.evict_meshes_over_budget();
-        if self.cpu_bytes() > self.source_limit() {
-            self.trim_sources_to(self.source_limit());
-        }
+        self.trim_sources_to(self.source_limit());
     }
 
     pub(super) fn evict_meshes_over_budget(&mut self) {
         if self.frozen {
             return;
         }
-        if self.gpu_bytes.saturating_add(self.pending_gpu.bytes()) > self.mesh_limit() {
+        let pending_growth = self.pending_gpu.projected_growth(self);
+        if self.gpu_bytes.saturating_add(pending_growth) > self.mesh_limit() {
             // Requested membership may grow while the old column is still
             // published. Resource pressure must not silently unpublish it.
-            let mut victims: Vec<_> = self.gpu_meshes.keys()
-                .filter(|q| !self.horizon_pin_coords.contains(*q) && !self.published_coords.contains(*q) && !self.edit_proxies.contains(q) && !self.pending_gpu.contains(q))
-                .copied().collect();
-            victims.sort_unstable_by_key(|coord| std::cmp::Reverse(self.residency_rank(*coord)));
-            for coord in victims {
-                if self.gpu_bytes.saturating_add(self.pending_gpu.bytes()) <= self.mesh_limit() {
+            let mut victims: Vec<_> = self.gpu_meshes.iter()
+                .filter(|(q, mesh)| mesh.bytes > 0 && !self.horizon_pin_coords.contains(*q) && !self.published_coords.contains(*q) && !self.edit_proxies.contains(q) && !self.pending_gpu.contains(q))
+                .map(|(&coord, _)| (self.residency_rank(coord), coord))
+                .collect();
+            victims.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            for (_, coord) in victims {
+                if self.gpu_bytes.saturating_add(pending_growth) <= self.mesh_limit() {
                     break;
                 }
                 let mesh = self.gpu_meshes.remove(&coord).unwrap();
@@ -347,15 +489,37 @@ impl ChunkCache {
         }
     }
 
-    pub(super) fn budget_allows_request(&self, key: ChunkKey) -> bool {
-        self.budget_deferred.get(&key).is_none_or(|bytes| {
-            self.gpu_bytes.saturating_add(self.lod_meshes.bytes()).saturating_add(self.pending_gpu.bytes()).saturating_add(*bytes) <= self.residency_limits.1
-                && self
-                    .gpu_bytes
-                    .saturating_sub(self.gpu_meshes.get(&key.coord).map_or(0, |mesh| mesh.bytes))
-                    .saturating_add(*bytes).saturating_add(self.pending_gpu.projected_growth(self))
-                    <= self.mesh_limit()
-        })
+    pub(super) fn budget_allows_request(&self, key: ChunkKey, scan: &mut RequestBudget) -> bool {
+        let Some(&bytes) = self.budget_deferred.get(&key) else { return true; };
+        let replaced = self.gpu_meshes.get(&key.coord).map_or(0, |mesh| mesh.bytes);
+        let pending = self.pending_gpu.bytes();
+        if bytes > super::super::upload_staging::BYTE_LIMIT
+            || bytes.saturating_add(replaced).saturating_add(pending) > self.residency_limits.1
+        {
+            return false;
+        }
+        let growth = *scan.pending_growth.get_or_insert_with(|| self.pending_gpu.projected_growth(self));
+        let projected = self.gpu_bytes.saturating_sub(replaced).saturating_add(bytes).saturating_add(growth);
+        let deficit = projected.saturating_sub(self.replacement_limit(key.coord));
+        if deficit == 0 {
+            // Admission can trim the inactive LOD cache before allocating.
+            return self.gpu_bytes.saturating_add(pending).saturating_add(bytes) <= self.residency_limits.1;
+        }
+        if !self.is_near_surface_request(key) { return false; }
+
+        let cover = scan.cover.get_or_insert_with(|| {
+            // Bucket each
+            // column by the largest request rank that can reclaim it.
+            let mut bytes_by_rank = [0usize; COVER_RANKS];
+            for (_, distance, bytes) in self.distant_cover() {
+                bytes_by_rank[(distance - 1).min(COVER_RANKS as i64 - 1) as usize] += bytes;
+            }
+            for rank in (0..COVER_RANKS - 1).rev() {
+                bytes_by_rank[rank] += bytes_by_rank[rank + 1];
+            }
+            bytes_by_rank
+        });
+        deficit <= cover[self.residency_rank(key.coord).1 as usize]
     }
 }
 

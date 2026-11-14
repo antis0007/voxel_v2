@@ -6,6 +6,82 @@ use std::sync::{Mutex, OnceLock};
 pub fn option(name: &str) -> bool {
     std::env::var(name).is_ok_and(|v| v == "1")
 }
+
+/// Capture the ordinary loading display while its simulation is running.
+pub fn generation_capture() -> Option<std::path::PathBuf> {
+    if !option("VOXEL_CAPTURE_GENERATION") { return None; }
+    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    static TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+    let tick = (START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 2.0) as u64;
+    if TICK.swap(tick, std::sync::atomic::Ordering::Relaxed) == tick { return None; }
+    let root = std::env::var_os("VOXEL_CAPTURE_DIR").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "target/benchmark-frames".into());
+    Some(root.join(format!("generation-{tick:04}.png")))
+}
+
+/// Start the real-input sprint replay on naturally generated Badlands.
+pub fn place_badlands_sprint(world: &World, player: &mut Player) -> bool {
+    use engine_worldgen::landscape::Biome;
+    let cfg = world.sample_config();
+    let mut offsets: Vec<_> = (-8_i32..=8).flat_map(|z| (-8_i32..=8).map(move |x| (x, z))).collect();
+    offsets.sort_by_key(|&(x, z)| x * x + z * z);
+    for (dx, dz) in offsets {
+        let (x, z) = (568 + dx * 256, -410 + dz * 256);
+        if engine_worldgen::landscape::sample(&cfg, x, z).biome != Biome::Badlands {
+            continue;
+        }
+        let y = world.terrain_height_at(x, z) + 1;
+        if y <= cfg.water_level() || (0..=2).any(|dy| world.get(IVec3::new(x, y + dy, z)).is_solid()) {
+            continue;
+        }
+        player.pos = Vec3::new(x as f32 + 0.5, y as f32, z as f32 + 0.5);
+        player.precise_pos = player.pos.as_dvec3();
+        player.vel = Vec3::ZERO;
+        player.yaw = std::f32::consts::FRAC_PI_2;
+        player.pitch = 0.0;
+        player.flying = false;
+        println!("[badlands-sprint] seed={} generator={} start={:?} facing=east",
+            world.seed, world.generator_version, player.pos);
+        return true;
+    }
+    false
+}
+
+#[derive(Default)]
+pub struct SprintRoute {
+    progress_x: Option<f32>,
+    blocked_seconds: f32,
+    detour_seconds: f32,
+    attempts: u32,
+}
+
+impl SprintRoute {
+    pub fn steer(&mut self, player: &Player, input: &mut crate::player::Input, dt: f32) {
+        // Keep holding sprint east. Skirt walls using the normal strafe and
+        // jump controls so a natural obstacle cannot turn this into an idle run.
+        if self.detour_seconds > 0.0 {
+            self.detour_seconds -= dt;
+            input.right = self.attempts % 8 < 4;
+            input.left = !input.right;
+            input.jump |= player.vel.x < 1.0;
+            self.progress_x = Some(player.pos.x);
+            return;
+        }
+        let progress_x = *self.progress_x.get_or_insert(player.pos.x);
+        if player.pos.x - progress_x >= 0.5 {
+            self.progress_x = Some(player.pos.x);
+            self.blocked_seconds = 0.0;
+            return;
+        }
+        self.blocked_seconds += dt;
+        if self.blocked_seconds >= 0.4 {
+            self.blocked_seconds = 0.0;
+            self.detour_seconds = 1.8;
+            self.attempts += 1;
+            println!("[badlands-sprint] detour={} position={:?}", self.attempts, player.pos);
+        }
+    }
+}
 pub fn fixed_exposure() -> Option<f32> {
     static VALUE: OnceLock<Option<f32>> = OnceLock::new();
     *VALUE.get_or_init(|| std::env::var("VOXEL_TERRAIN_EXPOSURE").ok()
@@ -52,6 +128,7 @@ fn flood(player: &Player, world: &mut World, elapsed: f32,
 pub fn frame(player: &mut Player, world: &mut World, elapsed: f32,
     dirty_blocks: &mut std::collections::HashSet<IVec3>,
     dirty_chunks: &mut std::collections::HashSet<IVec3>) {
+    material_distance_fixture(player, world, dirty_chunks);
     static ROUTE: OnceLock<bool> = OnceLock::new();
     static EDIT: OnceLock<bool> = OnceLock::new();
     static FLOOD: OnceLock<bool> = OnceLock::new();
@@ -127,4 +204,38 @@ pub fn frame(player: &mut Player, world: &mut World, elapsed: f32,
         player.yaw += yaw;
         player.pitch += pitch;
     }
+}
+
+/// Physical-scale material test bed for generated benchmark worlds only.
+fn material_distance_fixture(player: &mut Player, world: &mut World,
+    dirty_chunks: &mut std::collections::HashSet<IVec3>) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if !*ENABLED.get_or_init(|| option("VOXEL_MATERIAL_DISTANCE_REVIEW")) { return; }
+    static PLACED: OnceLock<i32> = OnceLock::new();
+    let scale = world.voxel_scale.meters();
+    let ground = *PLACED.get_or_init(|| {
+        let ground = world.terrain_height_at(0, 0);
+        let cell = |m: f32| (m / scale).round() as i32;
+        let mut edits = Vec::new();
+        for z in cell(-64.0)..cell(8.0) {
+            for x in cell(-12.0)..cell(12.0) {
+                let block = if x < cell(-4.0) { BlockId::Stone }
+                    else if x < cell(4.0) { BlockId::StoneBricks }
+                    else { BlockId::Cobblestone };
+                edits.push((IVec3::new(x, ground, z), block));
+                let wall = x == cell(-12.0) || x == cell(4.0) || z == cell(-48.0);
+                for y in 1..=cell(3.0) {
+                    edits.push((IVec3::new(x, ground + y, z),
+                        if wall && y <= cell(1.0) { block } else { BlockId::Air }));
+                }
+            }
+        }
+        world.set_many(&edits);
+        for &(position, _) in &edits {
+            crate::world::mark_chunk_and_neighbors_dirty(dirty_chunks, position);
+        }
+        eprintln!("[material-distance-review] scale_m={scale} ground={ground} edits={} lanes=stone,stonebrick,cobblestone length_m=72", edits.len());
+        ground
+    });
+    player.pos.y = ground as f32 + 1.0 + 0.15 / scale;
 }

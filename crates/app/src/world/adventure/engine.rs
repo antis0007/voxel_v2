@@ -15,18 +15,21 @@ const KNOCK_DAMAGE: f32 = 14.0;
 const PICKUP_RANGE: f32 = 1.6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Module {
     Brace,
     Cutter,
     Launcher,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Action {
     Swing,
     Shove,
     Volley,
 }
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct State {
     pub run: Option<Run<Action>>,
     pub installed: Option<Module>,
@@ -325,6 +328,7 @@ pub(super) fn tick(
                     },
                     bore_budget: 0,
                     trail_timer: 0.0,
+                    flight: None,
                     splashed: false,
                     follow: None,
                 });

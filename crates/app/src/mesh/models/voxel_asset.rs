@@ -5,6 +5,58 @@
 //! The model fills one metre cell; +X is its front or arm direction.
 use super::Model;
 use glam::{IVec3, Quat, Vec3};
+use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, LazyLock, RwLock, atomic::{AtomicBool, Ordering}}};
+
+pub type Previews = BTreeMap<String, Arc<VoxelModel>>;
+static PREVIEWS: LazyLock<RwLock<Previews>> = LazyLock::new(|| RwLock::new(BTreeMap::new()));
+static LABELS: LazyLock<RwLock<BTreeSet<String>>> = LazyLock::new(|| RwLock::new(BTreeSet::new()));
+static PREVIEW_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub fn previews() -> Previews { PREVIEWS.read().unwrap().clone() }
+pub fn restore_previews(value: Previews) {
+    let active = !value.is_empty();
+    *PREVIEWS.write().unwrap() = value;
+    PREVIEW_ACTIVE.store(active, Ordering::Relaxed);
+}
+pub fn loaded_assets() -> Vec<String> { LABELS.read().unwrap().iter().cloned().collect() }
+
+/// Validate the entire small model before publishing. No file reads, partial
+/// parsing, shader changes or accumulated leaked models on repeated edits.
+pub fn preview(asset: &str, source: &str) -> Result<usize, String> {
+    if !LABELS.read().unwrap().contains(asset) { return Err("Model is not loaded in this scene; inspect models for available names".into()); }
+    if source.len() > 16_384 || source.lines().next() != Some("size 8 8 8") { return Err("Expected size 8 8 8 and at most 16384 bytes".into()); }
+    let mut palette = BTreeSet::new();
+    let mut layers = BTreeSet::new();
+    let mut rows = None;
+    for line in source.lines().skip(1).map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let words: Vec<_> = line.split_whitespace().collect();
+        match words[0] {
+            "p" if words.len() == 4 => {
+                let key = words[1];
+                let glow = words[3].parse::<f32>().map_err(|_| "Invalid model glow")?;
+                if key.len() != 1 || key == "." || key == "#" || !key.is_ascii() || !palette.insert(key.as_bytes()[0])
+                    || words[2].len() != 6 || u32::from_str_radix(words[2], 16).is_err()
+                    || !glow.is_finite() || !(0.0..=8.0).contains(&glow) { return Err("Invalid or duplicate model palette entry".into()); }
+            }
+            "y" if words.len() == 2 => {
+                let layer = words[1].parse::<u8>().map_err(|_| "Invalid model layer")?;
+                if rows.is_some_and(|n| n != 8) || layer >= 8 || !layers.insert(layer) { return Err("Incomplete or duplicate model layer".into()); }
+                rows = Some(0);
+            }
+            _ => {
+                if words.len() != 1 || line.len() != 8 || rows.is_none_or(|n| n >= 8)
+                    || !line.bytes().all(|c| c == b'.' || palette.contains(&c)) { return Err("Invalid voxel row or unknown palette key".into()); }
+                rows = rows.map(|n| n + 1);
+            }
+        }
+    }
+    if rows != Some(8) { return Err("A complete eight-row layer is required".into()); }
+    let model = VoxelModel::parse(source, "");
+    let count = model.voxels.len();
+    if count == 0 { return Err("Model must contain at least one voxel".into()); }
+    PREVIEWS.write().unwrap().insert(asset.into(), Arc::new(model));
+    PREVIEW_ACTIVE.store(true, Ordering::Relaxed);
+    Ok(count)
+}
 
 pub const PER_METRE: i32 = 8;
 
@@ -19,6 +71,7 @@ pub struct Voxel {
 
 pub struct VoxelModel {
     voxels: Vec<Voxel>,
+    label: String,
 }
 
 const FACES: [IVec3; 6] = [IVec3::X, IVec3::NEG_X, IVec3::Y, IVec3::NEG_Y, IVec3::Z, IVec3::NEG_Z];
@@ -37,6 +90,26 @@ fn channel(c: u8) -> f32 {
 }
 
 impl VoxelModel {
+    /// Dev-panel overrides are scoped to one playtest process and asset name.
+    pub fn with_preview(source: &str, label: &str) -> Self {
+        LABELS.write().unwrap().insert(label.into());
+        let name = std::env::var("VOXEL_FORGE_MODEL").ok();
+        if name.as_deref() == Some(label)
+            && let Some(file) = std::env::var_os("VOXEL_FORGE_MODEL_FILE")
+            && std::fs::metadata(&file).is_ok_and(|meta| meta.is_file() && meta.len() <= 16_384)
+            && let Ok(text) = std::fs::read_to_string(file)
+            && text.lines().next() == Some("size 8 8 8")
+        {
+            let model = Self::parse(&text, label);
+            if !model.voxels.is_empty() && model.voxels.iter().all(|v| {
+                v.cell.min_element() >= 0 && v.cell.max_element() < PER_METRE
+            }) {
+                return model;
+            }
+        }
+        Self::parse(source, label)
+    }
+
     pub fn parse(source: &str, label: &str) -> Self {
         let mut palette: Vec<(char, [f32; 3], f32)> = Vec::new();
         let mut voxels = Vec::new();
@@ -80,12 +153,16 @@ impl VoxelModel {
                 v.exposed[i] = !cells.contains(&(v.cell + *d));
             }
         }
-        Self { voxels }
+        Self { voxels, label: label.into() }
     }
 
     /// Draws the model in the cell whose minimum corner is `origin` (metres),
     /// rotated about the cell centre. Faces between filled voxels are skipped.
     pub fn draw(&self, mesh: &mut Model, origin: Vec3, rotation: Quat, tint: &Tint) {
+        if PREVIEW_ACTIVE.load(Ordering::Relaxed) && !self.label.is_empty() {
+            let preview = PREVIEWS.read().unwrap().get(&self.label).cloned();
+            if let Some(preview) = preview { preview.draw(mesh, origin, rotation, tint); return; }
+        }
         let unit = 1.0 / PER_METRE as f32;
         let centre = Vec3::splat(0.5);
         for v in &self.voxels {

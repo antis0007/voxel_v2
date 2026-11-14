@@ -52,10 +52,23 @@ pub struct Brew {
     pub count: u32,
 }
 
+/// A potion a cache may hold when first opened; `weight` is relative.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Found {
+    pub output: FoodKind,
+    pub weight: u32,
+    pub count: u32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Brewing {
     pub seconds: f32,
     pub recipes: Vec<Brew>,
+    /// Share of caches that hold a potion, 0..1.
+    #[serde(default)]
+    pub found_chance: f32,
+    #[serde(default)]
+    pub found: Vec<Found>,
 }
 
 fn load<T: Default + serde::de::DeserializeOwned>(name: &str, text: &str) -> T {
@@ -104,9 +117,23 @@ mod tests {
     fn brewing_ron_round_trips() {
         round_trips(&*BREWING, BREWING_RON, "\n(\n");
         assert!(BREWING.seconds > 0.0 && !BREWING.recipes.is_empty());
+        let acts = |kind| {
+            crate::world::inventory::food::get(kind).is_some_and(|f| !f.effects.is_empty() || f.health > 0.0)
+        };
         for row in &BREWING.recipes {
             assert!(row.output.is_potion(), "{row:?}");
-            assert!(crate::world::inventory::food::get(row.output).is_some_and(|f| !f.effects.is_empty()));
+            assert!(acts(row.output), "{row:?}");
+        }
+        assert!((0.0..=1.0).contains(&BREWING.found_chance));
+        for row in &BREWING.found {
+            assert!(row.output.is_potion() && acts(row.output) && row.weight > 0 && row.count > 0, "{row:?}");
+        }
+    }
+
+    #[test]
+    fn every_potion_is_brewable() {
+        for kind in crate::world::inventory::FoodKind::ALL.into_iter().filter(|k| k.is_potion()) {
+            assert!(BREWING.recipes.iter().any(|r| r.output == kind), "{kind:?}");
         }
     }
 

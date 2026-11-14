@@ -29,6 +29,25 @@ fn break_time_scales_with_hardness_and_tool_speed() {
 }
 
 #[test]
+fn axes_cut_timber_and_shovels_scoop_soil() {
+    let pick = Tool::of(Item::Tool(6)).expect("wooden pickaxe");
+    let axe = Tool::of(Item::Tool(12)).expect("wooden axe");
+    let shovel = Tool::of(Item::Tool(15)).expect("wooden shovel");
+    assert!(survival_break(BlockId::Log, axe).seconds < survival_break(BlockId::Log, pick).seconds);
+    assert!(survival_break(BlockId::Log, axe).drops);
+    assert!(survival_break(BlockId::Dirt, shovel).seconds < survival_break(BlockId::Dirt, pick).seconds);
+    assert!(survival_break(BlockId::Dirt, shovel).drops);
+    assert!(survival_break(BlockId::Stone, pick).seconds < survival_break(BlockId::Stone, shovel).seconds);
+    assert!(survival_break(BlockId::Stone, pick).drops);
+    assert!(!survival_break(BlockId::IronOre, shovel).drops);
+    assert!(!survival_break(BlockId::IronOre, axe).drops);
+    assert_eq!(table().tools.iter().filter(|row| matches!(row.item, Item::Tool(12..=17))).count(), 6);
+    assert_eq!(crate::world::progression::table::max_durability(Item::Tool(12)), Some(59));
+    assert_eq!(crate::world::progression::table::max_durability(Item::Tool(14)), Some(250));
+    assert_eq!(crate::world::progression::table::max_durability(Item::Tool(17)), Some(250));
+}
+
+#[test]
 fn wrong_tool_class_is_slower() {
     let (bore, sword) = (bronze_bore(), copper_sword());
     assert!(survival_break(BlockId::Stone, sword).seconds > survival_break(BlockId::Stone, bore).seconds);
@@ -119,7 +138,7 @@ fn under_tier_harvest_removes_the_cell_without_a_drop() {
         world.set(cell, BlockId::IronOre);
         assert_eq!(world.get(cell), BlockId::IronOre);
         let before = (world.expedition.resources[2], world.inventory.count_item(iron));
-        assert!(harvest(&mut world, cell, Some(tool), &mut blocks, &mut chunks));
+        assert!(harvest(&mut world, cell, Some(tool), &mut blocks, &mut chunks, None, Vec3::NEG_Z));
         assert_eq!(world.get(cell), BlockId::Air);
         let after = (world.expedition.resources[2], world.inventory.count_item(iron));
         assert_eq!(after != before, drops, "{tool:?}: {before:?} -> {after:?}");
@@ -151,4 +170,19 @@ fn dump_mining_ron() {
         .expect("serialise mining table");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/mining.ron");
     std::fs::write(path, format!("{MINING_HEADER}{text}\n")).expect("write assets/mining.ron");
+}
+
+#[test]
+fn the_cell_breaks_on_a_tool_strike() {
+    for needed in [0.05f32, 0.2, 0.3, 0.55, 1.0, 2.37, 7.5] {
+        let at_break = super::stroke_phase(needed, needed);
+        assert!((at_break - super::strike_phase()).abs() < 1e-3, "{needed}: {at_break}");
+        assert!(super::stroke_phase(0.0, needed) < 1e-6, "{needed} should start at the top of a stroke");
+        let strokes = (needed / super::strike_seconds() + 1.0 - super::strike_phase()).round().max(1.0);
+        let period = needed / (strokes - 1.0 + super::strike_phase());
+        // Quick breaks get one fast stroke; longer ones keep close to the normal rhythm.
+        if needed >= super::strike_seconds() {
+            assert!(period > super::strike_seconds() * 0.6 && period < super::strike_seconds() * 1.5, "{needed}: {period}");
+        }
+    }
 }

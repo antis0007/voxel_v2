@@ -1,18 +1,18 @@
 //! Chooses which globe tiles to draw and which to bake next.
 
-use super::tile::{MAX_LEVEL, TileId, projected_error_px};
-use glam::DVec3;
+use super::tile::{MAX_LEVEL, TileId, projected_error_in_view, projected_error_px};
+use glam::{DVec3, Vec4};
 use std::collections::HashSet;
 
-const SPLIT_PX: f64 = 1.5;
-/// Lower merge threshold so a tile hovering near 1.5 px does not flicker between levels.
-const MERGE_PX: f64 = 0.75;
+const SPLIT_PX: f64 = 1.0;
+/// A separate merge threshold prevents oscillation around one pixel.
+const MERGE_PX: f64 = 0.5;
 const MAX_WANTED: usize = 256;
 
 #[derive(Default)]
 pub struct Selection {
     pub draw: Vec<TileId>,
-    /// Missing children of tiles that want to split, nearest first.
+    /// Missing children of tiles that want to split, largest visible error first.
     pub wanted: Vec<TileId>,
 }
 
@@ -20,9 +20,10 @@ pub struct Selection {
 #[derive(Default)]
 pub struct SelectScratch {
     split_last_frame: HashSet<TileId>,
-    frontier: Vec<TileId>,
-    next: Vec<TileId>,
-    children: Vec<TileId>,
+    frontier: Vec<(TileId, f64)>,
+    next: Vec<(TileId, f64)>,
+    children: Vec<(TileId, f64, bool)>,
+    wanted_scores: Vec<(TileId, f64)>,
 }
 
 impl SelectScratch {
@@ -58,7 +59,21 @@ pub fn select_into(
     scratch: &mut SelectScratch,
     out: &mut Selection,
 ) {
-    let SelectScratch { split_last_frame, frontier, next, children } = scratch;
+    select_into_with_maturity(ready, &|_| true, eye_body, focal_px, &[], max_draw, scratch, out);
+}
+
+/// A new tile first converges to its parent before it can refine again.
+pub fn select_into_with_maturity(
+    ready: &dyn Fn(TileId) -> bool,
+    mature: &dyn Fn(TileId) -> bool,
+    eye_body: DVec3,
+    focal_px: f64,
+    planes: &[Vec4],
+    max_draw: usize,
+    scratch: &mut SelectScratch,
+    out: &mut Selection,
+) {
+    let SelectScratch { split_last_frame, frontier, next, children, wanted_scores } = scratch;
     split_last_frame.clear();
     for t in &out.draw {
         let mut p = t.parent();
@@ -72,50 +87,98 @@ pub fn select_into(
     let (draw, wanted) = (&mut out.draw, &mut out.wanted);
     draw.clear();
     wanted.clear();
-    let visible = |t: &TileId| projected_error_px(*t, eye_body, focal_px) > 0.0;
+    let visible = |t: TileId| {
+        let error = projected_error_in_view(t, eye_body, focal_px, planes);
+        (error > 0.0).then_some((t, error))
+    };
     frontier.clear();
-    frontier.extend((0..6).map(TileId::root).filter(visible));
+    frontier.extend((0..6).map(TileId::root).filter_map(visible));
     while !frontier.is_empty() {
         next.clear();
+        frontier.sort_unstable_by(|(a, ea), (b, eb)| eb.total_cmp(ea).then(a.cmp(b)));
         let mut pending = frontier.len();
-        for &tile in frontier.iter() {
+        for &(tile, err) in frontier.iter() {
             pending -= 1;
-            let err = projected_error_px(tile, eye_body, focal_px);
             let threshold = if split_last_frame.contains(&tile) { MERGE_PX } else { SPLIT_PX };
             if err <= threshold || tile.level >= MAX_LEVEL {
                 draw.push(tile);
                 continue;
             }
             children.clear();
-            children.extend(tile.children().into_iter().filter(visible));
-            let all_ready = children.iter().all(|c| ready(*c));
+            // Keep the split resident across camera turns. Otherwise revealing
+            // one unready sibling makes every already-drawn child merge back.
+            children.extend(tile.children().into_iter().filter_map(|child| {
+                let error = projected_error_in_view(child, eye_body, focal_px, planes);
+                // Keep siblings a turn could reveal. A tile beyond the limb
+                // needs camera movement before it can enter the view.
+                if error <= 0.0 && (planes.is_empty() || projected_error_px(child, eye_body, focal_px) <= 0.0) {
+                    return None;
+                }
+                Some((child, error, ready(child)))
+            }));
+            let all_ready = children.iter().all(|&(_, _, ready)| ready);
+            let visible_count = children.iter().filter(|&&(_, error, _)| error > 0.0).count();
             // Splitting past the cap would drop coverage, so the parent stays instead.
-            let fits = draw.len() + pending + next.len() + children.len() <= max_draw;
-            if all_ready && fits {
-                next.extend_from_slice(children);
+            let fits = draw.len() + pending + next.len() + visible_count <= max_draw;
+            if all_ready && fits && visible_count != 0 && mature(tile) {
+                next.extend(children.iter().filter_map(|&(child, error, _)| {
+                    (error > 0.0).then_some((child, error))
+                }));
             } else {
-                wanted.extend(children.iter().copied().filter(|c| !ready(*c)));
+                if fits && visible_count != 0 {
+                    wanted.extend(children.iter().filter_map(|&(child, _, ready)| (!ready).then_some(child)));
+                }
                 draw.push(tile);
             }
         }
         std::mem::swap(frontier, next);
     }
-    let dist = |t: &TileId| t.centre_body().distance(eye_body);
-    // Unstable: a stable sort allocates a merge buffer; the id tie-break keeps the order total.
-    wanted.sort_unstable_by(|a, b| dist(a).total_cmp(&dist(b)).then(a.cmp(b)));
+    // Resolve the coarsest visible pixels first. Distance ordering repeatedly
+    // refined the centre while multi-pixel patches elsewhere stayed on roots.
+    // Score once per tile instead of repeating projection math inside the sort.
+    wanted_scores.clear();
+    wanted_scores.extend(wanted.iter().copied().map(|tile| {
+        let visible_error = projected_error_in_view(tile, eye_body, focal_px, planes);
+        let score = if visible_error > 0.0 { visible_error }
+            else { projected_error_px(tile, eye_body, focal_px) * 0.05 };
+        (tile, score)
+    }));
+    wanted_scores.sort_unstable_by(|(a, ea), (b, eb)| eb.total_cmp(ea).then(a.cmp(b)));
+    wanted.clear();
+    wanted.extend(wanted_scores.iter().map(|(tile, _)| *tile));
     wanted.dedup();
     wanted.truncate(MAX_WANTED);
 }
 
-/// Fills `out` with `draw` and each draw tile's parent, sorted for binary search.
+/// Fills `out` with `draw` and all ancestors, sorted for binary search.
 ///
 /// Parents stay resident so a merge back one level draws at once instead of waiting a bake.
 pub fn keep_set(draw: &[TileId], out: &mut Vec<TileId>) {
     out.clear();
     out.extend_from_slice(draw);
-    out.extend(draw.iter().filter_map(|t| t.parent()));
+    // Every ancestor is a valid fallback after a fast retreat or view change.
+    // Keeping only the immediate parent could evict the root under a fine tree.
+    out.extend((0..6).map(TileId::root));
+    for tile in draw {
+        let mut ancestor = tile.parent();
+        while let Some(parent) = ancestor {
+            out.push(parent);
+            // Retain the entire split so a sibling entering the view can
+            // render immediately instead of triggering another bake.
+            out.extend(parent.children());
+            ancestor = parent.parent();
+        }
+    }
     out.sort_unstable();
     out.dedup();
+}
+
+pub fn detail_factor(id: TileId, eye: DVec3, focal_px: f64) -> f32 {
+    let Some(parent) = id.parent() else { return 1.0; };
+    // At a merge the children equal the raw parent, while that parent's
+    // own parent is at least twice the projected size and fully detailed.
+    let t = ((projected_error_px(parent,eye,focal_px)-MERGE_PX)/(SPLIT_PX-MERGE_PX)).clamp(0.0,1.0);
+    (t*t*(3.0-2.0*t)) as f32
 }
 
 /// Fills `out` with resident tiles outside sorted `keep`, farthest from the eye first.
@@ -155,7 +218,8 @@ mod tests {
 
     #[test]
     fn tiles_behind_the_limb_are_never_drawn_or_wanted() {
-        let eye = DVec3::new(0.0, 0.0, chart::RADIUS_M + 400_000.0);
+        // Tile error is cell size over distance, so a radius multiple keeps this tree at any planet size.
+        let eye = DVec3::new(0.0, 0.0, chart::RADIUS_M * 20.6);
         let all = |_: TileId| true;
         let s = select(&all, &[], eye, 900.0, 512);
         // The four side roots straddle the limb with centres exactly on it; they stay for coverage.

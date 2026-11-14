@@ -3,6 +3,7 @@
 //! channel that the arena drains once per frame, after the previous submit, so a
 //! freed range is never rewritten while an unsubmitted draw still reads it.
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 const VERTEX_BYTES: u64 = std::mem::size_of::<crate::mesh::Vertex3>() as u64;
@@ -18,21 +19,26 @@ struct ArenaPage {
     indices: wgpu::Buffer,
     vertex_alloc: RangeAllocator,
     index_alloc: RangeAllocator,
+    empty_since: Option<Instant>,
 }
 
 impl ArenaPage {
     fn take(&mut self, page: u32, vertex_bytes: u64, index_bytes: u64) -> Option<ArenaRange> {
+        if !self.vertex_alloc.may_fit(vertex_bytes) || !self.index_alloc.may_fit(index_bytes) {
+            return None;
+        }
         let vertex_offset = self.vertex_alloc.alloc(vertex_bytes)?;
         let Some(index_offset) = self.index_alloc.alloc(index_bytes) else {
             self.vertex_alloc.free(vertex_offset, vertex_bytes);
             return None;
         };
+        self.empty_since = None;
         Some(ArenaRange { page, vertex_offset, vertex_bytes, index_offset, index_bytes })
     }
 }
 
 /// Pages of shared vertex and index buffers. Pages are created on demand up to
-/// the byte budget and kept; their ranges come back when leases drop.
+/// the byte budget; unused trailing pages are released after leases drop.
 pub(super) struct MeshArena {
     pages: Vec<ArenaPage>,
     budget: u64,
@@ -96,8 +102,8 @@ impl MeshArena {
     /// Page creation has its own error scopes: an out-of-memory page must be a
     /// rejected upload, not wgpu's uncaptured-error panic.
     fn create_page(device: &wgpu::Device, vertex_bytes: u64, index_bytes: u64) -> Option<ArenaPage> {
-        device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let buffer = |label, size, usage: wgpu::BufferUsages| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -108,8 +114,8 @@ impl MeshArena {
         };
         let vertices = buffer("chunk mesh arena vertices", vertex_bytes, wgpu::BufferUsages::VERTEX);
         let indices = buffer("chunk mesh arena indices", index_bytes, wgpu::BufferUsages::INDEX);
-        let mut validation = device.pop_error_scope();
-        let mut memory = device.pop_error_scope();
+        let mut validation = validation_scope.pop();
+        let mut memory = memory_scope.pop();
         // Native wgpu resolves scopes immediately; a still-pending scope is
         // treated as success and any late error surfaces through the upload Check.
         for scope in [&mut validation, &mut memory] {
@@ -125,17 +131,39 @@ impl MeshArena {
             indices,
             vertex_alloc: RangeAllocator::new(vertex_bytes, VERTEX_BYTES),
             index_alloc: RangeAllocator::new(index_bytes, INDEX_BYTES),
+            empty_since: None,
         })
     }
 
     /// Return dropped leases to their pages. Call only while no encoder that
     /// reads the arena is open (between a frame's submit and the next encode).
     pub(super) fn begin_frame(&mut self) {
-        while let Ok(range) = self.freed.try_recv() {
+        // A reset can return thousands of ranges at once. Unprocessed ranges
+        // remain allocated and cannot be reused until a later maintenance pass.
+        let started = Instant::now();
+        for serviced in 0..128 {
+            if serviced > 0 && started.elapsed() >= Duration::from_micros(250) { break; }
+            let Ok(range) = self.freed.try_recv() else { break; };
             if let Some(page) = self.pages.get_mut(range.page as usize) {
                 page.vertex_alloc.free(range.vertex_offset, range.vertex_bytes);
                 page.index_alloc.free(range.index_offset, range.index_bytes);
             }
+        }
+        let now = Instant::now();
+        for page in &mut self.pages {
+            if page.vertex_alloc.used() == 0 && page.index_alloc.used() == 0 {
+                page.empty_since.get_or_insert(now);
+            } else { page.empty_since = None; }
+        }
+        // Preserve stable page indices and avoid allocating 144 MiB again on
+        // the next edited mesh. Budget reductions still reclaim empty tails.
+        // Driver destruction is outside our time control; retire at most one
+        // pair of buffers per pass, preserving all remaining page indices.
+        if let Some(page) = self.pages.last() {
+            let Some(since) = page.empty_since else { return; };
+            let allocated: u64 = self.pages.iter().map(|p|p.vertex_alloc.capacity()+p.index_alloc.capacity()).sum();
+            if allocated <= self.budget && now.duration_since(since) < Duration::from_secs(5) { return; }
+            self.pages.pop();
         }
     }
 
@@ -143,8 +171,11 @@ impl MeshArena {
         self.pages.get(page as usize).map(|p| (&p.vertices, &p.indices))
     }
 
-    /// Occupancy for tests and fragmentation diagnosis; not shown in the HUD.
-    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn capacity_bytes(&self) -> u64 {
+        self.pages.iter().map(|page| page.vertices.size() + page.indices.size()).sum()
+    }
+
+    /// Includes ranges queued for release until the allocator drains them.
     pub(super) fn used_bytes(&self) -> u64 {
         self.pages.iter().map(|p| p.vertex_alloc.used() + p.index_alloc.used()).sum()
     }
@@ -156,6 +187,9 @@ pub(super) struct RangeAllocator {
     capacity: u64,
     align: u64,
     used: u64,
+    // Conservative upper bound. Allocation cannot enlarge the actual maximum;
+    // a failed first-fit scan refreshes this to the exact largest free range.
+    largest_free_bound: u64,
     /// Free ranges, offset -> length; neighbours are always coalesced.
     free: BTreeMap<u64, u64>,
 }
@@ -165,19 +199,30 @@ impl RangeAllocator {
         let align = align.max(1);
         let capacity = capacity / align * align;
         let free = if capacity > 0 { BTreeMap::from([(0, capacity)]) } else { BTreeMap::new() };
-        Self { capacity, align, used: 0, free }
+        Self { capacity, align, used: 0, largest_free_bound: capacity, free }
     }
 
     fn round(&self, size: u64) -> u64 {
         size.div_ceil(self.align) * self.align
     }
 
+    fn may_fit(&self, size: u64) -> bool {
+        self.round(size) <= self.largest_free_bound.min(self.capacity - self.used)
+    }
+
     pub(super) fn alloc(&mut self, size: u64) -> Option<u64> {
-        if size == 0 {
+        if size == 0 || !self.may_fit(size) {
             return None;
         }
         let size = self.round(size);
-        let (&offset, &len) = self.free.iter().find(|(_, len)| **len >= size)?;
+        let mut largest = 0;
+        let Some((&offset, &len)) = self.free.iter().find(|(_, len)| {
+            largest = largest.max(**len);
+            **len >= size
+        }) else {
+            self.largest_free_bound = largest;
+            return None;
+        };
         self.free.remove(&offset);
         if len > size {
             self.free.insert(offset + size, len - size);
@@ -202,6 +247,7 @@ impl RangeAllocator {
         }
         self.free.insert(start, len);
         self.used -= size;
+        self.largest_free_bound = self.largest_free_bound.max(len);
     }
 
     #[cfg_attr(not(test), allow(dead_code))]

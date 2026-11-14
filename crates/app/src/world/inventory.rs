@@ -2,12 +2,23 @@
 //! 27-slot backpack, 4 equipment slots, 2×2 hand-crafting grid, and lossless transfers.
 use super::{BlockId, expedition, factory};
 mod crafting;
+mod selected_crafting;
+#[cfg(test)]
+mod selected_crafting_tests;
 pub mod datapack;
 mod descriptions;
 pub mod food;
 pub mod resources;
 pub mod sorting;
+pub mod stacks;
+#[cfg(test)]
+mod qol_tests;
+#[cfg(test)]
+mod recipe_selection_tests;
 pub use crafting::CraftBlocker;
+pub use selected_crafting::MAX_SELECTED_BATCHES;
+#[cfg(feature = "multiplayer")]
+pub use selected_crafting::selected_recipe_key;
 
 pub const HOTBAR_SLOTS: usize = 9;
 pub const PACK_SLOTS: usize = 27;
@@ -76,6 +87,16 @@ pub enum ArmorTier {
     Copper = 1,
     Steel = 2,
     Lumen = 3,
+    /// Movement rigs: legs and feet only. Light armour that unlocks traversal.
+    Kinetic = 4,
+    Ballast = 5,
+    Burner = 6,
+    Induction = 7,
+    Slime = 8,
+    Glider = 9,
+    Survey = 10,
+    /// Crystal lenses that show each rune in its element's colour.
+    Runesight = 11,
 }
 
 impl ArmorTier {
@@ -84,9 +105,32 @@ impl ArmorTier {
             1 => Some(Self::Copper),
             2 => Some(Self::Steel),
             3 => Some(Self::Lumen),
+            4 => Some(Self::Kinetic),
+            5 => Some(Self::Ballast),
+            6 => Some(Self::Burner),
+            7 => Some(Self::Induction),
+            8 => Some(Self::Slime),
+            9 => Some(Self::Glider),
+            10 => Some(Self::Survey),
+            11 => Some(Self::Runesight),
             _ => None,
         }
     }
+}
+
+/// Traversal unlocked by equipped gear; read by the player controller.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Mobility {
+    /// Kinetic greaves: dash, air dash and the air jump.
+    pub thrusters: bool,
+    /// Kinetic boots: wall run, wall jump, air strafing and bunny hops.
+    pub wallrun: bool,
+}
+
+impl Mobility {
+    /// Everything on: creative play and movement tests.
+    pub const ALL: Self = Self { thrusters: true, wallrun: true };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -102,10 +146,25 @@ pub enum FoodKind {
     StrengthPotion = 7,
     FireResistancePotion = 8,
     RawFish = 9,
+    Bread = 10,
+    RootStew = 11,
+    CookedFish = 12,
+    HarvestCake = 13,
+    HealingPotion = 14,
+    ResistancePotion = 15,
+    LeapingPotion = 16,
+    HastePotion = 17,
+    VegetableStew = 18,
+    BakedPotato = 19,
+    FruitSalad = 20,
+    PumpkinPie = 21,
+    RiceBowl = 22,
+    CocoaBiscuit = 23,
+    Egg = 24,
 }
 
 impl FoodKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 25] = [
         Self::FungalRation,
         Self::RoastedCap,
         Self::Trailcake,
@@ -116,11 +175,36 @@ impl FoodKind {
         Self::StrengthPotion,
         Self::FireResistancePotion,
         Self::RawFish,
+        Self::Bread,
+        Self::RootStew,
+        Self::CookedFish,
+        Self::HarvestCake,
+        Self::HealingPotion,
+        Self::ResistancePotion,
+        Self::LeapingPotion,
+        Self::HastePotion,
+        Self::VegetableStew,
+        Self::BakedPotato,
+        Self::FruitSalad,
+        Self::PumpkinPie,
+        Self::RiceBowl,
+        Self::CocoaBiscuit,
+        Self::Egg,
     ];
 
     /// Drunk for its effects; restores no hunger and ignores the well-fed check.
     pub fn is_potion(self) -> bool {
-        matches!(self, Self::RegenerationPotion | Self::SpeedPotion | Self::StrengthPotion | Self::FireResistancePotion)
+        matches!(
+            self,
+            Self::RegenerationPotion
+                | Self::SpeedPotion
+                | Self::StrengthPotion
+                | Self::FireResistancePotion
+                | Self::HealingPotion
+                | Self::ResistancePotion
+                | Self::LeapingPotion
+                | Self::HastePotion
+        )
     }
 
     pub fn from_u8(raw: u8) -> Option<Self> {
@@ -142,6 +226,8 @@ impl FoodKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Item {
+    /// Stored water in microlitres; one bucket holds one cubic metre.
+    Bucket(u32),
     Block(BlockId),
     PowerKit(factory::portable::PowerKit),
     Resource(u8),
@@ -149,11 +235,16 @@ pub enum Item {
     Weapon(u8),
     Armor(EquipSlot, ArmorTier),
     Tool(u8),
+    Assembled { id: u16, schema: u16 },
+    Part { kind: u8, material: u8 },
+    Cast(u8),
     /// A wand in the adventure's wand bank; `look` caches its icon (tier, shaft, head, glow).
     Wand { id: u16, look: u16 },
 }
 
 impl Item {
+    pub const HOE: Self = Self::Tool(20);
+
     pub fn placeable_block(self) -> Option<BlockId> {
         match self {
             Self::Block(b) => Some(b),
@@ -168,6 +259,7 @@ impl Item {
         {
             return None;
         }
+        if engine_content::flora::is_flora(block) { return Some(engine_content::flora::canonical(block)); }
         if let Some(b) = engine_content::fittings::canonical(block) { return Some(b); }
         if let Some(b) = engine_content::thin::canonical(block) { return Some(b); }
         if let Some(b) = engine_content::shaped::canonical(block) { return Some(b); }
@@ -179,39 +271,25 @@ impl Item {
     }
 
     pub fn max_stack(self) -> u32 {
-        match self {
-            Self::PowerKit(_) => 1,
-            Self::Weapon(_) | Self::Armor(_, _) | Self::Tool(_) | Self::Wand { .. } => 1,
-            Self::Food(_) => 16,
-            Self::Block(block) => {
-                if matches!(
-                    block,
-                    BlockId::Workbench
-                        | BlockId::Smelter
-                        | BlockId::SalvageCrate
-                        | BlockId::SurveyCache
-                        | BlockId::CultivatorCache
-                ) || (block.is_model()
-                    && !matches!(
-                        block,
-                        BlockId::ItemPipe
-                            | BlockId::PowerCable
-                            | BlockId::FluidPipe
-                            | BlockId::CokeOvenBrick
-                            | BlockId::BlastBrick
-                    ))
-                {
-                    16
-                } else {
-                    64
-                }
-            }
-            Self::Resource(_) => 64,
-        }
+        stacks::active().item_limit(self)
+    }
+
+    /// Pre-overhaul stack limit; fixes which recipes need a workbench.
+    pub fn classic_stack(self) -> u32 {
+        stacks::classic().limit(stacks::class(self))
     }
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Assembled { schema, .. } => engine_tools::PARTS.schemas.get(schema as usize).map_or("Tool", |s| s.display_name.as_str()),
+            Self::Part { kind, material } => super::tool_workshop::part_name(kind,material),
+            Self::Cast(255) => "Ingot Mold",
+            Self::Cast(kind) => super::tool_workshop::mold_name(kind),
+            Self::Bucket(0) => "Bucket",
+            Self::Bucket(super::water_tools::LAVA_BUCKET) => "Lava Bucket",
+            Self::Bucket(super::water_tools::ACID_BUCKET) => "Sulfuric Acid Bucket",
+            Self::Bucket(super::water_tools::FUEL_CELL) => "Jetpack Fuel Cell",
+            Self::Bucket(_) => "Water Bucket",
             Self::PowerKit(k) => k.kind.block().display_name(),
             Self::Block(block) => block.display_name(),
             Self::Resource(index) => expedition::NAMES
@@ -235,14 +313,38 @@ impl Item {
             Self::Armor(EquipSlot::Feet, ArmorTier::Steel) => "Steel boots",
             Self::Armor(EquipSlot::Head, ArmorTier::Lumen) => "Lumen miner's helm",
             Self::Armor(_, ArmorTier::Lumen) => "Lumen armor",
+            Self::Armor(EquipSlot::Feet, ArmorTier::Kinetic) => "Kinetic boots",
+            Self::Armor(_, ArmorTier::Kinetic) => "Kinetic greaves",
+            Self::Armor(_, ArmorTier::Ballast) => "Ballast octo arms",
+            Self::Armor(_, ArmorTier::Burner) => "Burner jetpack",
+            Self::Armor(_, ArmorTier::Induction) => "Induction jetpack",
+            Self::Armor(_, ArmorTier::Slime) => "Slime boots",
+            Self::Armor(_, ArmorTier::Glider) => "Hang glider",
+            Self::Armor(_, ArmorTier::Survey) => "Survey Goggles",
+            Self::Armor(_, ArmorTier::Runesight) => "Rune Goggles",
             Self::Tool(1) => "Bronze bore",
             Self::Tool(2) => "Resonant bore",
+            Self::Tool(6) => "Wooden pickaxe",
+            Self::Tool(7) => "Stone pickaxe",
+            Self::Tool(8) => "Iron pickaxe",
+            Self::Tool(12) => "Wooden axe",
+            Self::Tool(13) => "Stone axe",
+            Self::Tool(14) => "Iron axe",
+            Self::Tool(15) => "Wooden shovel",
+            Self::Tool(16) => "Stone shovel",
+            Self::Tool(17) => "Iron shovel",
             Self::Tool(3) => "Lumen wand",
             Self::Tool(4) => "Frost wand",
             Self::Tool(9) => "Boat",
             Self::Tool(10) => "Fishing rod",
+            Self::Tool(11) => "Shears",
             Self::Tool(18) => "Gold pan",
+            Self::Tool(19) => "Slime sling",
+            Self::HOE => "Iron hoe",
+            Self::Tool(40) => "Clock",
+            Self::Tool(41) => "Map",
             Self::Tool(_) => "Resonant wand",
+            Self::Wand { look, .. } if look & super::adventure::wand_items::GRIMOIRE_LOOK != 0 => "Grimoire",
             Self::Wand { look, .. } if look & 1 << 11 != 0 => "Crafted wand",
             Self::Wand { look, .. } => match look & 3 {
                 1 => "Found wand",
@@ -254,6 +356,10 @@ impl Item {
 
     pub fn category(self) -> &'static str {
         match self {
+            Self::Assembled { .. } => "Assembled Tool",
+            Self::Part { .. } => "Tool Part",
+            Self::Cast(_) => "Casting Mold",
+            Self::Bucket(_) => "Fluid container",
             Self::PowerKit(_) => "Packed power assembly",
             Self::Block(b) if b.is_torch() => "Lighting block",
             Self::Block(b) if factory::Kind::from_block(b).is_some() => "Machine",
@@ -273,7 +379,14 @@ impl Item {
             Self::Tool(1 | 2) => "Excavation tool",
             Self::Tool(9) => "Vehicle",
             Self::Tool(10) => "Fishing tool",
+            Self::Tool(11) => "Herding tool",
             Self::Tool(18) => "Panning tool",
+            Self::Tool(19) => "Traversal tool",
+            Self::HOE => "Farming tool",
+            Self::Tool(40 | 41) => "Instrument",
+            Self::Tool(6..=8) => "Pickaxe",
+            Self::Tool(12..=14) => "Axe",
+            Self::Tool(15..=17) => "Shovel",
             Self::Tool(_) => "Arcane focus",
             Self::Wand { .. } => "Wand",
         }
@@ -291,12 +404,17 @@ impl Item {
             Self::Armor(_, ArmorTier::Copper) => 0.08,
             Self::Armor(_, ArmorTier::Steel) => 0.14,
             Self::Armor(_, ArmorTier::Lumen) => 0.12,
+            Self::Armor(_, ArmorTier::Kinetic) => 0.05,
             _ => 0.0,
         }
     }
 
     pub fn encode_u32(self) -> (u32, u32) {
         match self {
+            Self::Assembled { id, schema } => (10, u32::from(id) | u32::from(schema) << 16),
+            Self::Part { kind, material } => (11, u32::from(kind) | u32::from(material) << 8),
+            Self::Cast(kind) => (12, u32::from(kind)),
+            Self::Bucket(amount) => (9, amount),
             Self::PowerKit(k) => k.encode(),
             Self::Block(b) => (1, b.as_u32()),
             Self::Resource(i) => (2, i as u32),
@@ -314,6 +432,22 @@ impl Item {
             return Ok(Self::PowerKit(factory::portable::PowerKit::decode(kind, payload)?));
         }
         Ok(match kind {
+            10 => {
+                ensure!((payload >> 16) < engine_tools::PARTS.schemas.len() as u32, "Unknown tool schema");
+                Self::Assembled { id: payload as u16, schema: (payload >> 16) as u16 }
+            }
+            11 => {
+                ensure!(payload >> 16 == 0 && (payload & 255) < engine_tools::PARTS.part_kinds.len() as u32 && (payload >> 8) < engine_tools::MATERIALS.len() as u32, "Unknown tool part");
+                Self::Part { kind: payload as u8, material: (payload >> 8) as u8 }
+            }
+            12 => {
+                ensure!(payload == 255 || payload < engine_tools::PARTS.part_kinds.len() as u32, "Unknown mold");
+                Self::Cast(payload as u8)
+            }
+            9 => {
+                ensure!(super::water_tools::valid_bucket_payload(payload), "Invalid bucket volume");
+                Self::Bucket(payload)
+            }
             1 => {
                 let block = BlockId::from_u32(payload);
                 ensure!(
@@ -346,21 +480,34 @@ impl Item {
                     .ok_or_else(|| anyhow::anyhow!("Invalid armor slot in survival inventory"))?;
                 let tier = ArmorTier::from_u8((payload & 0xFF) as u8)
                     .ok_or_else(|| anyhow::anyhow!("Invalid armor tier in survival inventory"))?;
-                if tier == ArmorTier::Lumen {
-                    ensure!(slot == EquipSlot::Head, "Lumen helm only fits head slot");
+                if matches!(tier, ArmorTier::Lumen | ArmorTier::Survey | ArmorTier::Runesight) {
+                    ensure!(slot == EquipSlot::Head, "Equipment requires the head slot");
+                }
+                if tier == ArmorTier::Kinetic {
+                    ensure!(
+                        matches!(slot, EquipSlot::Legs | EquipSlot::Feet),
+                        "Kinetic rigs only fit legs and feet"
+                    );
+                }
+                if matches!(tier, ArmorTier::Ballast | ArmorTier::Burner | ArmorTier::Induction | ArmorTier::Glider) {
+                    ensure!(slot == EquipSlot::Chest, "Traversal packs only fit chest slot");
+                }
+                if tier == ArmorTier::Slime {
+                    ensure!(slot == EquipSlot::Feet, "Slime boots only fit feet slot");
                 }
                 Self::Armor(slot, tier)
             }
             6 => {
                 ensure!(
-                    (1..=5).contains(&payload) || matches!(payload, 9 | 10),
+                    (1..=20).contains(&payload) || matches!(payload, 40 | 41),
                     "Invalid tool item in survival inventory"
                 );
                 Self::Tool(payload as u8)
             }
             8 => {
                 let look = (payload >> 16) as u16;
-                ensure!(look & 3 != 0 && look >> 12 == 0, "Invalid wand item in survival inventory");
+                ensure!(look & 3 != 0 && (look >> 15 == 0 || look & 3 == 3)
+                    && ((look >> 12) & 7) < 6, "Invalid wand item in survival inventory");
                 Self::Wand { id: payload as u16, look }
             }
             _ => anyhow::bail!("Unknown survival item kind {kind}"),
@@ -378,21 +525,26 @@ impl ItemStack {
     pub fn new(item: Item, count: u32) -> Self {
         Self {
             item,
-            count: count.clamp(1, item.max_stack()),
+            // Quantities are not capacities. Insertion splits to the destination's
+            // rules; constructing a transfer or loading a save must never truncate.
+            count,
         }
     }
 
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SlotAddr {
     Hotbar(usize),
     Pack(usize),
     Equipment(usize),
     CraftGrid(usize),
+    Offhand,
+    Container(usize),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct PickupNotice {
     pub item: Item,
     pub count: u32,
@@ -447,7 +599,7 @@ impl CraftingRecipe {
             return shape.width > 2 || shape.height > 2 || RECIPES.bench.contains(self);
         }
         let machine = matches!(self.output.item, Item::Block(b) if factory::Kind::from_block(b).is_some());
-        let slots: u32 = self.ingredients.iter().map(|&(item, n)| n.div_ceil(item.max_stack())).sum();
+        let slots: u32 = self.ingredients.iter().map(|&(item, n)| n.div_ceil(item.classic_stack())).sum();
         machine || self.ingredients.len() > 4 || slots > 4 || RECIPES.bench.contains(self)
     }
 }
@@ -547,16 +699,16 @@ pub fn all_recipes() -> &'static [CraftingRecipe] {
     static ALL: std::sync::LazyLock<Vec<CraftingRecipe>> = std::sync::LazyLock::new(|| {
         let mut all: Vec<CraftingRecipe> = RECIPES.hand.clone();
         all.extend_from_slice(&RECIPES.bench);
-        for kind in factory::Kind::ALL {
+        let machine_recipe = |kind: factory::Kind| {
             let cost = kind.recipe();
             if kind.structural() || cost.iter().any(|&(_, n)| n % 64 != 0) {
-                continue;
+                return None;
             }
             let ingredients: Vec<(Item, u32)> = cost
                 .iter()
                 .map(|&(i, n)| (Item::Resource(i as u8), n / 64))
                 .collect();
-            all.push(CraftingRecipe {
+            Some(CraftingRecipe {
                 name: kind.name(),
                 output: ItemStack {
                     item: Item::Block(kind.block()),
@@ -566,32 +718,59 @@ pub fn all_recipes() -> &'static [CraftingRecipe] {
                 key: &[],
                 ingredients: Box::leak(ingredients.into_boxed_slice()),
                 description: "Machine assembly. Right-click to place on the metre grid.",
-            });
-        }
+            })
+        };
+        // Assembler saves refer to indices in this list.
+        let (original, appended) = factory::Kind::ALL.split_at(factory::Kind::Quarry as usize);
+        all.extend(original.iter().copied().filter_map(machine_recipe));
         all.extend_from_slice(&RECIPES.crystal_tech);
+        all.extend(appended.iter().copied().filter_map(machine_recipe));
         all
     });
     &ALL
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct DroppedStack {
     pub pos: glam::Vec3,
     pub stack: ItemStack,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct SurvivalInventory {
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub balance: stacks::Balance,
+    /// Persistent, recoverable excess after reducing slot capacity.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub overflow: Vec<ItemStack>,
+    /// Automatic operations leave these slots and reserved quantities alone.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub protected: u64,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    pub minimums: Vec<(Item, u32)>,
     pub dropped: Vec<DroppedStack>,
+    /// Brief local grace period after throwing a stack; never part of a save.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pub pickup_cooldown: f32,
     pub voxel_m: f32,
     pub hotbar: [Option<ItemStack>; HOTBAR_SLOTS],
     pub pack: [Option<ItemStack>; PACK_SLOTS],
     pub equipment: [Option<ItemStack>; EQUIP_SLOTS],
     pub craft_grid: [Option<ItemStack>; CRAFT_SLOTS],
     pub cursor: Option<ItemStack>,
+    pub offhand: Option<ItemStack>,
+    /// Open world cache view; committed to World::caches after UI edits.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pub container: Option<(usize, [Option<ItemStack>; super::containers::SLOTS])>,
+    #[cfg_attr(feature = "multiplayer", serde(deserialize_with = "factory::read_resources"))]
     pub resource_remainders: [u32; factory::RESOURCE_COUNT],
     pub pickup_notice: Option<PickupNotice>,
     pub eat_timer: f32,
     pub starve_timer: f32,
+    /// Items crafted since `stats::step` last drained it.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pub crafted: u32,
 }
 
 impl Default for SurvivalInventory {
@@ -677,30 +856,33 @@ impl SurvivalInventory {
         true
     }
     pub fn stack_limit(&self, item: Item) -> u32 {
-        Self::limit_at_scale(item, self.voxel_m)
+        self.balance.limit(item, self.voxel_m)
     }
+    #[cfg(test)]
     fn limit_at_scale(item: Item, voxel_m: f32) -> u32 {
-        let multiplier = if matches!(item, Item::Block(b) if !b.is_model()) {
-            (1.0 / voxel_m.clamp(0.25, 1.0).powi(3)).round() as u32
-        } else {
-            1
-        };
-        item.max_stack().saturating_mul(multiplier)
+        stacks::Balance::Balanced.limit(item, voxel_m)
     }
-
     pub fn empty() -> Self {
         Self {
+            balance: stacks::Balance::default(),
+            overflow: Vec::new(),
+            protected: 0,
+            minimums: Vec::new(),
             dropped: Vec::new(),
+            pickup_cooldown: 0.0,
             voxel_m: 1.0,
             hotbar: [None; HOTBAR_SLOTS],
             pack: [None; PACK_SLOTS],
             equipment: [None; EQUIP_SLOTS],
             craft_grid: [None; CRAFT_SLOTS],
             cursor: None,
+            offhand: None,
+            container: None,
             resource_remainders: [0; factory::RESOURCE_COUNT],
             pickup_notice: None,
             eat_timer: 0.0,
             starve_timer: 0.0,
+            crafted: 0,
         }
     }
 
@@ -758,6 +940,8 @@ impl SurvivalInventory {
             SlotAddr::Pack(i) => self.pack.get(i).copied().flatten(),
             SlotAddr::Equipment(i) => self.equipment.get(i).copied().flatten(),
             SlotAddr::CraftGrid(i) => self.craft_grid.get(i).copied().flatten(),
+            SlotAddr::Offhand => self.offhand,
+            SlotAddr::Container(i) => self.container.as_ref().and_then(|(_, s)| s.get(i)).copied().flatten(),
         }
     }
 
@@ -767,6 +951,8 @@ impl SurvivalInventory {
             SlotAddr::Pack(i) => self.pack.get_mut(i),
             SlotAddr::Equipment(i) => self.equipment.get_mut(i),
             SlotAddr::CraftGrid(i) => self.craft_grid.get_mut(i),
+            SlotAddr::Offhand => Some(&mut self.offhand),
+            SlotAddr::Container(i) => self.container.as_mut().and_then(|(_, s)| s.get_mut(i)),
         }
     }
 
@@ -778,6 +964,8 @@ impl SurvivalInventory {
             SlotAddr::Hotbar(i) => i < HOTBAR_SLOTS,
             SlotAddr::Pack(i) => i < PACK_SLOTS,
             SlotAddr::CraftGrid(i) => i < CRAFT_SLOTS,
+            SlotAddr::Offhand => true,
+            SlotAddr::Container(i) => self.container.is_some() && i < super::containers::SLOTS,
         }
     }
 
@@ -809,6 +997,12 @@ impl SurvivalInventory {
         total
     }
 
+    /// Rune goggles are worn: runes show their element colours.
+    pub fn rune_sight(&self) -> bool {
+        self.equipment[EquipSlot::Head as usize]
+            .is_some_and(|stack| stack.item == Item::Armor(EquipSlot::Head, ArmorTier::Runesight))
+    }
+
     pub fn armor_reduction(&self) -> f32 {
         self.equipment
             .iter()
@@ -820,6 +1014,20 @@ impl SurvivalInventory {
 
     pub fn armor_points(&self) -> u32 {
         (self.armor_reduction() * 20.0).round() as u32
+    }
+
+    pub fn mobility(&self) -> Mobility {
+        let worn = |slot: EquipSlot| {
+            self.equipment[slot as usize]
+                .is_some_and(|s| s.item == Item::Armor(slot, ArmorTier::Kinetic))
+        };
+        Mobility { thrusters: worn(EquipSlot::Legs), wallrun: worn(EquipSlot::Feet) }
+    }
+
+    /// A craftable chest frame; legacy in-memory Kinetic frames still work.
+    pub fn glide_frame(&self) -> bool {
+        self.equipment[EquipSlot::Chest as usize]
+            .is_some_and(|s| matches!(s.item, Item::Armor(EquipSlot::Chest, ArmorTier::Glider | ArmorTier::Kinetic)))
     }
 
     pub fn has_lumen_helm(&self) -> bool {
@@ -856,6 +1064,7 @@ impl SurvivalInventory {
             return (0, 0);
         }
         let max = self.stack_limit(stack.item);
+        self.auto_stack_item(stack.item);
         let mut remaining = stack.count;
 
         // Pass 1: merge into existing partial stacks (hotbar first, then pack).
@@ -895,6 +1104,7 @@ impl SurvivalInventory {
             return (0, 0);
         }
         let max = self.stack_limit(stack.item);
+        self.auto_stack_item(stack.item);
         let mut remaining = stack.count;
 
         for slot in self.pack.iter_mut().chain(self.hotbar.iter_mut()) {
@@ -978,122 +1188,125 @@ impl SurvivalInventory {
                 stack.count -= 1;
                 if stack.count == 0 {
                     *slot = None;
+                    self.refill_hotbar(slot_index, expected);
                 }
                 return true;
             }
         self.remove_item(expected, 1)
     }
 
-    /// Left-click interaction on `addr`: pick up, place, merge, or swap with `self.cursor`.
-    pub fn click_slot(&mut self, addr: SlotAddr) {
-        if !self
-            .cursor
-            .is_none_or(|cursor| self.slot_accepts(addr, cursor.item))
-        {
-            return;
+    /// Hotbar slot holding `item` after a pick-block, or `None` when it is not carried.
+    ///
+    /// Order: a hotbar stack already holding it; else the largest pack stack moves
+    /// to `selected` when empty, then the first empty hotbar slot; only with a
+    /// full hotbar does it swap with `selected`, so a pick never displaces a
+    /// held item needlessly.
+    pub fn pick_into_hotbar(&mut self, item: Item, selected: usize) -> Option<usize> {
+        if let Some(slot) = self.hotbar.iter().position(|s| s.is_some_and(|st| st.item == item)) {
+            return Some(slot);
         }
-        let current = self.slot(addr);
-        match (self.cursor, current) {
-            (None, None) => {}
-            (None, Some(slot_stack)) => {
-                if let Some(target) = self.slot_mut(addr) {
-                    *target = None;
-                    self.cursor = Some(slot_stack);
-                }
-            }
-            (Some(cursor_stack), None) => {
-                if let Some(target) = self.slot_mut(addr) {
-                    *target = Some(cursor_stack);
-                    self.cursor = None;
-                }
-            }
-            (Some(mut cursor_stack), Some(mut slot_stack)) => {
-                if cursor_stack.item == slot_stack.item {
-                    let max = self.stack_limit(slot_stack.item);
-                    if slot_stack.count < max {
-                        let transfer = cursor_stack.count.min(max - slot_stack.count);
-                        slot_stack.count += transfer;
-                        cursor_stack.count -= transfer;
-                        if let Some(target) = self.slot_mut(addr) {
-                            *target = Some(slot_stack);
-                        }
-                        self.cursor = if cursor_stack.count > 0 {
-                            Some(cursor_stack)
-                        } else {
-                            None
-                        };
-                    }
-                } else if let Some(target) = self.slot_mut(addr) {
-                    *target = Some(cursor_stack);
-                    self.cursor = Some(slot_stack);
-                }
-            }
-        }
+        let (_, std::cmp::Reverse(from)) = self.pack.iter().enumerate()
+            .filter_map(|(i, s)| s.filter(|s| s.item == item).map(|s| (s.count, std::cmp::Reverse(i))))
+            .max()?;
+        let selected = selected.min(HOTBAR_SLOTS - 1);
+        let to = if self.hotbar[selected].is_none() {
+            selected
+        } else {
+            self.hotbar.iter().position(Option::is_none).unwrap_or(selected)
+        };
+        self.swap_slot_with_hotbar(SlotAddr::Pack(from), to);
+        Some(to)
     }
 
-    /// Right-click interaction on `addr`: half-stack pickup when cursor is empty, or place 1 item when holding a stack.
+    /// Moves the smallest pack stack of `item` into the emptied hotbar slot.
+    ///
+    /// The whole stack moves, never a split, so tool wear follows it like a
+    /// manual move. Other hotbar slots keep their layout.
+    pub fn refill_hotbar(&mut self, slot_index: usize, item: Item) -> bool {
+        if self.is_protected(SlotAddr::Hotbar(slot_index)) { return false; }
+        if self.hotbar.get(slot_index).is_none_or(Option::is_some) {
+            return false;
+        }
+        let source = self.pack.iter().enumerate()
+            .filter(|(i, _)| !self.is_protected(SlotAddr::Pack(*i)))
+            .filter_map(|(i, s)| s.filter(|s| s.item == item).map(|s| (s.count, i)))
+            .min();
+        let Some((_, i)) = source else { return false };
+        self.hotbar[slot_index] = self.pack[i].take();
+        true
+    }
+
+    /// Left-click interaction on `addr`: pick up, place, merge, or swap with `self.cursor`.
+    pub fn click_slot(&mut self, addr: SlotAddr) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Click(addr));
+        self.edit_slot(addr, false);
+    }
+
+    /// Split a stack, or place one item.
     pub fn right_click_slot(&mut self, addr: SlotAddr) {
-        let current = self.slot(addr);
-        match (self.cursor, current) {
-            (None, None) => {}
-            (None, Some(mut slot_stack)) => {
-                let take = slot_stack.count.div_ceil(2);
-                slot_stack.count -= take;
-                if let Some(target) = self.slot_mut(addr) {
-                    *target = if slot_stack.count > 0 {
-                        Some(slot_stack)
-                    } else {
-                        None
-                    };
-                }
-                self.cursor = Some(ItemStack {
-                    item: slot_stack.item,
-                    count: take,
-                });
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Right(addr));
+        self.edit_slot(addr, true);
+    }
+
+    fn edit_slot(&mut self, addr: SlotAddr, split: bool) {
+        let accepts = self.cursor.is_none_or(|s| self.slot_accepts(addr, s.item));
+        if !accepts { return; }
+        let mut current = self.slot(addr);
+        if self.slot_mut(addr).is_none() { return; }
+        self.edit_cursor_stack(&mut current, split);
+        *self.slot_mut(addr).unwrap() = current;
+    }
+
+    /// Shared cursor gestures for inventory and external storage slots.
+    pub(crate) fn edit_cursor_stack(&mut self, slot: &mut Option<ItemStack>, split: bool) {
+        match (self.cursor, *slot) {
+            (None, Some(mut stored)) if split => {
+                let count = stored.count.div_ceil(2);
+                stored.count -= count;
+                *slot = (stored.count > 0).then_some(stored);
+                self.cursor = Some(ItemStack::new(stored.item, count));
             }
-            (Some(mut cursor_stack), None) => {
-                if !self.slot_accepts(addr, cursor_stack.item) {
-                    return;
-                }
-                if let Some(target) = self.slot_mut(addr) {
-                    *target = Some(ItemStack {
-                        item: cursor_stack.item,
-                        count: 1,
-                    });
-                    cursor_stack.count -= 1;
-                    self.cursor = if cursor_stack.count > 0 {
-                        Some(cursor_stack)
-                    } else {
-                        None
-                    };
-                }
+            (Some(mut held), stored) if stored.is_none_or(|s| s.item == held.item) => {
+                let count = stored.map_or(0, |s| s.count);
+                let room = self.stack_limit(held.item).saturating_sub(count);
+                let transfer = room.min(if split { 1 } else { held.count });
+                if transfer == 0 { return; }
+                *slot = Some(ItemStack::new(held.item, count + transfer));
+                held.count -= transfer;
+                self.cursor = (held.count > 0).then_some(held);
             }
-            (Some(mut cursor_stack), Some(mut slot_stack)) => {
-                if cursor_stack.item == slot_stack.item
-                    && slot_stack.count < self.stack_limit(slot_stack.item)
-                {
-                    slot_stack.count += 1;
-                    cursor_stack.count -= 1;
-                    if let Some(target) = self.slot_mut(addr) {
-                        *target = Some(slot_stack);
-                    }
-                    self.cursor = if cursor_stack.count > 0 {
-                        Some(cursor_stack)
-                    } else {
-                        None
-                    };
-                }
-            }
+            _ if !split => std::mem::swap(slot, &mut self.cursor),
+            _ => {}
         }
     }
 
     /// Shift-click quick transfer between hotbar, backpack, equipment, and crafting grid.
     /// Preserves exact item counts; if target region is full, retains remaining items in the source slot.
     pub fn shift_click_slot(&mut self, addr: SlotAddr) -> bool {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Shift(addr));
         let Some(mut stack) = self.slot(addr) else {
             return false;
         };
 
+        if self.container.is_some() && matches!(addr, SlotAddr::Hotbar(_) | SlotAddr::Pack(_)) {
+            let original = stack.count;
+            let max = self.stack_limit(stack.item);
+            let (_, slots) = self.container.as_mut().unwrap();
+            for target in slots.iter_mut().filter(|s| s.is_some_and(|s| s.item == stack.item)) {
+                let existing = target.as_mut().unwrap();
+                let n = stack.count.min(max.saturating_sub(existing.count));
+                existing.count += n; stack.count -= n;
+            }
+            for target in slots.iter_mut().filter(|s| s.is_none()) {
+                let n = stack.count.min(max);
+                if n > 0 { *target = Some(ItemStack::new(stack.item, n)); stack.count -= n; }
+            }
+            *self.slot_mut(addr).unwrap() = (stack.count > 0).then_some(stack);
+            return stack.count < original;
+        }
         // 1. If the item is armor and not already in Equipment, try moving to its matching Equipment slot first.
         if !matches!(addr, SlotAddr::Equipment(_))
             && let Some(equip_slot) = stack.item.equip_slot() {
@@ -1169,7 +1382,7 @@ impl SurvivalInventory {
                     }
                 }
             }
-            SlotAddr::Equipment(_) | SlotAddr::CraftGrid(_) => {
+            SlotAddr::Equipment(_) | SlotAddr::CraftGrid(_) | SlotAddr::Offhand | SlotAddr::Container(_) => {
                 let (_, rem) = self.try_insert_pack_first(stack);
                 stack.count = rem;
             }
@@ -1184,6 +1397,8 @@ impl SurvivalInventory {
 
     /// Swaps a hovered slot with `hotbar[hotbar_idx]` when pressing keys `1–9`.
     pub fn swap_slot_with_hotbar(&mut self, addr: SlotAddr, hotbar_idx: usize) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Swap(addr,hotbar_idx));
         if hotbar_idx >= HOTBAR_SLOTS || addr == SlotAddr::Hotbar(hotbar_idx) {
             return;
         }
@@ -1202,6 +1417,8 @@ impl SurvivalInventory {
     /// Double-click gather (Minecraft / Mouse Tweaks): pulls loose partial stacks of the held
     /// cursor item (or the item in `addr` if cursor is empty) into `self.cursor` up to its stack limit.
     pub fn gather_to_cursor(&mut self, addr: SlotAddr) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Gather(addr));
         if self.cursor.is_none()
             && let Some(stack) = self.slot(addr) {
                 if let Some(slot) = self.slot_mut(addr) {
@@ -1209,6 +1426,10 @@ impl SurvivalInventory {
                 }
                 self.cursor = Some(stack);
             }
+        self.gather_matching_to_cursor();
+    }
+
+    pub(crate) fn gather_matching_to_cursor(&mut self) {
         let Some(mut cursor) = self.cursor else {
             return;
         };
@@ -1223,6 +1444,7 @@ impl SurvivalInventory {
                 .iter_mut()
                 .chain(self.pack.iter_mut())
                 .chain(self.hotbar.iter_mut())
+                .chain(self.container.iter_mut().flat_map(|(_, slots)| slots.iter_mut()))
             {
                 if cursor.count >= max {
                     break;
@@ -1245,6 +1467,8 @@ impl SurvivalInventory {
     /// - `delta > 0` (scroll up): push 1 item from `addr` into the opposite inventory region (or cursor).
     /// - `delta < 0` (scroll down): pull 1 matching item into `addr` from the pack/hotbar (or cursor).
     pub fn wheel_slot(&mut self, addr: SlotAddr, delta: i32) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Wheel(addr,delta));
         if delta == 0 {
             return;
         }
@@ -1384,19 +1608,32 @@ impl SurvivalInventory {
 
     /// Merges, sorts and compacts the pack; the hotbar keeps its layout.
     pub fn sort_pack(&mut self) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Sort);
         let voxel_m = self.voxel_m;
-        sorting::sort_slots(&mut self.pack, |item| Self::limit_at_scale(item, voxel_m));
+        let balance = self.balance;
+        let mut movable: Vec<_> = self.pack.iter().enumerate()
+            .filter(|(i, _)| !self.is_protected(SlotAddr::Pack(*i))).map(|(_, s)| *s).collect();
+        sorting::sort_slots(&mut movable, |item| balance.limit(item, voxel_m));
+        let mut sorted = movable.into_iter();
+        for i in 0..PACK_SLOTS {
+            if !self.is_protected(SlotAddr::Pack(i)) { self.pack[i] = sorted.next().flatten(); }
+        }
     }
 
     /// Quick-Stacks backpack items into any existing matching partial stacks in the hotbar,
     /// then compacts the backpack.
     pub fn quick_stack_to_hotbar(&mut self) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Stack);
         for p_idx in 0..PACK_SLOTS {
+            if self.is_protected(SlotAddr::Pack(p_idx)) { continue; }
             let Some(mut pack_st) = self.pack[p_idx] else {
                 continue;
             };
             let max = self.stack_limit(pack_st.item);
-            for h_slot in &mut self.hotbar {
+            for (h_idx, h_slot) in self.hotbar.iter_mut().enumerate() {
+                if self.protected & (1 << h_idx) != 0 { continue; }
                 if pack_st.count == 0 {
                     break;
                 }
@@ -1413,7 +1650,7 @@ impl SurvivalInventory {
                 None
             };
         }
-        self.sort_pack();
+        self.auto_stack();
     }
 
     fn stash_stack(&mut self, stack: ItemStack) -> Option<ItemStack> {
@@ -1427,6 +1664,8 @@ impl SurvivalInventory {
     /// Ctrl + Left-Click (or Ctrl + Shift + Click): Quick-transfers EVERY matching stack of the
     /// item in `addr` across that entire inventory region (Hotbar <-> Pack) in one action.
     pub fn ctrl_click_slot(&mut self, addr: SlotAddr) -> bool {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Ctrl(addr));
         let Some(target_stack) = self.slot(addr) else {
             return false;
         };
@@ -1454,7 +1693,7 @@ impl SurvivalInventory {
                     }
                 }
             }
-            SlotAddr::Equipment(_) => {}
+            SlotAddr::Equipment(_) | SlotAddr::Offhand | SlotAddr::Container(_) => {}
         }
         any_moved
     }
@@ -1462,6 +1701,8 @@ impl SurvivalInventory {
     /// Middle-click (clone / pick full stack): if cursor is empty and `addr` has an item,
     /// gathers a full stack of that item into `self.cursor`.
     pub fn middle_click_slot(&mut self, addr: SlotAddr) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Middle(addr));
         if self.cursor.is_none() && self.slot(addr).is_some() {
             self.gather_to_cursor(addr);
         }
@@ -1470,6 +1711,8 @@ impl SurvivalInventory {
     /// Left-click-drag even distribution (Vanilla Minecraft / Mouse Tweaks):
     /// Splits `origin_stack` evenly across `visited_slots` and leaves any remainder on `self.cursor`.
     pub fn distribute_even_across(&mut self, origin: Option<ItemStack>, visited: &[SlotAddr]) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Distribute(visited.to_vec()));
         let Some(origin_stack) = origin else {
             return;
         };
@@ -1522,6 +1765,8 @@ impl SurvivalInventory {
     /// Extracts either 1 item (`full_stack == false`) or the entire stack (`full_stack == true`)
     /// from `addr` so it can be dropped into the world.
     pub fn take_for_drop(&mut self, addr: SlotAddr, full_stack: bool) -> Option<ItemStack> {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::TakeDrop(addr,full_stack));
         let mut stack = self.slot(addr)?;
         if full_stack || stack.count <= 1 {
             if let Some(slot) = self.slot_mut(addr) {
@@ -1543,6 +1788,8 @@ impl SurvivalInventory {
     /// Returns any held cursor stack or 2×2 crafting grid stacks back into the pack/hotbar when closing UI.
     /// If pack/hotbar are full, keeps remainder in `craft_grid` or `cursor` so zero items are ever lost.
     pub fn return_transient_to_pack(&mut self) {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Return);
         let mut leftover: Vec<ItemStack> = Vec::new();
         if let Some(cursor) = self.cursor.take()
             && let Some(rest) = self.stash_stack(cursor) {
@@ -1613,6 +1860,8 @@ impl SurvivalInventory {
     /// Crafts 1 batch from `craft_grid` onto `self.cursor` (or into inventory if `shift_to_pack`).
     /// Never consumes ingredients unless the output is guaranteed to fit without loss.
     pub fn craft_from_grid(&mut self, shift_to_pack: bool, bench: bool) -> Option<ItemStack> {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Craft(shift_to_pack));
         let batches_to_craft = self.grid_craft_batches(shift_to_pack, bench).ok()?;
         let (recipe, _) = self.matching_grid_recipe(bench)?;
         let out = recipe.output;
@@ -1652,6 +1901,7 @@ impl SurvivalInventory {
             item: out.item,
             count: out.count * batches_to_craft,
         };
+        self.crafted = self.crafted.saturating_add(produced.count);
         if shift_to_pack {
             let mut rem = produced.count;
             while rem > 0 {
@@ -1678,8 +1928,13 @@ impl SurvivalInventory {
     /// recipe already in the grid adds one more batch, as the vanilla recipe
     /// book does. Returns `true` if the ingredients were available and staged.
     pub fn stage_recipe_into_grid(&mut self, recipe: &CraftingRecipe, bench: bool) -> bool {
+        #[cfg(feature = "multiplayer")]
+        let _net_record = crate::multiplayer::inventory::record(crate::multiplayer::inventory::Command::Stage(all_recipes().iter().position(|r| r==recipe).unwrap_or(usize::MAX)));
         let mut staged = self.clone();
-        if !staged.stage_recipe_in_place(recipe, bench) { return false; }
+        if !staged.stage_recipe_in_place(recipe, bench)
+            || !staged.matching_grid_recipe(bench).is_some_and(|(matched, _)| matched == recipe) {
+            return false;
+        }
         *self = staged;
         true
     }
@@ -1740,6 +1995,7 @@ impl SurvivalInventory {
         for slot in self.pack {
             encode_slot(slot, &mut put);
         }
+        if version >= 42 { encode_slot(self.offhand, &mut put); }
         for slot in self.equipment {
             encode_slot(slot, &mut put);
         }
@@ -1753,13 +2009,21 @@ impl SurvivalInventory {
             }
         }
         encode_slot(self.cursor, &mut put);
-        let resources = if version >= 20 {
-            factory::RESOURCE_COUNT
-        } else {
-            factory::LEGACY_RESOURCE_COUNT
-        };
+        let resources = factory::resources_in_save(version);
         for &rem in &self.resource_remainders[..resources] {
             put(rem.min(63));
+        }
+        if version >= 45 {
+            put(self.balance.code());
+            put(self.overflow.len() as u32);
+            for stack in &self.overflow { encode_slot(Some(*stack), &mut put); }
+            put(self.protected as u32);
+            put((self.protected >> 32) as u32);
+            put(self.minimums.len() as u32);
+            for &(item, count) in &self.minimums {
+                let (kind, payload) = item.encode_u32();
+                put(kind); put(payload); put(count);
+            }
         }
     }
 
@@ -1794,7 +2058,7 @@ impl SurvivalInventory {
                 }
                 let item = Item::decode_u32(kind, payload)?;
                 ensure!(
-                    (1..=Self::limit_at_scale(item, voxel_m)).contains(&count),
+                    (1..=1_048_576).contains(&count),
                     "Survival stack count {count} exceeds limit {} for {:?}",
                     item.max_stack(),
                     item
@@ -1808,6 +2072,7 @@ impl SurvivalInventory {
         for slot in &mut inv.pack {
             *slot = decode_slot(read)?;
         }
+        if version >= 42 { inv.offhand = decode_slot(read)?; }
         for i in 0..inv.equipment.len() {
             let decoded = decode_slot(read)?;
             if let Some(stack) = decoded {
@@ -1828,15 +2093,24 @@ impl SurvivalInventory {
             }
         }
         inv.cursor = decode_slot(read)?;
-        let resources = if version >= 20 {
-            factory::RESOURCE_COUNT
-        } else {
-            factory::LEGACY_RESOURCE_COUNT
-        };
+        let resources = factory::resources_in_save(version);
         for rem in &mut inv.resource_remainders[..resources] {
             let v = read()?;
             ensure!(v < 64, "Invalid survival resource remainder");
             *rem = v;
+        }
+        if version >= 45 {
+            inv.balance = stacks::Balance::decode(read()?)?;
+            let count = read()?;
+            ensure!(count <= super::block_data::MAX_ENTRIES as u32 * 54u32, "Too many overflow stacks");
+            for _ in 0..count { inv.overflow.push(decode_slot(read)?.ok_or_else(|| anyhow::anyhow!("Empty overflow stack"))?); }
+            inv.protected = u64::from(read()?) | (u64::from(read()?) << 32);
+            let count = read()?;
+            ensure!(count <= 256, "Too many inventory minimums");
+            for _ in 0..count {
+                let item = Item::decode_u32(read()?, read()?)?;
+                inv.minimums.push((item, read()?));
+            }
         }
         Ok(inv)
     }
@@ -1849,7 +2123,8 @@ mod tests {
     #[test]
     fn scaled_stacks_survive_transfers_save_and_retrieval() {
         let item = Item::Block(BlockId::Stone);
-        for (voxel_m, capacity) in [(1.0, 64), (0.5, 512), (0.25, 4096)] {
+        let base = item.max_stack();
+        for (voxel_m, capacity) in [(1.0, base), (0.5, base * 8), (0.25, base * 64)] {
             let mut inv = SurvivalInventory::empty();
             inv.voxel_m = voxel_m;
             assert_eq!(inv.stack_limit(item), capacity);
@@ -1893,22 +2168,23 @@ mod tests {
     #[test]
     fn stack_insertion_merges_partials_and_clamps_overflow() {
         let mut inv = SurvivalInventory::empty();
-        inv.hotbar[0] = Some(ItemStack::new(Item::Block(BlockId::Stone), 50));
+        let max = Item::Block(BlockId::Stone).max_stack();
+        inv.hotbar[0] = Some(ItemStack::new(Item::Block(BlockId::Stone), max - 14));
         let (inserted, rem) = inv.try_insert(ItemStack::new(Item::Block(BlockId::Stone), 30));
         assert_eq!(inserted, 30);
         assert_eq!(rem, 0);
-        assert_eq!(inv.hotbar[0].unwrap().count, 64);
+        assert_eq!(inv.hotbar[0].unwrap().count, max);
         assert_eq!(inv.hotbar[1].unwrap().count, 16);
 
         // Fill all remaining slots to test overflow protection.
         for slot in inv.hotbar.iter_mut().chain(inv.pack.iter_mut()) {
             *slot = Some(ItemStack::new(Item::Block(BlockId::Dirt), 64));
         }
-        inv.hotbar[0] = Some(ItemStack::new(Item::Block(BlockId::Stone), 60));
+        inv.hotbar[0] = Some(ItemStack::new(Item::Block(BlockId::Stone), max - 4));
         let (inserted, rem) = inv.try_insert(ItemStack::new(Item::Block(BlockId::Stone), 10));
         assert_eq!(inserted, 4);
         assert_eq!(rem, 6);
-        assert_eq!(inv.hotbar[0].unwrap().count, 64);
+        assert_eq!(inv.hotbar[0].unwrap().count, max);
     }
 
     #[test]
@@ -1990,25 +2266,36 @@ mod tests {
         let mut inv = SurvivalInventory::empty();
         inv.craft_grid[4] = Some(ItemStack::new(Item::Block(BlockId::Log), 3));
         let mut bytes = Vec::new();
-        inv.encode(&mut bytes);
-        // Rewrite as a version 19 save: four grid slots, 19 remainders.
+        inv.encode_versioned(&mut bytes, 19);
+        // Exercise the actual legacy writer, independent of current slot layout.
         let words: Vec<u32> = bytes
             .chunks_exact(4)
             .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
             .collect();
-        let slots_before_grid = (HOTBAR_SLOTS + PACK_SLOTS + EQUIP_SLOTS) * 3;
-        let mut legacy = words[..slots_before_grid].to_vec();
-        for i in HAND_GRID {
-            legacy.extend_from_slice(&words[slots_before_grid + i * 3..slots_before_grid + i * 3 + 3]);
-        }
-        let cursor = slots_before_grid + CRAFT_SLOTS * 3;
-        legacy.extend_from_slice(&words[cursor..cursor + 3]);
-        legacy.extend(std::iter::repeat_n(0, factory::LEGACY_RESOURCE_COUNT));
-        let mut it = legacy.into_iter();
+        let mut it = words.into_iter();
         let back = SurvivalInventory::decode_versioned(&mut || Ok(it.next().unwrap()), 1.0, 19)
             .unwrap();
         assert!(it.next().is_none());
         assert_eq!(back.craft_grid[4].unwrap().count, 3);
+    }
+
+    #[test]
+    fn kinetic_rigs_grant_mobility_and_round_trip() {
+        let mut inv = SurvivalInventory::empty();
+        assert_eq!(inv.mobility(), Mobility::default());
+        let greaves = Item::Armor(EquipSlot::Legs, ArmorTier::Kinetic);
+        let boots = Item::Armor(EquipSlot::Feet, ArmorTier::Kinetic);
+        inv.equipment[EquipSlot::Legs as usize] = Some(ItemStack::new(greaves, 1));
+        assert_eq!(inv.mobility(), Mobility { thrusters: true, wallrun: false });
+        inv.equipment[EquipSlot::Feet as usize] = Some(ItemStack::new(boots, 1));
+        assert_eq!(inv.mobility(), Mobility::ALL);
+        for item in [greaves, boots] {
+            let (kind, payload) = item.encode_u32();
+            assert_eq!(Item::decode_u32(kind, payload).unwrap(), item);
+        }
+        // A kinetic chest piece is not a real item.
+        let (kind, payload) = Item::Armor(EquipSlot::Chest, ArmorTier::Kinetic).encode_u32();
+        assert!(Item::decode_u32(kind, payload).is_err());
     }
 
     #[test]

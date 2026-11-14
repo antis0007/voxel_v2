@@ -1,4 +1,4 @@
-//! Checksummed block-data file beside a world. A world without one has no block records.
+//! Checksummed block data used by checkpoints and network snapshots.
 use super::{CHEST_SLOTS, Entry, Key, MAX_ENTRIES, Stand, State};
 use crate::world::inventory::{Item, ItemStack};
 use anyhow::{Context, Result, bail, ensure};
@@ -7,8 +7,10 @@ use std::path::Path;
 pub const FILE: &str = "blocks.vxb";
 const MAGIC: &[u8; 7] = b"VXBLOCK";
 /// Version 2 adds brewing stand records; version 1 files still load.
-const VERSION: u8 = 2;
+const VERSION: u8 = 6;
 const COORD_LIMIT: i32 = 1 << 28;
+/// Dungeon complexes whose keys one save remembers.
+const MAX_DUNGEONS: usize = 4096;
 const MAX_LINES: usize = 16;
 const MAX_LINE_BYTES: usize = 256;
 const MAX_STACK: u32 = 1 << 16;
@@ -40,7 +42,7 @@ impl<'a> Reader<'a> {
     }
     fn key(&mut self) -> Result<Key> {
         let k = (self.u32()? as i32, self.u32()? as i32, self.u32()? as i32);
-        ensure!([k.0, k.1, k.2].iter().all(|v| v.abs() < COORD_LIMIT), "Block record outside the world");
+        ensure!([k.0, k.1, k.2].iter().all(|v| v.unsigned_abs() < COORD_LIMIT as u32), "Block record outside the world");
         Ok(k)
     }
 }
@@ -62,7 +64,7 @@ fn read_stack(r: &mut Reader) -> Result<Option<ItemStack>> {
         return Ok(None);
     }
     ensure!((1..=MAX_STACK).contains(&count), "Invalid stack");
-    Ok(Some(ItemStack::new(Item::decode_u32(kind, payload)?, count)))
+    Ok(Some(ItemStack { item: Item::decode_u32(kind, payload)?, count }))
 }
 
 fn put_key(out: &mut Vec<u8>, k: Key) {
@@ -94,6 +96,7 @@ pub fn encode(state: &State) -> Vec<u8> {
             }
             Entry::Chest(slots) => {
                 out.push(2);
+                out.push(slots.len() as u8);
                 for slot in slots.iter() {
                     put_stack(&mut out, *slot);
                 }
@@ -111,6 +114,21 @@ pub fn encode(state: &State) -> Vec<u8> {
     for (&k, &steps) in &state.fuses {
         put_key(&mut out, k);
         out.extend_from_slice(&steps.to_le_bytes());
+    }
+    let policies = ron::to_string(&state.storage_policies).expect("storage policy serialization");
+    out.extend_from_slice(&(policies.len() as u32).to_le_bytes());
+    out.extend_from_slice(policies.as_bytes());
+    out.extend_from_slice(&(state.placed_sediment.len() as u32).to_le_bytes());
+    for &cell in &state.placed_sediment {
+        put_key(&mut out, cell);
+    }
+    out.extend_from_slice(&(state.dungeon_keys.len().min(MAX_DUNGEONS) as u32).to_le_bytes());
+    for (&(x, z), ring) in state.dungeon_keys.iter().take(MAX_DUNGEONS) {
+        out.extend_from_slice(&x.to_le_bytes());
+        out.extend_from_slice(&z.to_le_bytes());
+        out.push(ring.small);
+        out.push(u8::from(ring.great));
+        out.extend_from_slice(&ring.looted.to_le_bytes());
     }
     let sum = hash(&out);
     out.extend_from_slice(&sum.to_le_bytes());
@@ -141,7 +159,9 @@ pub fn decode(bytes: &[u8]) -> Result<State> {
                 Entry::Text(lines)
             }
             2 => {
-                let mut slots = Box::new([None; CHEST_SLOTS]);
+                let count = if bytes[7] >= 4 { r.u8()? as usize } else { CHEST_SLOTS };
+                ensure!(matches!(count, 27 | 36 | 45 | 54), "Invalid chest capacity");
+                let mut slots = Box::new(vec![None; count]);
                 for slot in slots.iter_mut() {
                     *slot = read_stack(&mut r)?;
                 }
@@ -162,6 +182,32 @@ pub fn decode(bytes: &[u8]) -> Result<State> {
         let k = r.key()?;
         state.fuses.insert(k, r.u16()?);
     }
+    if bytes[7] >= 3 {
+        let len = r.u32()? as usize;
+        ensure!(len <= 16 * 1024 * 1024, "Storage policies too large");
+        state.storage_policies = ron::de::from_bytes(r.take(len)?)?;
+        ensure!(state.storage_policies.len() <= MAX_ENTRIES, "Too many storage policies");
+    }
+    if bytes[7] >= 5 {
+        let count = r.u32()? as usize;
+        ensure!(count <= super::MAX_PLACED_SEDIMENT, "Too many placed sediment cells");
+        for _ in 0..count {
+            ensure!(state.placed_sediment.insert(r.key()?), "Duplicate sediment cell");
+        }
+    }
+    if bytes[7] >= 6 {
+        let count = r.u32()? as usize;
+        ensure!(count <= MAX_DUNGEONS, "Too many dungeon key rings");
+        for _ in 0..count {
+            let x = r.u32()? as i32;
+            let z = r.u32()? as i32;
+            let small = r.u8()?;
+            let great = r.u8()? != 0;
+            let looted = u64::from(r.u32()?) | (u64::from(r.u32()?) << 32);
+            let ring = super::KeyRing { small, great, looted };
+            ensure!(state.dungeon_keys.insert((x, z), ring).is_none(), "Duplicate dungeon key ring");
+        }
+    }
     ensure!(r.at == r.bytes.len(), "Trailing bytes in block file");
     Ok(state)
 }
@@ -174,16 +220,4 @@ pub fn load(state: &mut State, dir: &Path) {
         Ok(loaded) => *state = loaded,
         Err(e) => eprintln!("[blocks] Ignoring {}: {e:#}", path.display()),
     }
-}
-
-/// Replaces the file through a synced temporary so a crash keeps the old one.
-pub fn save(dir: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let path = dir.join(FILE);
-    let tmp = dir.join(format!("{FILE}.tmp"));
-    let mut file = std::fs::File::create(&tmp).with_context(|| format!("Cannot create {}", tmp.display()))?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&tmp, &path).with_context(|| format!("Cannot publish {}", path.display()))
 }

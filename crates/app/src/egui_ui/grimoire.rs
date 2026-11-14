@@ -9,9 +9,9 @@ pub const GOLD_LIGHT: C = super::pixel_art::HIGHLIGHT;
 pub const SILVER_DARK: C = C::from_rgb(74, 81, 81);
 pub const SILVER: C = C::from_rgb(160, 180, 174);
 pub const SILVER_LIGHT: C = super::pixel_art::PAPER;
-pub const SLOT: f32 = 18.0;
+pub const SLOT: f32 = 26.0;
 pub const GAP: f32 = 2.0;
-pub const ICON: f32 = 14.0;
+pub const ICON: f32 = 22.0;
 
 /// Whole-label navigation: integer accents, readable type and stable hit areas.
 pub fn tab(ui: &mut egui::Ui, text: &str, selected: bool, compact: bool) -> egui::Response {
@@ -28,15 +28,17 @@ pub fn tab(ui: &mut egui::Ui, text: &str, selected: bool, compact: bool) -> egui
         egui::WidgetType::Button, ui.is_enabled(), text,
     ));
     if selected || response.hovered() || response.has_focus() {
+        let palette = super::themes::current(ui.ctx());
+        let original = super::themes::get(ui.ctx()) == 0;
         ui.painter().rect_filled(rect, 0, if selected {
-            C::from_rgb(65, 59, 45)
+            if original { C::from_rgb(65, 59, 45) } else { palette.selection() }
         } else {
-            C::from_rgb(43, 62, 61)
+            if original { C::from_rgb(43, 62, 61) } else { palette.hover() }
         });
         ui.painter().rect_filled(
             Rect::from_min_size(rect.left_bottom() - vec2(0.0, 2.0), vec2(rect.width(), 2.0)),
             0,
-            if selected { GOLD } else { super::pixel_art::TEAL },
+            if !original { palette.accent } else if selected { GOLD } else { super::pixel_art::TEAL },
         );
     }
     ui.painter().galley(rect.center() - label.size() * 0.5, label, super::presentation::PAPER);
@@ -80,6 +82,7 @@ pub fn review_page() -> Option<u32> {
         || match std::env::var("VOXEL_GRIMOIRE_REVIEW").ok().as_deref() {
             Some("inventory") => Some(2),
             Some("wands") => Some(1),
+            Some("creative") => Some(4),
             Some("production") => Some(7),
             _ => None,
         },
@@ -269,20 +272,44 @@ pub fn snap(r: Rect) -> Rect {
 pub fn slot(p: &Painter, r: Rect, selected: bool) {
     let r = snap(r);
     let (w, h) = (r.width(), r.height());
-    p.rect_filled(r, 0, RECESS);
-    let metal = if selected { GOLD } else { SILVER_DARK };
+    let theme = super::themes::current(p.ctx());
+    let original = super::themes::get(p.ctx()) == 0;
+    p.rect_filled(r, 0, if original { RECESS } else { theme.recess });
+    // Recessed well: shadow inside the upper/left lip, reflected light below.
+    // The outer fitting stays unchanged; the icon keeps its full central area.
+    let well = if original { RECESS } else { theme.recess };
+    pixel(p, r, 2.0, 2.0, w - 4.0, 2.0, super::pixel_art::shade(well));
+    pixel(p, r, 2.0, 4.0, 2.0, h - 8.0, super::pixel_art::shade(well));
+    pixel(p, r, 3.0, h - 3.0, w - 6.0, 1.0, super::pixel_art::bottom_shadow(theme.edge));
+    super::prism::edge(p, r, if selected { 1.0 } else { 0.26 }, selected);
+    if selected {
+        super::prism::halo(p, r, 0.75);
+    }
+    let metal = if original { if selected { GOLD } else { SILVER_DARK } }
+        else if selected { theme.accent } else { theme.edge };
     // Brass belongs to selection and fittings; empty cavities stay quiet.
-    let shadow = if selected { GOLD_DARK } else { C::from_rgb(35, 40, 41) };
+    let shadow = if original { if selected { GOLD_DARK } else { C::from_rgb(35, 40, 41) } }
+        else { super::pixel_art::shade(theme.edge) };
     pixel(p, r, 1.0, 0.0, w - 2.0, 1.0, metal);
     pixel(p, r, 0.0, 1.0, 1.0, h - 2.0, metal);
     pixel(p, r, w - 1.0, 1.0, 1.0, h - 2.0, shadow);
     pixel(p, r, 1.0, h - 1.0, w - 2.0, 1.0, shadow);
     if selected {
         // Two corner teeth and a lower notch distinguish selection in grayscale.
+        let light = if original { GOLD_LIGHT } else { super::pixel_art::top_light(theme.accent) };
         for x in [1.0, w - 4.0] {
-            pixel(p, r, x, 1.0, 3.0, 1.0, GOLD_LIGHT);
+            pixel(p, r, x, 1.0, 3.0, 1.0, light);
         }
-        pixel(p, r, (w / 2.0).floor() - 1.0, h - 2.0, 3.0, 2.0, GOLD_LIGHT);
+        pixel(p, r, (w / 2.0).floor() - 1.0, h - 2.0, 3.0, 2.0, light);
+        super::pixel_art::rainbow_selection(p, r, p.ctx().input(|i| i.time));
+        // Fixed corner brackets survive dark rainbow phases and bright counts.
+        // They are drawn last so hue animation cannot erase selection shape.
+        for x in [1.0, w - 6.0] {
+            pixel(p, r, x, 1.0, 5.0, 2.0, light);
+        }
+        for x in [1.0, w - 3.0] {
+            pixel(p, r, x, 3.0, 2.0, 3.0, light);
+        }
     }
 }
 
@@ -312,14 +339,23 @@ pub fn focus(p: &Painter, r: Rect) {
 /// Cover rails, stitched leather, stepped metal corner plates and silver rivets.
 /// Use a background painter so fittings never cover interactive content.
 pub fn binding(p: &Painter, r: Rect, book: bool) {
+    let palette = super::themes::current(p.ctx());
+    let original = super::themes::get(p.ctx()) == 0;
+    let trim = if original { GOLD } else { palette.edge };
+    let trim_shade = if original { GOLD_DARK } else { super::pixel_art::shade(palette.edge) };
+    let trim_light = if original { GOLD_LIGHT } else { palette.accent };
+    let metal = if original { SILVER } else { palette.edge };
+    let metal_shade = if original { SILVER_DARK } else { palette.recess };
+    let metal_light = if original { SILVER_LIGHT } else { super::pixel_art::top_light(palette.edge) };
+    let cover = if original { LEATHER } else { palette.panel };
     let r = snap(r);
     let (w, h) = (r.width(), r.height());
-    pixel(p, r, 4.0, 1.0, w - 8.0, 1.0, GOLD_DARK);
-    pixel(p, r, 4.0, h - 2.0, w - 8.0, 1.0, GOLD_DARK);
+    pixel(p, r, 4.0, 1.0, w - 8.0, 1.0, trim_shade);
+    pixel(p, r, 4.0, h - 2.0, w - 8.0, 1.0, trim_shade);
     for i in 0..((w - 20.0) / 6.0).max(0.0) as i32 {
         let x = 10.0 + i as f32 * 6.0;
-        pixel(p, r, x, 3.0, 2.0, 1.0, GOLD_DARK);
-        pixel(p, r, x, h - 4.0, 2.0, 1.0, GOLD_DARK);
+        pixel(p, r, x, 3.0, 2.0, 1.0, trim_shade);
+        pixel(p, r, x, h - 4.0, 2.0, 1.0, trim_shade);
     }
     for (x, y, dx, dy) in [
         (0.0, 0.0, 1.0, 1.0),
@@ -329,18 +365,18 @@ pub fn binding(p: &Painter, r: Rect, book: bool) {
     ] {
         for k in 0..6 {
             let k = k as f32;
-            pixel(p, r, x + dx * k, y, 1.0, 1.0, GOLD);
-            pixel(p, r, x, y + dy * k, 1.0, 1.0, GOLD);
+            pixel(p, r, x + dx * k, y, 1.0, 1.0, trim);
+            pixel(p, r, x, y + dy * k, 1.0, 1.0, trim);
         }
-        pixel(p, r, x + dx, y + dy, 1.0, 1.0, GOLD_LIGHT);
-        pixel(p, r, x + dx * 2.0, y + dy * 2.0, 1.0, 1.0, SILVER_LIGHT);
-        pixel(p, r, x + dx * 3.0, y + dy * 3.0, 1.0, 1.0, SILVER_DARK);
+        pixel(p, r, x + dx, y + dy, 1.0, 1.0, trim_light);
+        pixel(p, r, x + dx * 2.0, y + dy * 2.0, 1.0, 1.0, metal_light);
+        pixel(p, r, x + dx * 3.0, y + dy * 3.0, 1.0, 1.0, metal_shade);
     }
     if book && w > 100.0 && h > 80.0 {
-        pixel(p, r, 5.0, 8.0, 2.0, h - 16.0, LEATHER);
+        pixel(p, r, 5.0, 8.0, 2.0, h - 16.0, cover);
         for y in [12.0, h - 17.0] {
-            pixel(p, r, 3.0, y, 6.0, 3.0, GOLD_DARK);
-            pixel(p, r, 3.0, y, 6.0, 1.0, GOLD);
+            pixel(p, r, 3.0, y, 6.0, 3.0, trim_shade);
+            pixel(p, r, 3.0, y, 6.0, 1.0, trim);
         }
         pixel(
             p,
@@ -349,9 +385,9 @@ pub fn binding(p: &Painter, r: Rect, book: bool) {
             (h / 2.0).floor() - 5.0,
             5.0,
             10.0,
-            SILVER_DARK,
+            metal_shade,
         );
-        pixel(p, r, w - 4.0, (h / 2.0).floor() - 4.0, 4.0, 1.0, SILVER);
+        pixel(p, r, w - 4.0, (h / 2.0).floor() - 4.0, 4.0, 1.0, metal);
         pixel(
             p,
             r,
@@ -359,7 +395,7 @@ pub fn binding(p: &Painter, r: Rect, book: bool) {
             (h / 2.0).floor() - 1.0,
             2.0,
             2.0,
-            SILVER_LIGHT,
+            metal_light,
         );
     }
 }

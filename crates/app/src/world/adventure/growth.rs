@@ -6,9 +6,12 @@ use crate::world::factory::Kind;
 use anyhow::ensure;
 use glam::{IVec3, Quat, Vec3};
 
+pub(super) mod lanterncap;
+
 pub use engine_content::SizeClass;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Age {
     Juvenile = 0,
     Mature = 1,
@@ -25,6 +28,7 @@ impl Age {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Companion {
     pub id: u32,
     pub age: Age,
@@ -41,6 +45,10 @@ pub struct Companion {
 }
 
 impl Companion {
+    pub(crate) fn is_rescued(&self) -> bool {
+        self.id == lanterncap::ID
+    }
+
     pub fn juvenile(id: u32, pos: Vec3) -> Self {
         Self {
             id,
@@ -58,11 +66,14 @@ impl Companion {
         }
     }
 
-    pub fn model(&self, m: &mut Model, time: f32) {
+    pub fn model(&self, m: &mut Model, time: f32, viewer: Vec3) {
         let h = self.shown.max(0.4);
         let w = self.size.half_width();
+        let rescued = self.is_rescued();
         let bob = if self.rooted {
             0.0
+        } else if rescued {
+            (time * 4.4).sin() * 0.085
         } else {
             (time * 2.2).sin() * 0.04
         };
@@ -78,8 +89,8 @@ impl Companion {
             foot + Vec3::Y * (h * 0.72),
             Vec3::new(w * 1.7, h * 0.22, w * 1.7),
             Quat::IDENTITY,
-            super::PALETTE_LEAF,
-            0.2,
+            if rescued { [0.39, 0.73, 0.56] } else { super::PALETTE_LEAF },
+            if rescued { 0.45 } else { 0.2 },
         );
         m.orb(
             foot + Vec3::Y * (h * 0.78),
@@ -87,6 +98,14 @@ impl Companion {
             super::PALETTE_AMBER,
             0.7,
         );
+        if rescued {
+            let facing = (viewer - foot).with_y(0.0).try_normalize().unwrap_or(Vec3::Z);
+            let across = Vec3::Y.cross(facing);
+            for side in [-1.0, 1.0] {
+                m.orb(foot + Vec3::Y * (h * 0.43) + facing * (w * 0.56) + across * (side * w * 0.30),
+                    w * 0.11, [1.0, 0.87, 0.48], 1.7);
+            }
+        }
     }
 }
 

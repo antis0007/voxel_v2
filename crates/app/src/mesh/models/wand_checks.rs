@@ -86,3 +86,21 @@ fn viewmodel_warm_draw_allocations_and_time() {
     assert_eq!(m.vertices.capacity(),capacity);
     eprintln!("[viewmodel-profile] iterations=1000 vertices={vertices} draw_us={:.3} warm_allocations={allocations}",elapsed.as_secs_f64()*1000.0);
 }
+
+#[test]
+fn viewmodel_rejects_nonfinite_transforms() {
+    let mesh=super::wand_asset::Mesh::load(
+        include_str!("../../../../../assets/viewmodel/hand.ron"),"hand-check");
+    let mut model=Model::new(1.0);
+    mesh.draw(&mut model,Vec3::ZERO,glam::Quat::IDENTITY,Vec3::ONE,[1.0;3],[1.0;3]);
+    assert!(!model.vertices.is_empty());
+    model.vertices.clear();
+    for (origin,rotation,scale) in [
+        (Vec3::splat(f32::NAN),glam::Quat::IDENTITY,Vec3::ONE),
+        (Vec3::ZERO,glam::Quat::from_xyzw(f32::NAN,0.0,0.0,1.0),Vec3::ONE),
+        (Vec3::ZERO,glam::Quat::IDENTITY,Vec3::new(1.0,0.0,1.0)),
+    ] {
+        mesh.draw(&mut model,origin,rotation,scale,[1.0;3],[1.0;3]);
+        assert!(model.vertices.is_empty());
+    }
+}

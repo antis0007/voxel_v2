@@ -10,17 +10,25 @@ use std::sync::LazyLock;
 const RESOURCES: &str = include_str!("../../../../../assets/icons/resources16.txt");
 const ITEMS: &str = include_str!("../../../../../assets/icons/items16.txt");
 const MACHINES: &str = include_str!("../../../../../assets/icons/machines16.txt");
+const EFFECTS: &str = include_str!("../../../../../assets/icons/effects16.txt");
+const BLOCKS: &str = include_str!("../../../../../assets/icons/blocks16.txt");
+/// Effect sheet id for the mana poisoning badge, after every `effects::Kind`.
+pub(crate) const MANA_POISONING: usize = 11;
 pub(super) const SIZE: usize = 16;
-/// First id of foods in the items sheet; foods follow in `FoodKind` order.
-const FOOD_BASE: usize = 10;
 /// First id of armour; four tiers per slot.
 const ARMOR_BASE: usize = 20;
 const SPELL_FRAME: usize = 36;
 
 type Pixels = Vec<C>;
 
-static SHEETS: LazyLock<[Vec<Option<Pixels>>; 3]> = LazyLock::new(|| {
-    [parse(RESOURCES).unwrap_or_default(), parse(ITEMS).unwrap_or_default(), parse(MACHINES).unwrap_or_default()]
+static SHEETS: LazyLock<[Vec<Option<Pixels>>; 5]> = LazyLock::new(|| {
+    [
+        parse(RESOURCES).unwrap_or_default(),
+        parse(ITEMS).unwrap_or_default(),
+        parse(MACHINES).unwrap_or_default(),
+        parse(EFFECTS).unwrap_or_default(),
+        parse(BLOCKS).unwrap_or_default(),
+    ]
 });
 
 /// Sheet and sprite id for an icon drawn from a sprite sheet.
@@ -28,10 +36,28 @@ fn sprite(icon: Icon) -> Option<(usize, usize)> {
     Some(match icon {
         Icon::Resource(id) => (0, id),
         Icon::Machine(kind) => (2, kind as usize),
+        Icon::Bucket(full) => (1, full as usize),
         Icon::Torch => (1, 2),
+        Icon::Shears => (1, 3),
         Icon::Rod => (1, 4),
         Icon::Boat => (1, 5),
-        Icon::Food(kind) => (1, FOOD_BASE + kind as usize),
+        Icon::Pickaxe(tier @ 6..=8) => (1, tier as usize),
+        Icon::Ladder => (1, 37),
+        Icon::Vines => (1, 38),
+        Icon::Sapling => (1, 39),
+        Icon::Bore => (1, 40),
+        Icon::Pan => (1, 41),
+        Icon::ClaimStake => (1, 75),
+        Icon::Armor(0, 10) => (1, 76),
+        Icon::Armor(0, 11) => (1, 78),
+        Icon::Hoe => (1, 77),
+        Icon::Sling => (1, 79),
+        Icon::Clock => (1, 80),
+        Icon::Map => (1, 81),
+        Icon::Food(kind) => {
+            let food = crate::world::inventory::FoodKind::from_u8(kind)?;
+            (1, crate::world::inventory::food::get(food)?.icon_id())
+        }
         Icon::Armor(slot @ 0..=3, tier @ 1..=4) => (1, ARMOR_BASE + slot as usize * 4 + tier as usize - 1),
         _ => return None,
     })
@@ -101,9 +127,14 @@ pub(super) fn parse(source: &str) -> Result<Vec<Option<Pixels>>, String> {
 
 /// Sheet texels for the held-item mesh, in `held_art::icon_texels` form.
 pub(crate) fn texels(icon: Icon) -> Option<(usize, usize, Vec<Option<(u8, [u8; 3])>>)> {
+    static ITEM_OUTLINE: LazyLock<Option<C>> =
+        LazyLock::new(|| ITEMS.lines().find_map(|line| hex(line.strip_prefix("outline ")?)));
     let (sheet, id) = sprite(icon)?;
     let pixels = SHEETS[sheet].get(id)?.as_ref()?;
-    let texels = pixels.iter().map(|c| (c.a() == 255).then(|| (b'#', [c.r(), c.g(), c.b()]))).collect();
+    let texels = pixels.iter().map(|c| {
+        let ink = sheet == 1 && Some(*c) == *ITEM_OUTLINE;
+        (c.a() == 255).then(|| (if ink { 0 } else { b'#' }, [c.r(), c.g(), c.b()]))
+    }).collect();
     Some((SIZE, SIZE, texels))
 }
 
@@ -112,9 +143,35 @@ pub(super) fn paint(p: &Painter, r: Rect, icon: Icon) -> bool {
     sprite(icon).is_some_and(|(sheet, id)| paint_sprite(p, r, sheet, id, None))
 }
 
+/// Block sprites named by `BlockId` in `blocks16.txt`, as (block, sheet id).
+static BLOCK_SPRITES: LazyLock<Vec<(crate::material::BlockId, usize)>> = LazyLock::new(|| {
+    BLOCKS
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.strip_prefix("sprite ")?.split_whitespace();
+            let id: usize = words.next()?.parse().ok()?;
+            let name = words.next()?;
+            SHEETS[4].get(id)?.as_ref()?;
+            let block = crate::material::ALL_BLOCK_IDS.iter().copied().find(|b| format!("{b:?}") == name)?;
+            Some((block, id))
+        })
+        .collect()
+});
+
+/// Draws the sheet sprite of a plant or produce block; false if it has none,
+/// so the caller draws the shaded cube.
+pub(crate) fn paint_block(p: &Painter, r: Rect, block: crate::material::BlockId) -> bool {
+    BLOCK_SPRITES.iter().find(|(b, _)| *b == block).is_some_and(|&(_, id)| paint_sprite(p, r, 4, id, None))
+}
+
 /// Draws the shared spell backplate; false if the sheet lacks it.
 pub(super) fn paint_spell_frame(p: &Painter, r: Rect) -> bool {
     paint_sprite(p, r, 1, SPELL_FRAME, None)
+}
+
+/// Draws status effect badge `id` (an `effects::Kind` or [`MANA_POISONING`]).
+pub(crate) fn paint_effect(p: &Painter, r: Rect, id: usize) -> bool {
+    paint_sprite(p, r, 3, id, None)
 }
 
 /// Draws `icon` as one flat `tint` shape; false if no sheet covers it.
@@ -167,7 +224,19 @@ mod tests {
         parse(RESOURCES).unwrap();
         parse(ITEMS).unwrap();
         parse(MACHINES).unwrap();
+        parse(EFFECTS).unwrap();
         assert!(SHEETS[1].get(SPELL_FRAME).is_some_and(Option::is_some));
+    }
+
+    #[test]
+    fn every_effect_has_a_badge() {
+        use crate::world::progression::effects::Kind;
+        for id in Kind::ALL.iter().map(|k| *k as usize).chain([MANA_POISONING]) {
+            let pixels = SHEETS[3].get(id).and_then(Option::as_ref);
+            let pixels = pixels.unwrap_or_else(|| panic!("effect sheet has no sprite {id}"));
+            assert!(pixels.iter().filter(|c| c.a() == 255).count() >= 40, "effect {id}");
+        }
+        assert!(!Kind::ALL.iter().any(|k| *k as usize == MANA_POISONING));
     }
 
     #[test]
@@ -175,7 +244,9 @@ mod tests {
         for id in 0..crate::world::factory::RESOURCE_COUNT {
             assert_drawn(&format!("resource {id}"), Icon::Resource(id));
         }
-        let tools = [("torch", Icon::Torch), ("rod", Icon::Rod), ("boat", Icon::Boat)];
+        let tools = [("bucket", Icon::Bucket(false)), ("filled bucket", Icon::Bucket(true)), ("torch", Icon::Torch),
+            ("shears", Icon::Shears), ("rod", Icon::Rod), ("boat", Icon::Boat),
+            ("wooden pickaxe", Icon::Pickaxe(6)), ("stone pickaxe", Icon::Pickaxe(7)), ("iron pickaxe", Icon::Pickaxe(8))];
         for (label, icon) in tools {
             assert_drawn(label, icon);
         }

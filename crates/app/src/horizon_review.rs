@@ -17,6 +17,7 @@ use std::{
 #[ignore = "bounded authoritative source diagnostic for the captured ridge approach"]
 fn probe_approach_hill_materials() {
     let cfg = WorldSampleConfig {
+        planet: None,
         generator_version: 25, seed: 2_738_958_700,
         world_type: world::WorldType::Hills,
         voxel_scale: crate::fluid::VoxelScalePreset::OneMeter,
@@ -61,7 +62,7 @@ pub fn frame(
     elapsed: f32,
     dirty_blocks: &mut HashSet<IVec3>,
     dirty_chunks: &mut HashSet<IVec3>,
-) {
+) -> Option<Vec3> {
     static PROBE: OnceLock<()> = OnceLock::new();
     if crate::terrain_review::option("VOXEL_HORIZON_PROBE") {
         PROBE.get_or_init(|| {
@@ -82,15 +83,17 @@ pub fn frame(
     }
     edit_frame(world, elapsed, dirty_blocks, dirty_chunks);
     if !crate::terrain_review::option("VOXEL_HORIZON_ROUTE") {
-        return;
+        return None;
     }
     let t = elapsed.max(0.0);
     let scale = world.voxel_scale.meters();
     let origin = player.pos * scale;
     let shore = Vec3::new(1653.0-origin.x, 0.0, -1725.0-origin.z);
     let ridge = Vec3::new(2602.0-origin.x, 0.0, -3923.0-origin.z);
-    let shore_back = shore - shore.normalize_or_zero()*120.0;
-    let ridge_back = ridge - ridge.normalize_or_zero()*120.0;
+    let shore_dir = shore.normalize_or_zero();
+    let ridge_dir = ridge.normalize_or_zero();
+    let shore_back = shore - shore_dir * 120.0;
+    let ridge_back = ridge - ridge_dir * 120.0;
     let facing = |p:Vec3| p.x.atan2(-p.z)-player.yaw;
     let smooth = |v:f32| { let v=v.clamp(0.0,1.0); v*v*(3.0-2.0*v) };
     let (offset,yaw,pitch,phase,ground_blend) = if t<20.0 {
@@ -98,17 +101,17 @@ pub fn frame(
     } else if t<45.0 {
         let u=(t-20.0)/25.0; (shore_back*u,facing(shore)*smooth(u*5.0),0.0,1,smooth(u))
     } else if t<65.0 {
-        (shore_back+shore.normalize_or_zero()*(t-45.0)*6.0,facing(shore),0.0,2,1.0)
+        (shore_back+shore_dir*(t-45.0)*6.0,facing(shore),0.0,2,1.0)
     } else if t<85.0 {
-        (shore-shore.normalize_or_zero()*(t-65.0)*6.0,facing(shore),0.0,3,1.0)
+        (shore-shore_dir*(t-65.0)*6.0,facing(shore),0.0,3,1.0)
     } else if t<110.0 {
         let u=(110.0-t)/25.0; (shore_back*u,facing(shore)*smooth(u*5.0),0.0,4,smooth(u))
     } else if t<135.0 {
         let u=(t-110.0)/25.0; (ridge_back*u,facing(ridge)*smooth(u*5.0),0.0,5,smooth(u))
     } else if t<155.0 {
-        (ridge_back+ridge.normalize_or_zero()*(t-135.0)*6.0,facing(ridge),0.0,6,1.0)
+        (ridge_back+ridge_dir*(t-135.0)*6.0,facing(ridge),0.0,6,1.0)
     } else if t<175.0 {
-        (ridge-ridge.normalize_or_zero()*(t-155.0)*6.0,facing(ridge),0.0,7,1.0)
+        (ridge-ridge_dir*(t-155.0)*6.0,facing(ridge),0.0,7,1.0)
     } else if t<200.0 {
         let u=(200.0-t)/25.0; (ridge_back*u,facing(ridge)*smooth(u*5.0),0.0,8,smooth(u))
     } else if t<215.0 {
@@ -145,6 +148,21 @@ pub fn frame(
             player.pitch
         );
     }
+    // Scripted motion bypasses physics. Feed the same horizontal velocity to
+    // streaming lookahead without treating the scripted jumps as flight.
+    Some(match phase {
+        1 => shore_back / 25.0,
+        2 => shore_dir * 6.0,
+        3 => -shore_dir * 6.0,
+        4 => -shore_back / 25.0,
+        5 => ridge_back / 25.0,
+        6 => ridge_dir * 6.0,
+        7 => -ridge_dir * 6.0,
+        8 => -ridge_back / 25.0,
+        11 => Vec3::new(-origin.x, 0.0, -3448.0 - origin.z) / 20.0,
+        12 => Vec3::X * 80.0,
+        _ => Vec3::ZERO,
+    } / scale)
 }
 
 /// Bounded synthetic structure, shore excavation, actual tree removal, restore.

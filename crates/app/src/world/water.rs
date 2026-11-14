@@ -4,22 +4,21 @@ use super::{BlockId, World, chunk_coord_from_world_block};
 use crate::fast_hash::FastMap;
 use glam::{IVec3, Vec2, Vec3};
 use std::sync::Arc;
-/// Find the exposed top of the water column containing, or immediately around,
-/// a metric point. The returned Y includes the partial cell's eight-unit
-/// volume, so a splash ring sits on the rendered surface rather than the top
-/// of the containing voxel. Deep interior points are rejected instead of
-/// producing a fake contact ring far above the actual impact.
-pub fn surface_at(world: &World, point: Vec3, scale: f32) -> Option<Vec3> {
+/// Find the exposed top of the liquid column containing, or immediately around,
+/// a metric point. Apply the renderer's inset and any partial water fill.
+pub fn surface_at(world: &World, point: Vec3, scale: f32, liquid: BlockId) -> Option<Vec3> {
     if !point.is_finite() || !scale.is_finite() || scale <= 1e-6 {
         return None;
     }
     let base = (point / scale).floor().as_ivec3();
+    let contains_liquid = |p| world.get(p) == liquid
+        && (liquid != BlockId::Water || world.water_volume(p) > 0);
     let mut column = None;
     // A projectile may cross the surface between substeps, so probe the
     // containing cell and its two vertical neighbours before giving up.
     for dy in [0, -1, 1, -2] {
         let cell = base + IVec3::Y * dy;
-        if world.get(cell) == BlockId::Water && world.water_volume(cell) > 0 {
+        if contains_liquid(cell) {
             column = Some(cell);
             break;
         }
@@ -28,7 +27,7 @@ pub fn surface_at(world: &World, point: Vec3, scale: f32) -> Option<Vec3> {
     let mut climbed = 0;
     for _ in 0..24 {
         let above = top + IVec3::Y;
-        if world.get(above) != BlockId::Water || world.water_volume(above) == 0 {
+        if !contains_liquid(above) {
             break;
         }
         top = above;
@@ -37,13 +36,16 @@ pub fn surface_at(world: &World, point: Vec3, scale: f32) -> Option<Vec3> {
     if climbed == 24 || world.get(top + IVec3::Y).is_solid() {
         return None;
     }
-    let fill = world.water_fill(top);
-    if fill == 0.0 {
-        return None;
-    }
+    let height = match liquid {
+        BlockId::Water => crate::mesh::free_water_height(world.water_fill(top)),
+        BlockId::Lava => 1.0 - crate::mesh::LAVA_SURFACE_INSET,
+        BlockId::SulfuricAcid => 1.0 - crate::mesh::ACID_SURFACE_INSET,
+        _ => return None,
+    };
+    if height <= 0.0 { return None; }
     Some(Vec3::new(
         point.x,
-        (top.y as f32 + fill) * scale,
+        (top.y as f32 + height) * scale,
         point.z,
     ))
 }
@@ -56,6 +58,26 @@ pub struct WaterSnapshot {
     pub precision: super::environment::Fractions,
 }
 impl WaterSnapshot {
+    /// Immutable chunk identities for local invalidation. Retained snapshots pin
+    /// their Arcs; these are never persisted or sent over the network.
+    pub(crate) fn chunk_identities(&self) -> impl Iterator<Item=(IVec3,usize)> + '_ {
+        self.chunks.iter().map(|(&coord,cells)|(coord,Arc::as_ptr(cells) as usize))
+    }
+
+    pub(super) fn set_ca_water(&mut self, p: IVec3, cell: engine_sim::Cell, cell_volume: u64) {
+        let coord = chunk_coord_from_world_block(p);
+        if let Some(chunk) = self.chunks.get_mut(&coord) {
+            Arc::make_mut(chunk).remove(&p);
+        }
+        self.precision.remove(&(p.x, p.y, p.z));
+        if cell.material == BlockId::Water as u8 && cell.volume != 0 {
+            let coarse = cell.volume.div_ceil(8);
+            if coarse != 8 { Arc::make_mut(self.chunks.entry(coord).or_default()).insert(p, coarse); }
+            let deficit = u64::from(coarse * 8 - cell.volume) * cell_volume / 64;
+            if deficit != 0 { self.precision.insert((p.x, p.y, p.z), deficit); }
+        }
+        if self.chunks.get(&coord).is_some_and(|chunk| chunk.is_empty()) { self.chunks.remove(&coord); }
+    }
     pub fn with_precision(mut self, precision: &super::environment::Fractions) -> Self {
         self.precision = precision.clone(); self
     }
@@ -98,6 +120,22 @@ impl WaterSnapshot {
             .filter(|q| !self.chunks.contains_key(q) && !old.chunks.contains_key(q))
             .map(|q| (q,None,None));
         changed.chain(removed).chain(fractional)
+    }
+
+    /// Whether a changed chunk crosses a visible water-height step.
+    pub(crate) fn surface_changed(&self, old: &Self, q: IVec3, scale: engine_core::VoxelScalePreset) -> bool {
+        let quantum = engine_core::environment::cell_volume(scale) / 8;
+        let step = |s: &Self, p: IVec3| {
+            let amount = u64::from(s.get(&p).copied().unwrap_or(8)) * quantum;
+            super::environment::surface_step(amount.saturating_sub(s.deficit(p)), quantum)
+        };
+        let lo = q * engine_core::CHUNK_SIZE;
+        let hi = lo + IVec3::splat(engine_core::CHUNK_SIZE);
+        self.chunks.get(&q).into_iter().flat_map(|m| m.keys().copied())
+            .chain(old.chunks.get(&q).into_iter().flat_map(|m| m.keys().copied()))
+            .chain(self.precision.in_box(lo, hi).map(|(p, _)| p))
+            .chain(old.precision.in_box(lo, hi).map(|(p, _)| p))
+            .any(|p| step(self, p) != step(old, p))
     }
 }
 

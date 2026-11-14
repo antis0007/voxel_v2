@@ -55,8 +55,8 @@ fn gpu_retained_columns_keep_draw_mask_dirty_and_budget_ownership() {
     let draw=cache.resident_coverage(Vec3::ZERO,4,1.0);
     let desired=cache.desired_resident_coverage(Vec3::ZERO,4,1.0);
     assert!(draw.contains_column(50,0)); assert!(!desired.contains_column(50,0));
-    let vp=glam::Mat4::orthographic_rh(-5000.0,5000.0,-5000.0,5000.0,0.1,10000.0)
-        *glam::Mat4::look_at_rh(Vec3::new(0.0,500.0,2000.0),Vec3::ZERO,Vec3::Y);
+    let vp=glam::camera::rh::proj::directx::orthographic(-5000.0,5000.0,-5000.0,5000.0,0.1,10000.0)
+        *glam::camera::rh::view::look_at_mat4(Vec3::new(0.0,500.0,2000.0),Vec3::ZERO,Vec3::Y);
     assert!(build_draw_list(&cache,vp).iter().any(|k|k.coord==a));
     cache.gpu_meshes.insert(b,mesh()); cache.gpu_meshes.insert(b+IVec3::Y,mesh());
     cache.visible.push(ChunkKey{coord:b,lod:0}); cache.visible.push(ChunkKey{coord:b+IVec3::Y,lod:0});
@@ -125,8 +125,8 @@ fn gpu_sparse_pin_survives_world_origin_shift_and_matches_actual_child_draws() {
     cache.rebuild_visible_sets();
     cache.install_mesh(coord,ChunkGpuMesh::test_mesh(3, 0, false, 32));
     cache.set_horizon_pins(vec![(coord.x,coord.z)]);
-    let vp=glam::Mat4::orthographic_rh(-100_000.0,100_000.0,-100_000.0,100_000.0,0.1,1_000_000.0)
-        *glam::Mat4::look_at_rh(Vec3::new(0.0,5000.0,200_000.0),Vec3::ZERO,Vec3::Y);
+    let vp=glam::camera::rh::proj::directx::orthographic(-100_000.0,100_000.0,-100_000.0,100_000.0,0.1,1_000_000.0)
+        *glam::camera::rh::view::look_at_mat4(Vec3::new(0.0,5000.0,200_000.0),Vec3::ZERO,Vec3::Y);
     for center in [IVec3::ZERO,IVec3::new(1_000_000,0,-1_000_000),coord] {
         cache.center_chunk=center;
         cache.rebuild_visible_sets();
@@ -154,6 +154,7 @@ fn gpu_sparse_pin_survives_world_origin_shift_and_matches_actual_child_draws() {
         let q=IVec3::new(x,0,100);
         cache.gpu_meshes.insert(q,ChunkGpuMesh::test_mesh(3, 0, false, 32));
         cache.published_coords.insert(q);
+        cache.published_columns.insert((q.x, q.z), vec![q]);
         wanted.push((q.x,q.z));
     }
     cache.gpu_bytes=cache.gpu_meshes.values().map(|m|m.bytes).sum();

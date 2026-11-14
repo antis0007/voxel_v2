@@ -2,6 +2,12 @@
 //! drops, death, sorting and saves. They never substitute for ordinary recipes.
 use super::{Kind, Node, induction, power};
 
+// Seven rate bits are part of the existing portable-item save contract.
+const LIMIT_MASK: u32 = 0x7f;
+
+#[cfg(test)]
+mod packing_tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PowerKit {
     pub kind: Kind,
@@ -40,7 +46,7 @@ mod tests {
             let p = IVec3::new(4, 40, 4) * size;
             let n = super::super::fixture_place(&mut w, p, Kind::Battery).unwrap();
             n.upgrade = 2; n.energy = 123_456; n.mode = 1; n.target = 17;
-            let expected = PowerKit::from_node(n).unwrap();
+            let expected = PowerKit::from_node(n).unwrap().unwrap();
             let mut blocks = Default::default();
             let mut chunks = Default::default();
             assert!(super::super::dismantle(&mut w, p, &mut blocks, &mut chunks));
@@ -52,7 +58,7 @@ mod tests {
             let mut player = crate::player::Player::new();
             player.pos = p.as_vec3() + glam::Vec3::splat(12.0 * size as f32);
             assert!(super::super::place(&mut w, p, Kind::Battery.block(), &player, Some(item), &mut blocks, &mut chunks));
-            assert_eq!(PowerKit::from_node(&w.factory.nodes[&p]), Some(expected));
+            assert_eq!(PowerKit::from_node(&w.factory.nodes[&p]).unwrap(), Some(expected));
             assert_eq!(w.inventory.count_item(item), 0);
         }
     }
@@ -76,11 +82,26 @@ impl PowerKit {
         matches!(kind, Kind::Battery | Kind::Transformer | Kind::InductionPort | Kind::InductionCell)
     }
 
-    pub(super) fn from_node(n: &Node) -> Option<Self> {
-        Self::supports(n.kind).then_some(Self {
-            kind: n.kind, energy: n.energy, upgrade: n.upgrade as u8,
-            mode: n.mode as u8, limit: n.target as u8,
-        })
+    /// Construct only a kit that the existing item codec can preserve exactly.
+    /// A rejected pickup leaves the installed machine and inventory untouched.
+    pub(super) fn from_node(n: &Node) -> anyhow::Result<Option<Self>> {
+        use anyhow::{Context, ensure};
+        if !Self::supports(n.kind) {
+            return Ok(None);
+        }
+        ensure!(n.target <= LIMIT_MASK,
+            "Portable I/O Limit: Unlimited or 1-{LIMIT_MASK} kW");
+        let kit = Self {
+            kind: n.kind,
+            energy: n.energy,
+            upgrade: n.upgrade.try_into().context("Portable Upgrade Invalid")?,
+            mode: n.mode.try_into().context("Portable Mode Invalid")?,
+            limit: n.target as u8,
+        };
+        let (header, energy) = kit.encode();
+        ensure!(Self::decode(header, energy).ok() == Some(kit),
+            "Portable Configuration Invalid");
+        Ok(Some(kit))
     }
 
     pub(super) fn node(self) -> Node {
@@ -105,8 +126,9 @@ impl PowerKit {
         let kind = *Kind::ALL.get(((header >> 8) & 31) as usize).context("Unknown power kit")?;
         ensure!(Self::supports(kind), "Assembly cannot carry power");
         let kit = Self { kind, energy, upgrade: ((header >> 13) & 3) as u8,
-            mode: ((header >> 15) & 3) as u8, limit: ((header >> 17) & 127) as u8 };
-        ensure!(kit.upgrade <= 2 && (kind.upgradable() || kit.upgrade == 0), "Invalid portable upgrade");
+            mode: ((header >> 15) & 3) as u8, limit: ((header >> 17) & LIMIT_MASK) as u8 };
+        ensure!(u32::from(kit.upgrade) <= kind.max_upgrade() && (kind.upgradable() || kit.upgrade == 0),
+            "Invalid portable upgrade");
         ensure!((kit.mode as usize) < kind.modes().len().max(1), "Invalid portable mode");
         ensure!(kit.limit == 0 || (kind == Kind::Battery && kit.limit as u32 <= power::battery_rate(kit.upgrade as u32)), "Invalid portable I/O limit");
         let cap = match kind {

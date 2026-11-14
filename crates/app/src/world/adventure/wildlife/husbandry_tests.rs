@@ -1,4 +1,4 @@
-use super::husbandry::{AREA_CAP, COOLDOWN_TICKS, GROW_TICKS, Member, service};
+use super::husbandry::{AREA_CAP, COOLDOWN_TICKS, FLEECE_TICKS, GROW_TICKS, Member, SHEARS, service};
 use super::*;
 use crate::world::WorldType;
 use crate::world::inventory::{Item, ItemStack};
@@ -75,7 +75,7 @@ fn husbandry_area_cap_stops_breeding() {
     let b = add(&mut w, GOAT, Vec3::new(2.8, floor, 0.0), 1);
     for i in 0..AREA_CAP - 2 {
         let m = Member { kind: GOAT, home: Vec3::X * i as f32, pos: Vec3::new(i as f32, floor, 9.0), health: 30.0,
-            yaw: 0.0, born: None, cooldown_until: 0, ready_until: 0 };
+            yaw: 0.0, born: None, cooldown_until: 0, ready_until: 0, fleece_at: 0 };
         w.adventure.wildlife.herd.members.insert(1000 + i as u32, m);
     }
     give(&mut w, FOOD, 8);
@@ -93,7 +93,7 @@ fn husbandry_area_cap_stops_breeding() {
 fn husbandry_young_grow_up_and_scale() {
     let (mut w, floor) = pasture();
     let m = Member { kind: SHEEP, home: Vec3::new(0.0, floor, 0.0), pos: Vec3::new(0.0, floor, 0.0), health: 24.0,
-        yaw: 0.0, born: Some(0), cooldown_until: 0, ready_until: 0 };
+        yaw: 0.0, born: Some(0), cooldown_until: 0, ready_until: 0, fleece_at: 0 };
     w.adventure.wildlife.herd.members.insert(5, m);
     at_second(&mut w, 0);
     service(&mut w, Vec3::ZERO);
@@ -144,6 +144,7 @@ fn husbandry_drops_come_from_the_bestiary_table() {
 fn husbandry_fed_wild_animal_leaves_the_wild_records() {
     let (mut w, floor) = pasture();
     let feet = Vec3::new(0.0, floor, 0.0);
+    super::tests::load_spawn_neighborhood(&mut w, feet);
     let mut adventure = std::mem::take(&mut w.adventure);
     spawn(&mut adventure, &w, feet);
     w.adventure = adventure;
@@ -168,7 +169,7 @@ fn husbandry_herd_survives_the_farming_sidecar() {
     give(&mut w, FOOD, 2);
     assert!(feed_at(&mut w, a));
     let calf = Member { kind: SHEEP, home: Vec3::new(4.0, floor, 4.0), pos: Vec3::new(5.0, floor, 4.0), health: 20.0,
-        yaw: 1.0, born: Some(0), cooldown_until: 7, ready_until: 0 };
+        yaw: 1.0, born: Some(0), cooldown_until: 7, ready_until: 0, fleece_at: 0 };
     w.adventure.wildlife.herd.members.insert(9, calf);
     w.farming.clock = 600;
     let bytes = sidecar::encode(&w);
@@ -177,4 +178,121 @@ fn husbandry_herd_survives_the_farming_sidecar() {
     sidecar::apply_herd(&mut fresh, herd, state.clock).expect("herd decodes");
     assert_eq!(fresh.adventure.wildlife.herd, w.adventure.wildlife.herd);
     assert!(sidecar::apply_herd(&mut fresh, &herd[..herd.len() - 1], state.clock).is_err());
+}
+
+const FIBRE: Item = Item::Resource(4);
+
+fn shear_at(w: &mut World, i: usize) -> bool {
+    let c = w.adventure.enemies[i].center();
+    shear(w, c + Vec3::Z * 2.0, Vec3::NEG_Z, 0)
+}
+
+#[test]
+fn husbandry_shearing_yields_fibre_once_per_regrowth() {
+    let (mut w, floor) = pasture();
+    let sheep = add(&mut w, SHEEP, Vec3::new(0.0, floor, 0.0), 0);
+    let goat = add(&mut w, GOAT, Vec3::new(0.0, floor, 6.0), 1);
+    give(&mut w, FOOD, 1);
+    assert!(!shear_at(&mut w, sheep), "only held shears cut");
+    give(&mut w, SHEARS, 1);
+    assert!(!shear_at(&mut w, goat), "goats carry no fleece row");
+    assert!(shear_at(&mut w, sheep));
+    let first = w.inventory.count_item(FIBRE);
+    let row = bestiary::species(SHEEP).and_then(|s| s.shear).expect("sheep fleece row");
+    assert!((row.min..=row.max).contains(&first), "{first}");
+    assert_eq!(w.adventure.wildlife.herd.members.len(), 1, "a sheared wild sheep joins the herd");
+    assert!(shear_at(&mut w, sheep));
+    assert_eq!(w.inventory.count_item(FIBRE), first, "a shorn sheep yields nothing");
+    assert!(w.expedition.message.contains("Fleece"), "{}", w.expedition.message);
+    at_second(&mut w, FLEECE_TICKS - 120);
+    assert!(shear_at(&mut w, sheep));
+    assert_eq!(w.inventory.count_item(FIBRE), first, "still regrowing one second early");
+    at_second(&mut w, 120);
+    assert!(shear_at(&mut w, sheep));
+    assert!(w.inventory.count_item(FIBRE) > first, "the regrown fleece cuts again");
+    assert_eq!(w.inventory.count_item(SHEARS), 1, "shears are kept");
+}
+
+#[test]
+fn husbandry_young_sheep_cannot_be_sheared() {
+    let (mut w, floor) = pasture();
+    let lamb = add(&mut w, SHEEP, Vec3::new(0.0, floor, 0.0), 0);
+    w.adventure.enemies[lamb].youth = 0.5;
+    give(&mut w, SHEARS, 1);
+    assert!(shear_at(&mut w, lamb));
+    assert_eq!(w.inventory.count_item(FIBRE), 0);
+    assert!(w.expedition.message.contains("Young"), "{}", w.expedition.message);
+}
+
+#[test]
+fn husbandry_fleece_survives_the_sidecar_and_old_files_load() {
+    use crate::world::farming::sidecar;
+    let (mut w, floor) = pasture();
+    let sheep = add(&mut w, SHEEP, Vec3::new(0.0, floor, 0.0), 0);
+    give(&mut w, SHEARS, 1);
+    w.farming.clock = 600;
+    assert!(shear_at(&mut w, sheep));
+    let bytes = sidecar::encode(&w);
+    let (state, herd) = sidecar::decode(&bytes).expect("decodes");
+    let mut fresh = pasture().0;
+    sidecar::apply_herd(&mut fresh, herd, state.clock).expect("herd decodes");
+    assert_eq!(fresh.adventure.wildlife.herd, w.adventure.wildlife.herd);
+    assert_eq!(fresh.adventure.wildlife.herd.members.values().next().map(|m| m.fleece_at), Some(600 + FLEECE_TICKS));
+    // A herd written before shearing ends after the members: drop the count and one timer.
+    let old = &herd[..herd.len() - 4 - 8];
+    let mut fresh = pasture().0;
+    sidecar::apply_herd(&mut fresh, old, state.clock).expect("pre-shearing herd decodes");
+    assert!(fresh.adventure.wildlife.herd.members.values().all(|m| m.fleece_at == 0), "old herds start with full fleece");
+}
+
+#[test]
+fn husbandry_fleece_feeds_real_recipes() {
+    let recipes = crate::world::inventory::all_recipes();
+    assert!(recipes.iter().any(|r| r.output.item == SHEARS), "shears are craftable");
+    assert!(recipes.iter().any(|r| r.output.item == Item::Block(BlockId::Bed) && r.ingredients.iter().any(|&(i, _)| i == FIBRE)),
+        "the bed takes the fibre");
+}
+
+#[test]
+fn husbandry_tended_fowl_lay_once_per_regrowth() {
+    use crate::world::inventory::FoodKind;
+    let fowl = super::super::fauna::FOWL;
+    let (mut w, floor) = pasture();
+    let hen = add(&mut w, fowl, Vec3::new(0.0, floor, 0.0), 0);
+    add(&mut w, fowl, Vec3::new(6.0, floor, 0.0), 1);
+    let eggs = |w: &World| w.inventory.dropped.iter()
+        .filter(|d| d.stack.item == Item::Food(FoodKind::Egg)).map(|d| d.stack.count).sum::<u32>();
+    at_second(&mut w, 0);
+    service(&mut w, Vec3::ZERO);
+    assert_eq!(eggs(&w), 0, "wild fowl lay nothing");
+    give(&mut w, FOOD, 4);
+    assert!(feed_at(&mut w, hen));
+    at_second(&mut w, 1);
+    service(&mut w, Vec3::ZERO);
+    assert_eq!(eggs(&w), 1, "a tended hen lays");
+    at_second(&mut w, 1);
+    service(&mut w, Vec3::ZERO);
+    assert_eq!(eggs(&w), 1, "once per regrowth");
+    at_second(&mut w, FLEECE_TICKS);
+    service(&mut w, Vec3::ZERO);
+    assert_eq!(eggs(&w), 2, "and again after it");
+}
+
+#[test]
+fn husbandry_herd_of_a_removed_generated_species_still_loads() {
+    use crate::world::farming::sidecar;
+    let (mut w, floor) = pasture();
+    let p = Vec3::new(0.0, floor, 0.0);
+    let member = |kind, fleece_at| Member { kind, home: p, pos: p, health: 1.0, yaw: 0.0,
+        born: None, cooldown_until: 0, ready_until: 0, fleece_at };
+    let members = &mut w.adventure.wildlife.herd.members;
+    members.insert(0, member(bestiary::FIRST_GENERATED + 999, 5));
+    members.insert(1, member(SHEEP, 7));
+    let bytes = sidecar::encode(&w);
+    let (state, herd) = sidecar::decode(&bytes).expect("decodes");
+    let mut fresh = pasture().0;
+    sidecar::apply_herd(&mut fresh, herd, state.clock).expect("the herd loads without the removed species");
+    let kept = &fresh.adventure.wildlife.herd.members;
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept.get(&1).map(|m| (m.kind, m.fleece_at)), Some((SHEEP, 7)), "fleece stays with its member");
 }

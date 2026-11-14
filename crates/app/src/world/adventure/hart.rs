@@ -3,6 +3,7 @@ use super::*;
 use crate::mesh::models::HartPose;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Attack {
     #[default]
     Charge,
@@ -13,6 +14,7 @@ pub(super) enum Attack {
 }
 
 #[derive(Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct State {
     pub crown: hart_crown::Crown,
     pub(super) active: f32,
@@ -202,6 +204,7 @@ fn hazard(
             pulse: 0.0,
             damage,
             spores: false,
+            fire: false,
         });
     }
 }
@@ -242,6 +245,7 @@ fn release(
                     },
                     bore_budget: 0,
                     trail_timer: 0.0,
+                    flight: None,
                     splashed: false,
                     follow: None,
                 });

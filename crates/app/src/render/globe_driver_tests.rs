@@ -23,7 +23,7 @@ fn cadences_are_seconds_and_a_clock_step_back_is_due() {
 }
 
 fn cfg(seed: u32, voxel_scale: engine_core::VoxelScalePreset) -> WorldSampleConfig {
-    WorldSampleConfig { generator_version: 53, seed, world_type: engine_voxel::WorldType::Hills, voxel_scale }
+    WorldSampleConfig { planet: None, generator_version: 53, seed, world_type: engine_voxel::WorldType::Hills, voxel_scale }
 }
 
 #[test]
@@ -52,7 +52,9 @@ impl GlobeDriver {
 
 #[test]
 fn a_steady_frame_reuses_every_buffer_and_sends_no_request() {
-    let eye = DVec3::new(0.0, 0.0, chart::RADIUS_M + 60_000.0);
+    // Close enough that level-3 tiles under the eye want to split; a radius multiple
+    // holds that at any planet size.
+    let eye = DVec3::new(0.0, 0.0, chart::RADIUS_M * 2.5);
     let ready = |t: TileId| t.level < 4;
     let mut driver = GlobeDriver::default();
     assert!(driver.plan(&ready, eye, 900.0, 512), "the first list goes out");

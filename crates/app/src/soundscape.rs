@@ -1,13 +1,15 @@
 //! Footsteps, ambience beds and music, driven from the listener's surroundings.
-mod ambience;
+pub(crate) mod ambience;
 mod fauna;
 pub mod footsteps;
+mod occlusion;
+pub(crate) mod probe;
 
 use crate::audio::{Audio, Contact, Director, Mood, MusicTable};
 use crate::player::Player;
-use crate::world::{self, DayNightCycle, World, mining::STRIKE_PHASE};
+use crate::world::{self, DayNightCycle, World, mining::strike_phase};
 use engine_content::BlockId;
-use glam::{IVec3, Vec3};
+use glam::{IVec3, Vec3, Vec3Swizzles};
 use std::sync::LazyLock;
 
 const MUSIC_TABLE: &str = include_str!("../../../assets/music.ron");
@@ -16,10 +18,22 @@ static MUSIC: LazyLock<Option<MusicTable>> = LazyLock::new(|| ron::from_str(MUSI
 const COMBAT_RADIUS_M: f32 = 20.0;
 /// Seconds between strikes while a block is being mined.
 
+/// Plays `event`, muffled by the solid cells between it and the listener.
+pub fn play_event(audio: &mut Audio, world: &World, event: crate::audio::Event, eye_m: Vec3, forward: Vec3) {
+    let blocked = event.pos.map_or(0.0, |at| occlusion::between(|c| world.get(c), eye_m, at, world.voxel_scale.meters()));
+    audio.play_occluded(event, eye_m, forward, blocked);
+}
+
+/// Plays a contact sound, muffled by the solid cells between it and the listener.
+#[allow(clippy::too_many_arguments)]
+pub fn contact_event(audio: &mut Audio, world: &World, contact: Contact, surface: crate::audio::Surface, pos: Option<Vec3>, gain: f32, seed: u32, eye_m: Vec3, forward: Vec3) {
+    let blocked = pos.map_or(0.0, |at| occlusion::between(|c| world.get(c), eye_m, at, world.voxel_scale.meters()));
+    audio.contact_occluded(contact, surface, pos, gain, seed, eye_m, forward, blocked);
+}
+
 #[derive(Default)]
 pub struct Soundscape {
     steps: footsteps::Tracker,
-    probe_clock: f32,
     mood: Option<Mood>,
     /// World seed the director was made for; a new world restarts the schedule.
     director: Option<(u32, Director)>,
@@ -50,7 +64,7 @@ impl Soundscape {
         let at = (cell.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters();
         self.strikes = self.strikes.wrapping_add(1);
         let seed = crate::audio::hash(world.seed ^ self.strikes, cell.x as u32 ^ (cell.z as u32).rotate_left(16));
-        audio.contact(contact, footsteps::surface(block), Some(at), 1.0, seed, eye_m, forward);
+        contact_event(audio, world, contact, footsteps::surface(block), Some(at), 1.0, seed, eye_m, forward);
     }
 
     /// Grazers near the listener call at random, each on its own roll.
@@ -65,7 +79,7 @@ impl Soundscape {
             let roll = crate::audio::hash(world.seed ^ self.calls, i as u32) as f32 / u32::MAX as f32;
             if roll < chance {
                 let event = crate::audio::Event { cue: crate::audio::Cue::Bleat, pos: Some(e.pos), gain: 0.55, pitch };
-                audio.play(event, eye_m, forward);
+                play_event(audio, world, event, eye_m, forward);
                 crate::egui_ui::subtitles::note(&event, eye_m, forward);
             }
         }
@@ -79,19 +93,21 @@ impl Soundscape {
             return;
         };
         let phase = crate::world::mining::stroke_phase(elapsed, needed);
-        let landed = if phase >= self.dig_clock { self.dig_clock < STRIKE_PHASE && phase >= STRIKE_PHASE }
-            else { self.dig_clock < STRIKE_PHASE || phase >= STRIKE_PHASE };
+        let strike = strike_phase();
+        let landed = if phase >= self.dig_clock { self.dig_clock < strike && phase >= strike }
+            else { self.dig_clock < strike || phase >= strike };
         // A finished break sits exactly on a strike, which the wrap test can miss by rounding.
-        if landed || elapsed + 1e-6 >= needed && self.dig_clock < STRIKE_PHASE {
+        if landed || elapsed + 1e-6 >= needed && self.dig_clock < strike {
             self.block(audio, Contact::Hit, block, cell, world, eye_m, forward);
         }
         self.dig_clock = if elapsed + 1e-6 >= needed { 1.0 } else { phase };
     }
 
-    pub fn tick(&mut self, audio: &mut Audio, world: &World, player: &Player, day_night: &DayNightCycle, dt: f32) {
+    pub fn tick(&mut self, audio: &mut Audio, world: &mut World, player: &Player, day_night: &DayNightCycle, dt: f32) {
         if !dt.is_finite() || dt <= 0.0 {
             return;
         }
+        let mut trace = crate::gameplay_trace::Trace::new();
         let meters = world.voxel_scale.meters();
         let eye = player.eye(world.voxel_scale);
         let (eye_m, forward) = (eye * meters, player.forward_dir());
@@ -109,22 +125,50 @@ impl Soundscape {
             audio.footstep(surface, None, gain, crate::audio::hash(world.seed, stride), eye_m, forward);
         }
         self.animal_calls(audio, world, eye_m, forward, dt);
+        trace.mark("soundscape-contacts");
         audio.set_listener_yaw(listener_yaw(forward));
-        self.probe_clock -= dt;
-        if self.probe_clock <= 0.0 {
-            self.probe_clock = ambience::PROBE_SECONDS;
-            let sea_m = world.sample_config().water_level() as f32 * meters;
-            let mut around = ambience::probe_flow(|p| world.get(p), |p| world.water_velocity(p).length(), eye.floor().as_ivec3(), meters, sea_m);
+        let sample = world.adventure.location.reading();
+        trace.mark("soundscape-probe-handoff");
+        if let Some(sample) = sample {
+            let mut around = sample.around;
+            let mut base_voice = sample.voice;
             around.submerged = f32::from(u8::from(player.underwater));
-            let clouds = day_night.cloud_controls().cumulonimbus;
-            let daylight = day_night.lighting().daylight;
+            let weather_at_eye = crate::world::synoptic::controls_at(
+                day_night.cloud_controls(),
+                Some(world.sample_config()),
+                (player.precise_eye(world.voxel_scale) * f64::from(meters)).xz(),
+                crate::world::synoptic::days(day_night),
+                day_night.weather_seed(),
+            );
+            let clouds = weather_at_eye.cumulonimbus;
+            let daylight = day_night.lighting_at(crate::planet::local_time(world.world_type,
+                player.precise_eye(world.voxel_scale) * f64::from(meters), day_night)).daylight;
             let weather = ambience::Weather { rain: rain(clouds), storm: clouds.clamp(0.0, 1.0), night: 1.0 - daylight };
             let profile = match world.world_type {
                 engine_voxel::WorldType::Planet => ambience::PLANET_AIR,
                 engine_voxel::WorldType::Nether | engine_voxel::WorldType::Hall | engine_voxel::WorldType::Manyfold => ambience::VOID_AIR,
+                engine_voxel::WorldType::Realm(kind) if !kind.has_sky() => ambience::VOID_AIR,
                 _ => ambience::EARTH_AIR,
             };
             let mut levels = ambience::levels(&around, &weather, profile);
+            // Lively refuges sound fuller, while blight quiets the same local
+            // birds and insects. Keep water, rain and physical wind audible.
+            let density = world.adventure.mana_density();
+            let life = if density < world::adventure::affinity::BLIGHT_BELOW { 0.25 }
+                else { 0.85 + sample.place.vitality * 0.35 };
+            base_voice.birds = (base_voice.birds * life).min(1.0);
+            base_voice.frogs = (base_voice.frogs * life).min(1.0);
+            levels[crate::audio::Bed::Insects as usize] *= life;
+            levels[crate::audio::Bed::Wind as usize] *= 1.0 - sample.place.vitality * 0.15;
+            let airflow = crate::world::wind_at(day_night, Some(world.sample_config()),
+                (player.precise_eye(world.voxel_scale) * f64::from(meters)).xz());
+            let wind = airflow.length();
+            audio.set_wind_bearing((wind >= 0.2).then(|| {
+                listener_yaw(Vec3::new(-airflow.x, 0.0, -airflow.y))
+            }));
+            // Real m/s: a breeze fills the bed by about 8 m/s; gale to eyewall raises its pitch.
+            levels[crate::audio::Bed::Wind as usize] *= 0.18 + 0.82 * (wind / 8.0).clamp(0.0, 1.0);
+            audio.set_wind_force(((wind - 8.0) / 40.0).clamp(0.0, 1.0));
             if world.orbital.express.ride.is_some() {
                 // Sealed cabin: the drive carries, outside beds fall to a trace.
                 for level in &mut levels { *level *= 0.15; }
@@ -134,13 +178,8 @@ impl Soundscape {
             audio.set_space(ambience::space(&around));
             audio.set_air(ambience::air(profile, around.altitude_m));
             audio.set_submerged(around.submerged);
-            let cfg = world.sample_config();
-            let reach = (fauna::BLEND_REACH_M / meters).round() as i32;
-            let (ex, ez) = (eye.x.floor() as i32, eye.z.floor() as i32);
-            let names = [(0, 0), (reach, 0), (-reach, 0), (0, reach), (0, -reach)]
-                .map(|(dx, dz)| format!("{:?}", world::landscape::sample(&cfg, ex + dx, ez + dz).biome));
             let (voice, placement) = fauna::voice(
-                fauna::blended([&names[0], &names[1], &names[2], &names[3], &names[4]]),
+                base_voice,
                 &fauna::Listening {
                     daylight,
                     underground: around.underground.max(around.submerged),
@@ -165,7 +204,12 @@ impl Soundscape {
             } else {
                 Mood::Day
             });
+        } else {
+            // A previous grove or cave must not remain audible after travel.
+            audio.set_ambience([0.0; crate::audio::BED_COUNT]);
+            audio.set_fauna(Default::default(), Default::default());
         }
+        trace.mark("soundscape-mix");
         let (Some(table), Some(mood)) = (MUSIC.as_ref(), self.mood) else { return };
         if self.director.as_ref().is_none_or(|(seed, _)| *seed != world.seed) {
             self.director = Some((world.seed, Director::new(table, world.seed)));
@@ -175,6 +219,7 @@ impl Soundscape {
         {
             audio.start_music(piece);
         }
+        trace.mark("soundscape-music");
     }
 }
 

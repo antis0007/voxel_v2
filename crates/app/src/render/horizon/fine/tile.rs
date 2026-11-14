@@ -14,7 +14,7 @@ pub(super) const MAX_LEVEL: u32 = CELLS.trailing_zeros();
 /// Largest gap between the knot heights and the surface drawn at `level`.
 ///
 /// Each quad is split along the diagonal from its (0, 0) corner to its (1, 1)
-/// corner, the same split `super::push_tile` emits, so the bound holds for the
+/// corner, the same split the stitcher emits, so the bound holds for the
 /// triangles actually drawn.
 pub(super) fn level_error(heights: &[f32], level: u32) -> f32 {
     debug_assert_eq!(heights.len(), SIDE * SIDE);
@@ -48,7 +48,15 @@ pub(super) const LEVELS: usize = MAX_LEVEL as usize + 1;
 
 /// Error at every level, in the heights' units.
 pub(super) fn level_errors(heights: &[f32]) -> [f32; LEVELS] {
-    std::array::from_fn(|level| level_error(heights, level as u32))
+    let mut errors = [0.0; LEVELS];
+    if heights.iter().all(|&height| height == heights[0]) {
+        return errors;
+    }
+    // Full resolution reproduces every knot exactly.
+    for (level, error) in errors.iter_mut().enumerate().skip(1) {
+        *error = level_error(heights, level as u32);
+    }
+    errors
 }
 
 /// Surface triangles of one tile drawn at `level`.
@@ -62,10 +70,27 @@ pub(super) fn triangles(level: u32) -> usize {
 /// starts at the coarsest level; the tile with the largest error is refined one
 /// level at a time until the largest error is at most `target` or the next
 /// refinement would exceed `budget`. Ties go to the lower index.
+#[cfg(test)]
 pub(super) fn allocate(errors: &[[f32; LEVELS]], target: f32, budget: usize) -> Vec<u32> {
+    allocate_with_cost(errors,target,budget,|_,level|triangles(level))
+}
+
+pub(super) fn allocate_stitched(errors: &[[f32; LEVELS]], target: f32, budget: usize,
+    half_edges: &[usize]) -> Vec<u32> {
+    allocate_with_cost(errors,target,budget,|t,level| {
+        let q=1usize<<level;
+        let m=CELLS/q;
+        // Upper bound for split boundary triangles and their interior fans.
+        triangles(level) + if q==1 {half_edges[t]*CELLS*3}
+            else {4*m*(q+1)+half_edges[t]*CELLS}
+    })
+}
+
+fn allocate_with_cost(errors: &[[f32; LEVELS]], target: f32, budget: usize,
+    cost: impl Fn(usize,u32)->usize) -> Vec<u32> {
     use std::cmp::Reverse;
     let mut levels = vec![MAX_LEVEL; errors.len()];
-    let mut used = errors.len() * triangles(MAX_LEVEL);
+    let mut used:usize = (0..errors.len()).map(|t|cost(t,MAX_LEVEL)).sum();
     // Errors are never negative, so their bit patterns order like the values.
     let key = |t: usize, level: u32| (errors[t][level as usize].max(0.0).to_bits(), Reverse(t));
     let mut heap: std::collections::BinaryHeap<_> = (0..errors.len()).map(|t| key(t, MAX_LEVEL)).collect();
@@ -74,7 +99,7 @@ pub(super) fn allocate(errors: &[[f32; LEVELS]], target: f32, budget: usize) -> 
             break;
         }
         let finer = levels[t] - 1;
-        let extra = triangles(finer) - triangles(levels[t]);
+        let extra = cost(t,finer) - cost(t,levels[t]);
         if used + extra > budget {
             break;
         }

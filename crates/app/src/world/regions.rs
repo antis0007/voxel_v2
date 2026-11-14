@@ -301,38 +301,35 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
         (lo | hi << 32) == record.version,
         "Region revision mismatch"
     );
-    let mut blocks = vec![BlockId::Air; VOXELS];
-    let mut offset = 0;
-    while offset < VOXELS {
+    let mut blocks = Vec::with_capacity(VOXELS);
+    let mut torches = HashSet::new();
+    let origin = coord * CHUNK_SIZE;
+    while blocks.len() < VOXELS {
+        let offset = blocks.len();
         let n = body(&mut input)? as usize;
         let raw = body(&mut input)?;
         ensure!(n > 0 && n <= VOXELS - offset, "Invalid region block run");
         let b = BlockId::from_u32(raw);
         ensure!(b.as_u32() == raw, "Unknown region material");
-        blocks[offset..offset + n].fill(b);
-        offset += n;
+        blocks.resize(offset + n, b);
+        if b.is_light_source() {
+            torches.extend((offset..offset + n).map(|i| origin + local_pos(i)));
+        }
     }
-    let mut light = vec![0u8; VOXELS];
-    offset = 0;
-    while offset < VOXELS {
+    let mut light = Vec::with_capacity(VOXELS);
+    while light.len() < VOXELS {
+        let offset = light.len();
         let n = body(&mut input)? as usize;
         let v = body(&mut input)?;
         ensure!(
             n > 0 && n <= VOXELS - offset && v <= 255,
             "Invalid region light run"
         );
-        light[offset..offset + n].fill(v as u8);
-        offset += n;
+        light.resize(offset + n, v as u8);
     }
     let mut water = HashMap::new();
     let count = body(&mut input)? as usize;
     ensure!(count <= VOXELS, "Invalid region water count");
-    let mut torches = HashSet::new();
-    for (i, b) in blocks.iter().enumerate() {
-        if b.is_light_source() {
-            torches.insert(coord * CHUNK_SIZE + local_pos(i));
-        }
-    }
     for _ in 0..count {
         let i = body(&mut input)? as usize;
         let v = body(&mut input)?;
@@ -342,7 +339,7 @@ fn decode(coord: IVec3, record: &Record, bytes: &[u8]) -> Result<DiskChunk> {
         );
         ensure!(
             water
-                .insert(coord * CHUNK_SIZE + local_pos(i), v as u8)
+                .insert(origin + local_pos(i), v as u8)
                 .is_none(),
             "Duplicate region water volume"
         );
@@ -468,6 +465,8 @@ pub struct RegionStream {
     reading: HashSet<IVec3>,
     // Source-only renderer interest. Loading these records never wakes physics.
     pub(super) visual_interest: HashSet<IVec3>,
+    // Exact ordered source input; derived state only, never persisted.
+    visual_interest_input: Option<Box<[IVec3]>>,
     next_version: u64,
     tx: mpsc::SyncSender<Command>,
     rx: mpsc::Receiver<Completion>,
@@ -601,6 +600,10 @@ fn write_record_inner(
 }
 impl RegionStream {
     pub fn new() -> Self {
+        Self::new_in(&super::storage::save_directory())
+    }
+
+    pub(crate) fn new_in(directory: &Path) -> Self {
         let id = format!(
             "world-{}-{}-{}",
             SystemTime::now()
@@ -611,7 +614,7 @@ impl RegionStream {
             SESSION_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
         Self::open(
-            super::storage::save_directory().join("regions").join(id),
+            directory.join("regions").join(id),
             HashMap::new(),
         )
     }
@@ -641,6 +644,7 @@ impl RegionStream {
             pending: HashMap::new(),
             reading: HashSet::new(),
             visual_interest: HashSet::new(),
+            visual_interest_input: None,
             next_version,
             tx,
             rx,
@@ -667,6 +671,11 @@ impl RegionStream {
         self.modified.entry(c).or_insert_with(Instant::now);
         self.next_version = self.next_version.wrapping_add(1);
     }
+
+    /// Content version for derived navigation. A writeback preserves this version.
+    pub(crate) fn source_version(&self, c: IVec3) -> Option<u64> {
+        self.dirty.get(&c).copied().or_else(|| self.view.records.get(&c).map(|r| r.version))
+    }
     pub fn pending(&self) -> usize {
         self.pending.len() + self.reading.len()
     }
@@ -681,9 +690,16 @@ impl RegionStream {
     pub fn backlog_full(&self) -> bool {
         self.dirty.len() >= self.dirty_ceiling()
     }
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn is_dirty(&self, coord: IVec3) -> bool { self.dirty.contains_key(&coord) }
+    #[cfg(feature = "multiplayer")]
+    pub(crate) fn can_admit_replica(&self, additional: usize) -> bool {
+        additional == 0 || self.dirty.len().saturating_add(additional) <= self.dirty_ceiling()
+    }
 }
 impl World {
     pub fn set_visual_region_interest(&mut self, sources: &[IVec3]) {
+        if self.regions.visual_interest_input.as_deref() == Some(sources) { return; }
         let mut wanted = HashSet::new();
         for &q in sources {
             for y in -1..=1 { for z in -1..=1 { for x in -1..=1 {
@@ -698,6 +714,7 @@ impl World {
             self.regions.last_eviction = None;
             self.snapshot_revision = u64::MAX;
         }
+        self.regions.visual_interest_input = Some(sources.into());
     }
 
     pub fn snapshot_near(&mut self, center: IVec3, radius: i32) -> super::WorldSnapshot {
@@ -716,8 +733,10 @@ impl World {
                 .map(|(&c, v)| (c, Arc::clone(v)))
                 .collect();
             self.snapshot_cache = super::WorldSnapshot {
+                ca_view: self.ca_view.clone(),
                 water_levels: Arc::new(self.water_levels.snapshot(chunks.keys().copied())
-                    .with_precision(&self.environment.water_deficit)),
+                    .with_precision(&self.environment.water_deficit)
+                    .with_ca(self.ca_view.as_deref(), engine_core::environment::cell_volume(self.voxel_scale))),
                 chunks: Arc::new(chunks),
                 regions: self.regions.view.clone(),
                 cfg: self.sample_config(),
@@ -734,6 +753,7 @@ impl World {
         ) {
             self.snapshot_cache.regions = self.regions.view.clone();
         }
+        self.snapshot_cache.ca_view = self.ca_view.clone();
         self.snapshot_cache.clone()
     }
     pub fn edited_resident_bytes(&self) -> usize {
@@ -779,9 +799,12 @@ impl World {
         if self.chunks.contains_key(&c) {
             return;
         }
+        let initial = self.generated_river_amounts(c,&data.chunk);
+        debug_assert!(self.environment.can_encode(&initial));
         self.water_levels
             .extend(data.water.iter().map(|(&p, &v)| (p, v)));
         self.chunks.insert(c, data.chunk);
+        self.install_river_amounts(&initial);
         if !self.regions.view.records.contains_key(&c) {
             self.regions.mark_dirty(c);
         }
@@ -809,8 +832,11 @@ impl World {
         if let Some(data) = self.regions.view.load(c)? {
             self.install_disk_chunk(c, data);
         } else {
-            self.chunks
-                .insert(c, Arc::new(engine_worldgen::generate(&self.sample_config(), c)));
+            let generated = Arc::new(engine_worldgen::generate(&self.sample_config(), c));
+            let initial = self.generated_river_amounts(c,&generated);
+            anyhow::ensure!(self.environment.can_encode(&initial), "River precision capacity pending");
+            self.chunks.insert(c, generated);
+            self.install_river_amounts(&initial);
             self.regions.generated.insert(c);
             self.invalidate_snapshot_at(c);
         }
@@ -844,6 +870,9 @@ impl World {
                     self.regions.pending.remove(&c);
                     match result {
                         Ok(record) => {
+                            if self.regions.view.records.get(&c).is_some_and(|current| current.version > record.version) {
+                                continue;
+                            }
                             Arc::make_mut(&mut self.regions.view.records).insert(c, record);
                             if self.regions.dirty.get(&c) == Some(&v) {
                                 self.regions.dirty.remove(&c);
@@ -876,6 +905,7 @@ impl World {
                         .get(&c)
                         .is_some_and(|r| r.version == v)
                         && !self.regions.dirty.contains_key(&c)
+                        && (radius > 0 || self.regions.visual_interest.contains(&c))
                     {
                         match result {
                             Ok(Some(data)) => self.install_disk_chunk(c, data),
@@ -955,7 +985,7 @@ impl World {
         let byte_limit = edited_budget_mib() * 1024 * 1024;
         let max_resident = byte_limit / (VOXELS * 2 + 1024);
         let eviction_plan = (
-            center,
+            if radius == 0 { IVec3::ZERO } else { center },
             radius,
             max_resident,
             self.chunks.len(),
@@ -973,18 +1003,20 @@ impl World {
                 })
                 .copied()
                 .collect();
-            clean.sort_unstable_by_key(|c| {
-                std::cmp::Reverse((*c - center).as_i64vec3().length_squared())
-            });
+            if radius > 0 {
+                clean.sort_unstable_by_key(|c| {
+                    std::cmp::Reverse((*c - center).as_i64vec3().length_squared())
+                });
+            }
             let mut bytes = self.edited_resident_bytes();
             let mut victims = HashSet::new();
             for c in clean {
                 if self.regions.visual_interest.contains(&c) { continue; }
                 let d = (c - center).abs();
-                if d.max_element() <= 2 {
+                if radius > 0 && d.max_element() <= 2 {
                     continue;
                 }
-                if d.x.max(d.z) <= radius + 2 && bytes <= byte_limit {
+                if radius > 0 && d.x.max(d.z) <= radius + 2 && bytes <= byte_limit {
                     continue;
                 }
                 if let Some(chunk) = self.chunks.get(&c) {
@@ -1004,6 +1036,13 @@ impl World {
                 self.regions.last_eviction = None;
             }
         }
+        // Zero radius permits only explicit nearby structure interest: finish
+        // saving and evict clean sources without reading surface columns below.
+        if radius == 0 && self.regions.visual_interest.is_empty() {
+            self.regions.read_plan.clear();
+            self.regions.last_plan = None;
+            return;
+        }
         let plan = (
             center,
             radius,
@@ -1016,6 +1055,7 @@ impl World {
                 .view
                 .records
                 .nearby(center, radius + 1)
+                .filter(|_| radius > 0)
                 .chain(self.regions.visual_interest.iter())
                 .filter(|c| self.regions.view.records.contains_key(c) && !self.chunks.contains_key(c))
                 .copied()
@@ -1255,3 +1295,6 @@ mod encoding {
         );
     }
 }
+
+#[cfg(test)]
+mod visual_interest_memo_tests;

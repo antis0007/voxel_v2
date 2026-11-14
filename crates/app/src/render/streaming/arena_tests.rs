@@ -109,6 +109,7 @@ fn gpu_arena_frees_everything_after_leases_drop() {
     let leases: Vec<_> = (0..3).map(|i| arena.alloc(&device, 56 * (i + 1), 12).unwrap()).collect();
     assert!(arena.used_bytes() > 0);
     drop(leases);
-    arena.begin_frame();
+    // A time-sliced pass guarantees at least one queued return progresses.
+    for _ in 0..3 { arena.begin_frame(); }
     assert_eq!(arena.used_bytes(), 0);
 }

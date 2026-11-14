@@ -1,5 +1,6 @@
 //! Simulation-owned action clock. Rendering reads this clock; it never emits contacts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Phase {
     Prepare,
     Active,
@@ -8,6 +9,7 @@ pub(super) enum Phase {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Run<A> {
     pub kind: A,
     pub sequence: u32,

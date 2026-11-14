@@ -18,14 +18,15 @@ pub(super) fn reward(ctx: &egui::Context, view: &View) {
         .data_mut(|d| d.get_temp::<Option<Rect>>(egui::Id::new("hud_top_reserved")))
         .flatten();
     let left = ctx.content_rect().center().x - width * 0.5 - 10.0;
+    let slot = super::hud_layout::place(ctx, "reward");
     let top = reserved
         .filter(|r| r.right() + 8.0 > left)
-        .map_or(ctx.content_rect().top() + 78.0, |r| r.bottom() + 8.0);
-    egui::Area::new("sanctum_reward".into())
-        .anchor(Align2::CENTER_TOP, [0.0, top - ctx.content_rect().top()])
+        .map_or(slot.offset.y, |r| (r.bottom() + 8.0 - ctx.content_rect().top()).max(slot.offset.y));
+    let shown = egui::Area::new(egui::Id::new("sanctum_reward"))
+        .anchor(slot.align, [slot.offset.x, top])
         .interactable(false)
         .show(ctx, |ui| {
-            style::hud_frame().show(ui, |ui| {
+            style::hud_frame(ui.ctx()).show(ui, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.set_width(width);
                     ui.label(RichText::new(reward.name).color(style::AMBER).size(16.0));
@@ -92,6 +93,7 @@ pub(super) fn reward(ctx: &egui::Context, view: &View) {
                 });
             });
         });
+    super::hud_layout::claim(ctx, "reward", shown.response.rect);
 }
 
 /// A compact collection of permanent magical discoveries, with readable histories.
@@ -176,6 +178,11 @@ pub(super) fn codex(ui: &mut egui::Ui, view: &View) {
             if view.discoveries & (1 << selected) != 0 {
                 ui.label(RichText::new(lore.name).color(style::AMBER).size(16.0));
                 ui.label(RichText::new(lore.benefit).color(style::MANA));
+                if let Some(record) = crate::world::adventure::chronicle::history(selected) {
+                    ui.label(record);
+                }
+            } else if let Some(hint) = crate::world::adventure::chronicle::hint(selected) {
+                ui.label(hint);
             } else {
                 ui.label(format!(
                     "Find a {} and claim the inscription from its reliquary.",
@@ -188,20 +195,20 @@ pub(super) fn codex(ui: &mut egui::Ui, view: &View) {
 
 pub(super) fn encounter(ctx: &egui::Context, view: &View) {
     if let Some(boss) = &view.boss {
-        egui::Area::new("guardian_health".into())
+        egui::Area::new(egui::Id::new("guardian_health"))
             .anchor(Align2::LEFT_TOP, [12.0, 82.0])
             .interactable(false)
             .show(ctx, |ui| {
-                style::hud_frame().show(ui, |ui| {
+                style::hud_frame(ui.ctx()).show(ui, |ui| {
                     ui.set_width((ctx.content_rect().width() - 48.0).clamp(100.0, 220.0));
                     ui.vertical_centered(|ui| {
                         ui.label(RichText::new(boss.name).color(style::AMBER).size(12.0));
                         ui.label(
-                            RichText::new(if boss.health < boss.maximum * 0.5 {
+                            RichText::new(boss.action.unwrap_or(if boss.health < boss.maximum * 0.5 {
                                 "Enraged"
                             } else {
                                 "Active"
-                            })
+                            }))
                             .color(style::MUTED)
                             .size(11.0),
                         );
@@ -225,15 +232,35 @@ pub(super) fn encounter(ctx: &egui::Context, view: &View) {
                 });
             });
     }
+    if let Some(biome) = view.hell_biome {
+        egui::Area::new(egui::Id::new("hell_biome"))
+            .anchor(Align2::LEFT_TOP, [16.0, 52.0])
+            .interactable(false)
+            .show(ctx, |ui| { ui.small(biome); });
+    }
     if let Some(focus) = view.relic_focus.as_ref().or(view.undercrown_focus.as_ref()) {
-        egui::Area::new("reliquary_prompt".into())
-            .anchor(Align2::CENTER_CENTER, [0.0, 74.0])
+        egui::Area::new(egui::Id::new("world_interaction_prompt"))
+            .anchor(Align2::CENTER_TOP, [0.0, ctx.content_rect().height() * 0.5 + 24.0])
             .interactable(false)
             .show(ctx, |ui| {
-                style::hud_frame().show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(RichText::new(focus.title).color(style::AMBER));
-                        ui.label(RichText::new(focus.action).color(style::PAPER).size(12.0));
+                style::hud_frame(ui.ctx()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let action = focus.action.strip_prefix("[F]").or_else(|| focus.action.strip_prefix("F "));
+                        if let Some(verb) = action {
+                            let key = crate::keybinds::hint(crate::keybinds::Action::Interact);
+                            ui.label(RichText::new(format!("[{key}]")).color(style::AMBER).strong().size(12.0));
+                            let verb = verb.trim();
+                            if verb == "Talk" {
+                                ui.label(RichText::new(verb).color(style::PAPER).size(12.0));
+                                ui.label(RichText::new(focus.title).color(style::JADE).strong().size(12.0));
+                            } else if matches!(verb, "Use" | "Toggle") {
+                                ui.label(RichText::new(format!("{verb} {}", focus.title)).color(style::PAPER).size(12.0));
+                            } else {
+                                ui.label(RichText::new(verb).color(style::PAPER).size(12.0));
+                            }
+                        } else {
+                            ui.label(RichText::new(focus.action).color(style::PAPER).size(12.0));
+                        }
                     });
                 });
             });
@@ -246,11 +273,11 @@ pub(super) fn site_modifier(ctx: &egui::Context, view: &View) {
         return;
     };
     let top = if view.boss.is_some() { 150.0 } else { 82.0 };
-    egui::Area::new("site_modifier".into())
+    egui::Area::new(egui::Id::new("site_modifier"))
         .anchor(Align2::LEFT_TOP, [12.0, top])
         .interactable(false)
         .show(ctx, |ui| {
-            style::hud_frame().show(ui, |ui| {
+            style::hud_frame(ui.ctx()).show(ui, |ui| {
                 ui.set_width((ctx.content_rect().width() - 48.0).clamp(100.0, 220.0));
                 ui.label(RichText::new(name).color(style::AMBER).size(12.0));
                 ui.label(RichText::new(line).color(style::MUTED).size(11.0));

@@ -3,7 +3,7 @@ use super::super::{bestiary, wildlife};
 use engine_core::VoxelScalePreset;
 
 fn ctx(realm: Realm, biome: Option<Biome>, night: bool) -> Context {
-    Context { biome, realm, night }
+    Context { biome, realm, night, danger: 0 }
 }
 
 #[test]
@@ -85,4 +85,15 @@ fn context_classifies_depth_and_realm() {
     assert_eq!(shallow_roof.realm, Realm::Surface, "a shed roof is not a cave");
     let nether = World::with_seed(WorldType::Nether, VoxelScalePreset::OneMeter, 7);
     assert_eq!(Context::at(&nether, glam::IVec3::ZERO, false, false).realm, Realm::Nether);
+}
+
+#[test]
+fn shell_realms_raise_their_haunts_by_day_and_night() {
+    for night in [false, true] {
+        let shell = ctx(Realm::Shell, None, night);
+        let kinds: std::collections::HashSet<u32> = (0..2_000u32).filter_map(|h| pick(&shell, engine_core::hash::hash_u32(h), |_| true)).collect();
+        for kind in [10, 25, 29, 26, 23] {
+            assert!(kinds.contains(&kind), "night={night}: kind {kind} never rises in {kinds:?}");
+        }
+    }
 }

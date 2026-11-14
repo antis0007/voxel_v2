@@ -7,13 +7,17 @@ use std::sync::atomic::AtomicBool;
 fn empty(chunk: IVec3) -> GeneratedChunk {
     GeneratedChunk {
         voxel_meters: 1.0,
+        generator_version: 0,
+        flora_config: None,
+        manyfold_shell: false,
         water_levels: Default::default(),
-        water_deficit: Default::default(),
+        water_deficit: Default::default(), water_motion: Default::default(),
         chunk,
         blocks: vec![BlockId::Air; (PADDED_CHUNK_SIZE as usize).pow(3)],
         sky_ceiling: vec![0; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
         bed_height: vec![0; (PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE) as usize],
         bed_frac: Vec::new(),
+        trees: Vec::new(),
     }
 }
 
@@ -42,7 +46,7 @@ fn channel(chunk: IVec3, x0: i32, x1: i32, step_x: i32, upper: i32, drop: i32) -
 
 fn mesh_of(c: &GeneratedChunk) -> ChunkMesh {
     let never = AtomicBool::new(false);
-    MeshPlan::for_chunk(c, &never).unwrap().build_lod(c, 0)
+    MeshPlan::for_chunk(c, &never, 0).unwrap().build_lod(c, 0)
 }
 
 fn water(mesh: &ChunkMesh) -> impl Iterator<Item = &Vertex3> {

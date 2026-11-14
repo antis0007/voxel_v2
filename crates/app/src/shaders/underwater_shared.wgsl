@@ -4,8 +4,7 @@
 // Environment seen from a submerged camera, shared by the sky pass (empty
 // pixels) and the terrain pass (haze and caustics on solid surfaces).
 //
-// `cam.camera_pos.w` is 0 above water and 1 + surface height (metres) when the
-// eye is submerged, so existing `> 0.5` tests keep meaning "underwater".
+// Camera medium: zero in air, 1 + depth in metres in water, -1 in lava.
 //
 //  * Snell's window: a bright refracted view of the sky inside the 48.6 degree
 //    cone overhead, total internal reflection (a dim mirror of the water body)
@@ -15,16 +14,22 @@
 //  * Beer-Lambert absorption that drains red first and darkens with depth.
 // ============================================================
 
-const UW_ABSORB: vec3<f32> = vec3<f32>(0.24, 0.075, 0.045);
+const UW_ABSORB: vec3<f32> = vec3<f32>(0.18, 0.064, 0.044);
 const UW_REFRACT: f32 = 0.75;      // n_air / n_water
 const UW_SHAFT_STEPS: i32 = 14;
+// Cosine of the critical angle's complement: rays steeper than this leave the water.
+const UW_WINDOW_COS: f32 = 0.661;
 
 fn uw_active() -> bool {
     return cam.camera_pos.w > 0.5;
 }
 
+fn lava_eye_active() -> bool {
+    return cam.camera_pos.w < -0.5;
+}
+
 fn uw_surface_y() -> f32 {
-    return max(cam.camera_pos.w - 1.0, 0.0);
+    return cam.camera_pos.y + max(cam.camera_pos.w - 1.0, 0.0);
 }
 
 fn uw_hash(p: vec2<f32>) -> f32 {
@@ -95,15 +100,19 @@ fn uw_backdrop(dir: vec3<f32>, jitter: f32) -> vec3<f32> {
     col *= mix(1.0, 0.45, clamp(-dir.y, 0.0, 1.0));
 
     if dir.y > 0.02 {
-        let cos_t = dir.y;
+        let hit = cam.camera_pos.xz + dir.xz * (depth / max(dir.y, 0.05));
+        let a = dot(hit, vec2<f32>(1.9, 1.1)) + t * 1.5;
+        let b = dot(hit, vec2<f32>(-2.7, 3.2)) - t * 2.1;
+        let wave = vec2<f32>(1.9, 1.1) * cos(a) * 0.044
+            + vec2<f32>(-2.7, 3.2) * cos(b) * 0.017;
+        let local_up = normalize(vec3<f32>(-wave.x, 1.0, -wave.y));
+        let cos_t = clamp(dot(dir, local_up), 0.02, 1.0);
         let sin_i = sqrt(max(1.0 - cos_t * cos_t, 0.0));
-        let sin_o = min(sin_i / UW_REFRACT, 1.0);
-        let cos_o = sqrt(max(1.0 - sin_o * sin_o, 0.0));
-        let h = normalize(dir.xz + vec2<f32>(1e-5));
-        let out_dir = normalize(vec3<f32>(h.x * sin_o, cos_o, h.y * sin_o));
+        let cos_o = sqrt(max(1.0 - sin_i * sin_i / (UW_REFRACT * UW_REFRACT), 0.0));
+        let tangent = dir - local_up * dot(dir, local_up);
+        let out_dir = normalize(tangent / UW_REFRACT + local_up * cos_o);
 
         // Where this ray meets the moving surface, for shimmer.
-        let hit = cam.camera_pos.xz + dir.xz * (depth / max(cos_t, 0.05));
         let ripple = 0.62 + 0.76 * uw_noise(hit * 0.65 + vec2<f32>(t * 0.45, -t * 0.33))
             + 0.25 * (uw_noise(hit * 2.1 - vec2<f32>(t * 0.9, t * 0.7)) - 0.5);
 
@@ -114,10 +123,11 @@ fn uw_backdrop(dir: vec3<f32>, jitter: f32) -> vec3<f32> {
         let fresnel = 0.0204 + 0.9796 * pow(1.0 - cos_o, 5.0);
         var sky = atmosphere_color(out_dir);
         sky += sun_col * pow(max(dot(out_dir, sun), 0.0), 420.0) * 3.0;
-        let through = sky * trans * (1.0 - fresnel) * ripple * 0.9;
+        // The window is the brightest thing a diver sees: the whole sky squeezed into a cone.
+        let through = sky * trans * (1.0 - fresnel) * ripple * 1.8;
 
         // Beyond it the surface is a mirror of the dim water body.
-        let mirror_web = 0.85 + 0.40 * uw_caustic(hit * 0.5, t);
+        let mirror_web = 0.65 + 0.45 * uw_caustic(hit * 0.7, t) + 0.18 * cos(a + b);
         let mirror = uw_ambient(daylight, depth) * 1.25 * mirror_web;
         col = mix(col, mix(mirror, through, window), smoothstep(0.02, 0.18, cos_t));
     }
@@ -196,8 +206,23 @@ fn uw_apply_fragment(
             * sun_visibility * daylight * 0.30;
     }
 
+    // Keep the texture of nearby surfaces readable under dim bounced light.
+    colour += albedo * uw_ambient(daylight, fragment_depth) * 0.32
+        * (0.55 + 0.45 * max(normal.y, 0.0));
+
     // Distance haze takes its colour from what the sky pass shows in that direction.
     let transmission = exp(-UW_ABSORB * dist);
     let haze = uw_haze(view_dir);
     return colour * transmission + haze * (vec3<f32>(1.0) - transmission);
+}
+
+/// Glowing suspension inside lava, with a short sightline through the melt.
+fn lava_backdrop(dir: vec3<f32>) -> vec3<f32> {
+    let t = light.torch_meta.y;
+    let p = cam.camera_pos.xz + dir.xz * 0.65 + vec2<f32>(dir.y * 0.36, -dir.y * 0.48);
+    let drift = vec2<f32>(t * 0.17, -t * 0.09);
+    let flow = uw_noise(p * 4.5 + drift);
+    let folds = uw_noise(p * 9.0 - drift + flow * 1.3);
+    let glow = smoothstep(0.35, 0.78, 0.65 * flow + 0.35 * folds);
+    return mix(vec3<f32>(0.07, 0.010, 0.002), vec3<f32>(0.28, 0.058, 0.006), glow);
 }

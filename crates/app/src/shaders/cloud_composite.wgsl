@@ -158,6 +158,12 @@ fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
                 }
             }
         }
+        // Sky pixels hugging a silhouette see every conservative (max-depth)
+        // tap as geometry, so nothing matches; returning zero cut a bare-sky
+        // seam between cloud and terrain. Use plain bilinear there instead.
+        if best <= 0.0 && depth <= 1e-7 {
+            return mix(mix(colors[0], colors[1], f.x), mix(colors[2], colors[3], f.x), f.y);
+        }
         return fallback;
     }
     // The march is stochastic and runs at reduced resolution. Edge-aware smoothing
@@ -227,16 +233,43 @@ fn reconstruct_cloud(uv: vec2<f32>) -> vec4<f32> {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+    // Caves and the Nether (planet word -1) have no cloud deck.
+    if light.sky_art[1].w >= 0.999 || cam.planet[0].w < -0.5 || cam.planet[0].w > 1.5 { return vec4<f32>(0.0); }
     // This pass writes to the full-resolution surface while the cloud target is
     // rendered at half resolution. Use surface UVs here so the upsampled sample
     // footprint is stable regardless of the cloud texture dimensions.
     let surface_uv = surface_uv_from_frag_coord(in.pos.xy);
     let cloud = reconstruct_cloud(surface_uv);
-    let alpha = clamp(cloud.a, 0.0, 0.998);
+    // The march is a flat slab; above the deck on a planet it overhangs the
+    // limb into space, and the cover already draws the curved deck.
+    let orbit_fade = select(1.0, 1.0 - smoothstep(3200.0, 6000.0, cam.planet[1].w), cam.planet[0].w > 0.5);
+    if orbit_fade <= 0.0 { return vec4<f32>(0.0); }
+    // Split optical depth between the march and the orbital shell. Linear
+    // alpha fades make two matching decks transparent halfway through ascent.
+    let source_alpha = clamp(cloud.a, 0.0, 0.998);
+    var limb_visibility = 1.0;
+    let cloud_top = cloud_layer_bounds().high_top;
+    if cam.planet[0].w > 0.5 && cam.planet[1].w > cloud_top {
+        let dir = camera_ray(vec2<f32>(surface_uv.x * 2.0 - 1.0, 1.0 - surface_uv.y * 2.0));
+        let eye = vec3<f32>(dot(cam.planet[1].xyz, cam.planet[2].xyz),
+            dot(cam.planet[1].xyz, cam.planet[3].xyz), dot(cam.planet[1].xyz, cam.planet[4].xyz));
+        // The local march is flat. Beyond the curved deck's silhouette it
+        // must not draw a bright shelf floating over the planet into space.
+        // Only clip after leaving the highest volume. Using the low shell's
+        // radius here erased cirrus overhead while flying through the deck.
+        let shell_radius = cam.planet[0].x + cloud_top;
+        let impact = length(cross(eye, dir));
+        let curved = select(0.0, 1.0 - smoothstep(shell_radius - 40.0, shell_radius + 40.0, impact), dot(eye, dir) < 0.0);
+        limb_visibility = mix(1.0, curved, smoothstep(cloud_top, cloud_top + 300.0, cam.planet[1].w));
+    }
+    let alpha = (1.0 - pow(1.0 - source_alpha, orbit_fade)) * limb_visibility;
+    // The march stores premultiplied radiance. Fading only alpha leaves its
+    // full radiance behind and blows out the clouds as their opacity vanishes.
+    let radiance_weight = alpha / max(source_alpha, 1e-4);
     let debug_mode = render_debug_view();
     // Surface-lighting diagnostic: keep cloud shadows in the lighting field,
     // but remove foreground cloud obscuration alongside world fog.
-    if debug_mode == 26u { return vec4<f32>(0.0); }
+    if debug_mode == 26u || debug_mode == 30u || debug_mode == 37u { return vec4<f32>(0.0); }
 
     if debug_mode == DEBUG_VIEW_ATMOSPHERE_TRANSMITTANCE {
         return vec4<f32>(atmosphere_debug_transmittance_color(surface_uv), 1.0);
@@ -281,7 +314,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Premultiplied linear radiance. Blending tone-mapped cloud RGB over a
     // separately tone-mapped sky made edges dark and sunset colours disagree.
     return stylise_cloud(
-        max(cloud.rgb, vec3<f32>(0.0)) * coverage,
+        max(cloud.rgb, vec3<f32>(0.0)) * coverage * radiance_weight,
         alpha * coverage,
     );
 }

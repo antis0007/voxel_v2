@@ -23,6 +23,14 @@ fn bed_world(scale: VoxelScalePreset) -> World {
         light: Box::new([0; 32 * 32 * 32]),
         torches: HashSet::new(),
     }));
+    // Quarter-metre sky checks reach 32 cells up; an unloaded chunk there reads as solid.
+    w.chunks.insert(IVec3::Y, Arc::new(ChunkData {
+        modified_bounds: None,
+        structural_bounds: None,
+        blocks: Box::new([B::Air; 32 * 32 * 32]),
+        light: Box::new([0; 32 * 32 * 32]),
+        torches: HashSet::new(),
+    }));
     w
 }
 
@@ -253,4 +261,143 @@ fn farming_clock_advances_once_per_adventure_step() {
         crate::world::adventure::tick(&mut w, &mut player, crate::simulation::STEP_SECONDS, false, false, false);
     }
     assert_eq!(w.farming.clock, 240);
+}
+
+fn stalk_cells(w: &World, base: IVec3) -> i32 {
+    (0..64).take_while(|&y| w.get(base + IVec3::Y * y) == B::Bamboo).count() as i32
+}
+
+#[test]
+fn bamboo_grows_one_cell_at_a_time_in_metres_at_every_scale() {
+    let mut grown_metres = Vec::new();
+    for scale in [VoxelScalePreset::OneMeter, VoxelScalePreset::QuarterMeter] {
+        let mut w = bed_world(scale);
+        put(&mut w, CELL - IVec3::Y, B::Grass, 0);
+        sow(&mut w, CELL, B::Bamboo);
+        assert_eq!(w.get(CELL), B::BambooShoot);
+        let mut last = 0;
+        for _ in 0..240 {
+            run(&mut w, 600);
+            let now = stalk_cells(&w, CELL);
+            assert!(now - last <= 1, "{scale:?}: jumped {last} -> {now} cells");
+            last = now;
+        }
+        let cap = w.sample_config().blocks_for_height(6.0);
+        assert!(last >= 2 && last <= cap, "{scale:?}: {last} cells, cap {cap}");
+        grown_metres.push(last as f32 * scale.meters());
+    }
+    // Same real height either way, within the roll noise of one coarse cell.
+    assert!((grown_metres[0] - grown_metres[1]).abs() <= 1.5, "{grown_metres:?}");
+}
+
+#[test]
+fn grain_and_root_crops_share_a_sprout_ripen_and_pay_their_seed() {
+    for (crop, soil) in [(B::WheatCrop, B::Grass), (B::CarrotCrop, B::Dirt), (B::BeetCrop, B::Mud)] {
+        let (index, row) = table::by_seed(crop).expect("crop row");
+        assert_eq!(row.sprout, B::CropShoot, "{crop:?}");
+        assert!(row.soil.contains(&soil), "{crop:?}");
+        let mut w = bed_world(VoxelScalePreset::OneMeter);
+        put(&mut w, CELL - IVec3::Y, soil, 0);
+        put(&mut w, CELL, B::Air, 15);
+        let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+        sow(&mut w, CELL, crop);
+        assert_eq!(w.get(CELL), B::CropShoot, "{crop:?}");
+        w.farming.plots.insert(key(CELL), Plot { crop: index, planted: 0, rolled: 30, stage: row.mature() });
+        tick(&mut w, Budget::UNBOUNDED);
+        assert_eq!(w.get(CELL), crop, "a mature plot shows {crop:?}");
+        let before = w.inventory.count_item(Item::Block(crop));
+        let expected = harvest_count(w.seed, CELL, &w.farming.plots[&key(CELL)], row);
+        assert!((row.yield_min..=row.yield_max).contains(&expected));
+        assert!(super::super::expedition::harvest(&mut w, CELL, &mut blocks, &mut chunks));
+        assert_eq!(w.inventory.count_item(Item::Block(crop)), before + expected, "{crop:?}");
+    }
+}
+
+#[test]
+fn a_crop_refuses_soil_outside_its_row() {
+    let mut w = bed_world(VoxelScalePreset::OneMeter);
+    put(&mut w, CELL - IVec3::Y, B::Sand, 0);
+    put(&mut w, CELL, B::Air, 15);
+    w.inventory.hotbar[0] = Some(ItemStack::new(Item::Block(B::WheatCrop), 4));
+    let (mut blocks, mut chunks) = (HashSet::new(), HashSet::new());
+    let at = eye(&w, CELL);
+    interact(&mut w, Some((CELL - IVec3::Y, CELL)), at, Vec3::NEG_Z, 0, &mut blocks, &mut chunks);
+    assert!(!w.farming.plots.contains_key(&key(CELL)), "wheat does not root in sand");
+}
+
+fn ripe(w: &mut World, p: IVec3, seed: B, block: B) {
+    let (index, crop) = table::by_seed(seed).expect("row");
+    put(w, p, block, 0);
+    w.farming.plots.insert(key(p), Plot { crop: index, planted: 0, rolled: 0, stage: crop.mature() });
+}
+
+#[test]
+fn harvester_reaps_replants_and_fills_its_chest() {
+    let mut w = bed_world(VoxelScalePreset::OneMeter);
+    put(&mut w, CELL - IVec3::Y, B::Grass, 0);
+    ripe(&mut w, CELL, B::WheatCrop, B::WheatCrop);
+    let berries = CELL + IVec3::new(-2, 0, 0);
+    ripe(&mut w, berries, B::SweetBerries, B::SweetBerries);
+    let harvester = CELL + IVec3::new(2, 0, 0);
+    ripe(&mut w, harvester, B::CropHarvester, B::CropHarvester);
+    let chest = harvester + IVec3::Z;
+    put(&mut w, chest, B::Chest, 0);
+    harvester::service(&mut w, harvester, 4.0);
+    assert_eq!(w.get(CELL), B::CropShoot, "wheat replanted");
+    assert_eq!(w.get(berries), B::BerryBush, "bush picked back to its stem");
+    assert_eq!(w.farming.plots[&key(CELL)].stage, 0);
+    assert_eq!(w.get(harvester), B::CropHarvester, "the harvester never reaps itself");
+    let stored: Vec<Item> = w.block_data.chest(chest).iter().flatten().map(|s| s.item).collect();
+    assert!(stored.contains(&Item::Block(B::WheatCrop)) && stored.contains(&Item::Block(B::SweetBerries)), "{stored:?}");
+    // Nothing ripe is left, so a second pulse changes nothing.
+    harvester::service(&mut w, harvester, 4.0);
+    assert_eq!(w.get(CELL), B::CropShoot);
+}
+
+#[test]
+fn harvester_picks_gourd_fruit_on_a_regrowing_stem() {
+    let mut w = bed_world(VoxelScalePreset::OneMeter);
+    let (index, _) = table::by_seed(B::Pumpkin).expect("pumpkin row");
+    put(&mut w, CELL, B::GourdVine, 0);
+    // Setting fruit resets the stem's stage, so fruit sits beside a stage-0 plot.
+    w.farming.plots.insert(key(CELL), Plot { crop: index, planted: 0, rolled: 0, stage: 0 });
+    put(&mut w, CELL + IVec3::X, B::Pumpkin, 0);
+    let harvester = CELL + IVec3::new(-2, 0, 0);
+    ripe(&mut w, harvester, B::CropHarvester, B::CropHarvester);
+    harvester::service(&mut w, harvester, 4.0);
+    assert_eq!(w.get(CELL + IVec3::X), B::Air, "fruit broken off");
+    assert_eq!(w.get(CELL), B::GourdVine, "stem stays");
+    assert_eq!(w.farming.plots[&key(CELL)].planted, 0, "stem growth is not restarted");
+    assert!(w.inventory.dropped.iter().any(|d| d.stack.item == Item::Block(B::Pumpkin)));
+}
+
+#[test]
+fn harvester_pays_the_hand_yield_less_the_replanted_seed() {
+    let mut w = bed_world(VoxelScalePreset::OneMeter);
+    put(&mut w, CELL - IVec3::Y, B::Grass, 0);
+    ripe(&mut w, CELL, B::WheatCrop, B::WheatCrop);
+    let (_, crop) = table::by_seed(B::WheatCrop).expect("row");
+    let hand = harvest_count(w.seed, CELL, &w.farming.plots[&key(CELL)], crop);
+    let harvester = CELL + IVec3::new(2, 0, 0);
+    ripe(&mut w, harvester, B::CropHarvester, B::CropHarvester);
+    harvester::service(&mut w, harvester, 4.0);
+    let paid: u32 = w.inventory.dropped.iter()
+        .filter(|d| d.stack.item == Item::Block(B::WheatCrop)).map(|d| d.stack.count).sum();
+    assert_eq!(paid, hand - 1);
+    assert_eq!(w.get(CELL), B::CropShoot);
+}
+
+#[test]
+fn a_hanging_plant_pops_when_its_ceiling_is_mined() {
+    let mut w = bed_world(VoxelScalePreset::OneMeter);
+    let vine = CELL + IVec3::Y * 4;
+    put(&mut w, vine + IVec3::Y, B::Stone, 0);
+    ripe(&mut w, vine, B::GlowBerries, B::GlowBerries);
+    run(&mut w, 4);
+    assert_eq!(w.get(vine), B::GlowBerries, "a supported vine stays");
+    put(&mut w, vine + IVec3::Y, B::Air, 0);
+    run(&mut w, 4);
+    assert_eq!(w.get(vine), B::Air, "an unsupported vine pops");
+    assert!(!w.farming.plots.contains_key(&key(vine)));
+    assert!(w.inventory.dropped.iter().any(|d| d.stack.item == Item::Block(B::GlowBerries)));
 }

@@ -55,7 +55,9 @@ pub(super) fn anchorage(mesh: &mut Model, at: Vec3, axis: Vec3, class: Class, ke
     let heading=(key>>8) as f32/16777216.0*std::f32::consts::TAU;
     let align=Quat::from_rotation_arc(Vec3::Y,axis)*Quat::from_rotation_y(heading);
     // The ring rotates about the keel bearing. No camera-relative pose.
-    let spin=(day.time_of_day() as f64*std::f64::consts::TAU*8.0).rem_euclid(std::f64::consts::TAU) as f32;
+    let omega=(0.3_f64*9.81/class.upper_ring_radius_m() as f64).sqrt();
+    let spin=(crate::world::orbital::megastructures::seconds(day)*omega)
+        .rem_euclid(std::f64::consts::TAU) as f32;
     let ring_rotation=align*Quat::from_rotation_y(spin);
     // A GPU-posed copy skips the surface pass `orbital::build` runs over the
     // vertices it appended, so it bakes the one its class receives there:
@@ -90,10 +92,10 @@ fn build_anchorage_local(mesh: &mut Model, class: Class, key: u32) -> std::ops::
     let at=Vec3::ZERO;
     let mut ring_range=0..0;
     let r=class.upper_ring_radius_m();
-    let shell=[0.79,0.77,0.68];
-    let alloy=[0.25,0.31,0.35];
-    let dark=[0.065,0.12,0.18];
-    let copper=[0.45,0.25,0.12];
+    let shell=super::palette::CERAMIC;
+    let alloy=super::palette::STEEL;
+    let dark=super::palette::GRAPHITE;
+    let copper=super::palette::COPPER;
     // An open, tapered keel carries the suspension load through the bearing.
     // Wide gaps between diagonal members are visible against the sky.
     for quadrant in 0..4 {
@@ -111,7 +113,8 @@ fn build_anchorage_local(mesh: &mut Model, class: Class, key: u32) -> std::ops::
     for y in [-0.65,-0.40,0.10,0.60] {
         part(mesh,at+Vec3::Y*y*r,Vec3::new(r*0.24,r*0.045,r*0.24),Quat::IDENTITY,shell,0.0);
     }
-    part(mesh,at+Vec3::Y*r*0.32,Vec3::new(r*0.20,r*0.30,r*0.20),Quat::IDENTITY,dark,0.5);
+    super::detail::vessel(mesh,at+Vec3::Y*r*0.32,r*0.34,r*0.105,
+        Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),alloy);
     strut(mesh,at+Vec3::Y*r*0.62,at+Vec3::Y*r*1.05,r*0.008,alloy);
     // Continuous segmented pressure rim, separate inner/outer truss rails,
     // paired spokes and recessed windows: readable mass and negative space.
@@ -120,6 +123,7 @@ fn build_anchorage_local(mesh: &mut Model, class: Class, key: u32) -> std::ops::
         let sectors=if matches!(class,Class::Conservatory) {96} else {48};
         // A larger radius adds circumference, not giant windows or decks.
         let tube=r.min(210.0);
+        super::pressure::rim(mesh,r,tube*0.055,sectors,shell);
         let step=std::f32::consts::TAU/sectors as f32;
         for i in 0..sectors {
             let a=(i as f32+0.5)*step;
@@ -127,13 +131,14 @@ fn build_anchorage_local(mesh: &mut Model, class: Class, key: u32) -> std::ops::
             let q=Quat::from_rotation_y(-a);
             let c=at+radial*r;
             let length=2.0*r*(step*0.5).tan()*1.005;
-            part(mesh,c,Vec3::new(tube*0.11,tube*0.095,length),q,shell,0.0);
             // A dark equatorial window belt is subdivided by real mullions.
             for window in [-1.0,0.0,1.0] {
                 let tangent=Vec3::new(-a.sin(),0.0,a.cos());
                 let wc=c+radial*tube*0.056+tangent*window*length*0.29;
-                mesh.cuboid(wc,Vec3::new(tube*0.004,tube*0.022,length*0.21),q,
-                    if (i + key as usize).is_multiple_of(5) {[0.24,0.39,0.41]} else {[0.85,0.64,0.34]},0.65);
+                part(mesh,wc,Vec3::new(tube*0.006,tube*0.029,length*0.24),q,dark,0.5);
+                mesh.cuboid(wc+radial*tube*0.005,Vec3::new(tube*0.004,tube*0.017,length*0.175),q,
+                    if (i + key as usize).is_multiple_of(5) {[0.18,0.31,0.32]} else {[0.62,0.39,0.16]},0.24);
+                part(mesh,wc+radial*tube*0.008,Vec3::new(tube*0.003,tube*0.022,length*0.009),q,alloy,0.5);
             }
             let a0=i as f32*step;
             let a1=(i+1) as f32*step;
@@ -147,7 +152,15 @@ fn build_anchorage_local(mesh: &mut Model, class: Class, key: u32) -> std::ops::
                 for y in [-1.0,1.0] {
                     strut(mesh,at+Vec3::Y*y*r*0.24,c+Vec3::Y*y*r*0.045,r*0.009,alloy);
                 }
-                part(mesh,c+Vec3::Y*r*0.075,Vec3::new(r*0.15,r*0.06,r*0.25),q,shell,0.0);
+                let module=c+Vec3::Y*(tube*0.055+9.0);
+                super::detail::vessel(mesh,module,tube*0.42,tube*0.065,
+                    Quat::from_rotation_y(-a),shell);
+                // A separated catwalk and guard rail reveal real depth between
+                // the pressure skin, service deck and outer load frame.
+                for lift in [tube*0.105,tube*0.125] {
+                    strut(mesh,c+v0*tube*0.11+Vec3::Y*lift,
+                        c+v1*tube*0.11+Vec3::Y*lift,tube*0.004,alloy);
+                }
             }
         }
         ring_range=ring..mesh.mark();

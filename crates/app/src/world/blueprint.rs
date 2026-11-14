@@ -17,10 +17,7 @@ pub use orient::{mirror_block, rotate_block};
 use super::BlockId;
 use glam::IVec3;
 
-/// Longest blueprint side in cells.
-pub const MAX_SIDE: i32 = 256;
-/// Largest blueprint volume in cells (128³).
-pub const MAX_VOLUME: usize = 1 << 21;
+pub use engine_voxel::blueprint_format::{MAX_SIDE, MAX_VOLUME};
 
 /// Whether a box of this size can be held as a blueprint.
 pub fn valid_size(size: IVec3) -> bool {

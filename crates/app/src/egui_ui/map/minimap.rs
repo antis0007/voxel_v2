@@ -5,7 +5,7 @@ use super::MapState;
 use egui::{Align2, Color32, FontId, Mesh, Pos2, Rect, Shape, Stroke, emath::Rot2, pos2, vec2};
 use glam::IVec2;
 
-const SIZE: f32 = 136.0;
+const SIZE: f32 = 112.0;
 /// Screen points per map column.
 const ZOOM: f32 = 1.0;
 
@@ -37,7 +37,11 @@ pub(super) fn diamond(p: &egui::Painter, at: Pos2, r: f32, fill: Color32, glyph:
 }
 
 /// Region textures as one rotated mesh per texture, clipped by the caller.
-pub(super) fn terrain(p: &egui::Painter, s: &MapState, centre: Pos2, origin: egui::Vec2, scale: f32, rot: Rot2, reach: f32) {
+pub(super) fn terrain(p: &egui::Painter, s: &MapState, centre: Pos2, origin: egui::Vec2, scale: f32, rot: Rot2, reach: f32, minimap: bool) {
+    if !s.knowledge.legacy {
+        s.knowledge.draw(p, centre, origin, scale, rot, s.voxel_m, minimap);
+        return;
+    }
     let lo = ((origin - egui::Vec2::splat(reach)) / TILE as f32).floor();
     let hi = ((origin + egui::Vec2::splat(reach)) / TILE as f32).floor();
     let (lo, hi) = (IVec2::new(lo.x as i32, lo.y as i32), IVec2::new(hi.x as i32, hi.y as i32));
@@ -52,28 +56,39 @@ pub(super) fn terrain(p: &egui::Painter, s: &MapState, centre: Pos2, origin: egu
 }
 
 pub(super) fn draw(ctx: &egui::Context, s: &MapState, top: f32) {
-    let Some((pos, yaw)) = s.player else { return };
+    let Some((pos, mut yaw)) = s.player else { return };
     let screen = ctx.content_rect();
     let frame = Rect::from_min_size(pos2(screen.right() - 12.0 - SIZE, screen.top() + top), vec2(SIZE, SIZE));
-    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, "minimap".into()));
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("minimap")));
     p.rect_filled(frame, 0, grimoire::RECESS);
     let inner = frame.shrink(4.0);
     let centre = inner.center();
-    let origin = egui::Vec2::new(pos.x, pos.z);
+    let strict = !s.knowledge.legacy;
+    let origin = if strict { s.knowledge.project(pos * s.voxel_m, true) } else { egui::Vec2::new(pos.x, pos.z) };
+    if strict { yaw = s.knowledge.yaw; }
     let rot = view_rotation(yaw);
     let clip = p.with_clip_rect(inner);
-    terrain(&clip, s, centre, origin, ZOOM, rot, inner.width() * 0.75 / ZOOM);
+    terrain(&clip, s, centre, origin, ZOOM, rot, inner.width() * 0.75 / ZOOM, true);
 
     let half = inner.width() * 0.5 - 6.0;
     for w in &s.waypoints.list {
-        let delta = egui::Vec2::new(w.pos.x as f32 + 0.5, w.pos.z as f32 + 0.5) - origin;
+        if strict && !s.knowledge.marker_on_layer(w.pos, s.voxel_m, true) { continue; }
+        let target = if strict { s.knowledge.project((w.pos.as_vec3() + glam::Vec3::splat(0.5)) * s.voxel_m, true) } else { egui::Vec2::new(w.pos.x as f32 + 0.5, w.pos.z as f32 + 0.5) };
+        let delta = target - origin;
         let (v, inside) = clamp_to_edge(to_screen(delta, yaw), half);
         let glyph = if inside { w.glyph() } else { String::new() };
         diamond(&clip, centre + v, if inside { 5.5 } else { 4.0 }, w.color(), &glyph);
     }
+    for w in s.objective.iter().chain(s.delivery.iter()).filter(|w| !strict || s.knowledge.marker_on_layer(w.pos, s.voxel_m, true)) {
+        let target = if strict { s.knowledge.project((w.pos.as_vec3() + glam::Vec3::splat(0.5)) * s.voxel_m, true) } else { egui::Vec2::new(w.pos.x as f32 + 0.5, w.pos.z as f32 + 0.5) };
+        let delta = target - origin;
+        let (v, _) = clamp_to_edge(to_screen(delta, yaw), half);
+        diamond(&clip, centre + v, 6.0, style::AMBER, "!");
+    }
     let (north, _) = clamp_to_edge(to_screen(egui::Vec2::new(0.0, -1.0e6), yaw), half - 2.0);
     clip.circle_filled(centre + north, 6.5, Color32::from_black_alpha(170));
-    clip.text(centre + north, Align2::CENTER_CENTER, "N", FontId::proportional(10.0), style::AMBER);
+    let orientation = if strict && s.knowledge.layer(true).is_some_and(|l| glam::Vec3::from_array(l.up).dot(glam::Vec3::Y) < 0.99) { "↑" } else { "N" };
+    clip.text(centre + north, Align2::CENTER_CENTER, orientation, FontId::proportional(10.0), style::AMBER);
 
     clip.add(Shape::convex_polygon(
         vec![centre + vec2(0.0, -6.0), centre + vec2(4.5, 5.0), centre + vec2(0.0, 2.5), centre + vec2(-4.5, 5.0)],
@@ -82,9 +97,12 @@ pub(super) fn draw(ctx: &egui::Context, s: &MapState, top: f32) {
     ));
     grimoire::binding(&p, frame, false);
 
+    // The coordinate line counts as part of the map for anything stacked below.
+    let footprint = if s.prefs.coordinates { frame.with_max_y(frame.bottom() + 16.0) } else { frame };
+    crate::egui_ui::hud_layout::claim(ctx, "minimap", footprint);
     if s.prefs.coordinates {
         let cell = pos.floor().as_ivec3();
-        let text = format!("{} · {} · {}", cell.x, cell.y, cell.z);
+        let text = if strict { format!("{:.0} · {:.0}", origin.x, origin.y) } else { format!("{} · {} · {}", cell.x, cell.y, cell.z) };
         let at = pos2(frame.center().x, frame.bottom() + 3.0);
         p.text(at + vec2(1.0, 1.0), Align2::CENTER_TOP, &text, FontId::monospace(10.5), style::INK);
         p.text(at, Align2::CENTER_TOP, &text, FontId::monospace(10.5), style::PAPER);

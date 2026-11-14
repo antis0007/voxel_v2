@@ -24,7 +24,7 @@ impl State {
             .map(|patch| (patch.extent as usize).pow(3) - 1)
             .sum();
         self.patches.len() + additional <= PATCH_CEILING
-            && self.scheduled.len() + additional + positions.len() <= MAX_EVENTS
+            && self.scheduled.len() + additional + positions.len() <= self.event_limit()
     }
 
     pub fn refine(&mut self, p: IVec3) {
@@ -75,16 +75,49 @@ pub fn faces(anchor: IVec3, extent: u8) -> Vec<(IVec3, IVec3)> {
     for direction in [IVec3::NEG_Y, IVec3::Y, IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
         for v in 0..n {
             for u in 0..n {
-                let offset = if direction.y != 0 {
-                    IVec3::new(u, if direction.y > 0 { n - 1 } else { 0 }, v)
-                } else if direction.x != 0 {
-                    IVec3::new(if direction.x > 0 { n - 1 } else { 0 }, u, v)
-                } else {
-                    IVec3::new(u, v, if direction.z > 0 { n - 1 } else { 0 })
-                };
+                let offset = face_offset(direction, n, u, v);
                 faces.push((anchor + offset + direction, direction));
             }
         }
     }
     faces
+}
+
+fn face_offset(direction: IVec3, n: i32, u: i32, v: i32) -> IVec3 {
+    if direction.y != 0 {
+        IVec3::new(u, if direction.y > 0 { n - 1 } else { 0 }, v)
+    } else if direction.x != 0 {
+        IVec3::new(if direction.x > 0 { n - 1 } else { 0 }, u, v)
+    } else {
+        IVec3::new(u, v, if direction.z > 0 { n - 1 } else { 0 })
+    }
+}
+
+/// Append contact cells in the same stable order as `faces`.
+pub(crate) fn append_face_positions(anchor: IVec3, extent: u8, out: &mut Vec<IVec3>) {
+    let n = i32::from(extent);
+    out.reserve((6 * n * n) as usize);
+    for direction in [IVec3::NEG_Y, IVec3::Y, IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z] {
+        for v in 0..n {
+            for u in 0..n {
+                out.push(anchor + face_offset(direction, n, u, v) + direction);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn appended_face_positions_match_the_original_order() {
+        for extent in [1, 2, 4] {
+            let anchor = IVec3::new(-7, 3, 11);
+            let expected: Vec<_> = faces(anchor, extent).into_iter().map(|(p, _)| p).collect();
+            let mut actual = Vec::new();
+            append_face_positions(anchor, extent, &mut actual);
+            assert_eq!(actual, expected);
+        }
+    }
 }

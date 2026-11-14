@@ -1,31 +1,92 @@
 // ============================================================
 // fluid_surface_shared.wgsl
 //
-// Fragment-only looks for water, fire, smoke, steam and loose powders. Every
-// lattice here is the world PIXEL_RES grid declared in world_shader.wgsl, and
-// every animated term is a pure function of position and the shared clock.
+// Surface looks for water, fire, smoke, steam and loose powders. Animated
+// terms are pure functions of position and the shared clock.
 // Colours are linear reflectance or unit-scale emission, before lighting.
 // ============================================================
 
-// Per-metre absorption: red goes first, green next, blue last, so a sand bed
-// reads jade in the shallows, teal at 1-3 m and teal-navy beyond.
-const WATER_ABSORB: vec3<f32> = vec3<f32>(1.6, 0.21, 0.17);
+// Bed light loses red first and keeps jade through the shallows. The separate
+// in-scatter ramp supplies the blue of deep water once the bed fades out.
+const WATER_ABSORB: vec3<f32> = vec3<f32>(1.05, 0.20, 0.27);
 // Reflections of sky and scene read darker than their sources.
 const WATER_REFLECTION_GAIN: f32 = 0.80;
 const WATER_FOAM: vec3<f32> = vec3<f32>(0.80, 0.83, 0.79);
-// Thin edge water (#7FE3C2 at display scale).
-const WATER_MINT_EDGE: vec3<f32> = vec3<f32>(0.060, 0.220, 0.155);
 
-/// In-scattered colour of the water column above a bed `depth` metres down.
-fn water_body_color(depth: f32, turbidity: f32) -> vec3<f32> {
-    let shallow = vec3<f32>(0.018, 0.150, 0.112);
-    let mid = vec3<f32>(0.008, 0.090, 0.088);
-    let deep = mix(vec3<f32>(0.0055, 0.040, 0.064), vec3<f32>(0.004, 0.028, 0.054), turbidity);
-    let body = mix(shallow, mid, smoothstep(0.2, 2.0, depth));
-    return mix(body, deep, 1.0 - exp(-max(depth - 1.5, 0.0) * 0.30));
+// Both resident and horizon surfaces use the same sea datum. Use the
+// undisplaced height so a wave never changes its own material.
+fn water_marine_weight(height: f32, scale: f32) -> f32 {
+    let sea_surface = cam.coverage.y + scale;
+    return 1.0 - smoothstep(0.15 * scale, 0.65 * scale, abs(height - sea_surface));
 }
 
-/// Caustic gain on a submerged bed: one-texel wobbly lines, 1.3x bed value.
+/// In-scattered colour of the water column above a bed `depth` metres down.
+fn water_body_color(depth: f32, turbidity: f32, marine: f32) -> vec3<f32> {
+    // Linear-light ramps for the reference brief's jade, teal and navy.
+    let shallow = mix(vec3<f32>(0.042, 0.205, 0.156), vec3<f32>(0.085, 0.177, 0.123), turbidity);
+    let mid = mix(vec3<f32>(0.026, 0.104, 0.087), vec3<f32>(0.018, 0.116, 0.119), marine);
+    let clear_deep = mix(vec3<f32>(0.014, 0.050, 0.059), vec3<f32>(0.006, 0.054, 0.091), marine);
+    let deep = mix(clear_deep, vec3<f32>(0.023, 0.037, 0.040), turbidity);
+    let body = mix(shallow, mid, smoothstep(0.15, 2.4, depth));
+    return mix(body, deep, 1.0 - exp(-max(depth - 2.0, 0.0) * 0.33));
+}
+
+/// One swell train: xy slope, z unresolved slope variance, w crest compression.
+fn sea_swell_term(xz: vec2<f32>, dir: vec2<f32>, wavelength: f32, slope: f32, t: f32, fp: f32) -> vec4<f32> {
+    let k = 6.2831853 / wavelength;
+    // Deep-water dispersion, w = sqrt(g k).
+    let w = sqrt(9.81 * k);
+    let along = dot(xz, dir);
+    let across = dot(xz, vec2<f32>(-dir.y, dir.x));
+    let packet = k * along * 0.26 - w * t * 0.13 + k * 9.7;
+    let flank = k * across * 0.55 + k * 37.0;
+    let envelope = 0.45 + 0.38 * cos(packet + 0.65 * sin(flank)) * cos(flank - packet * 0.23);
+    let resolved = (1.0 - smoothstep(0.65, 2.0, fp * k))
+        * (1.0 - smoothstep(1.5, 8.0, fp));
+    let ph = along * k - w * t + 0.90 * sin(flank) + 0.38 * sin(packet);
+    // Trochoidal profile: steep crests, wide troughs.
+    let crest = cos(ph);
+    let s = sin(ph) / (1.0 - 0.3 * crest);
+    return vec4<f32>(dir * (s * slope * envelope * resolved),
+        0.5 * slope * slope * (1.0 - resolved * resolved), crest * envelope);
+}
+
+// A narrow directional band with a slower energy envelope. Phase and group
+// velocity differ, so crests grow and die as they move through each packet.
+// xy = negative height gradient, z = height, w = horizontal compression.
+fn water_wave_packet(
+    xz: vec2<f32>, dir: vec2<f32>, k: f32, amplitude: f32, phase_offset: f32,
+    t: f32, footprint: f32,
+) -> vec4<f32> {
+    let omega = sqrt(9.81 * k);
+    let across = dot(xz, vec2<f32>(-dir.y, dir.x));
+    let along = dot(xz, dir);
+    let group = k * along * 0.19 - omega * t * 0.095 + phase_offset;
+    let flank = k * across * 0.28 + phase_offset * 1.7;
+    let envelope = 0.52 + 0.38 * cos(group) * cos(flank + group * 0.21);
+    let phase = k * along - omega * t + phase_offset;
+    let resolved = 1.0 - smoothstep(0.9, 2.6, k * footprint);
+    let height = amplitude * envelope * resolved;
+    let crest = cos(phase);
+    let slope = sin(phase) * (height * k);
+    return vec4<f32>(dir * slope, height * crest, height * k * crest);
+}
+
+fn water_surface_packets(xz: vec2<f32>, t: f32, footprint: f32) -> vec4<f32> {
+    // One continuous world-space warp breaks the four trains' repeated cross
+    // pattern. Shared by displacement and normals, with no per-tile UV reset.
+    // It replaces eight nested sine evaluations in the packet phase/envelope.
+    let drift = vec2<f32>(0.37, -0.23) * t;
+    let bend = vec2<f32>(surface_noise((xz - drift) * 0.013),
+        surface_noise((xz - drift) * 0.019 + vec2<f32>(31.7, -19.3))) - 0.5;
+    let q = xz + bend * 5.0;
+    return water_wave_packet(q, vec2<f32>(0.88, 0.475), 0.24, 0.31, 0.3, t, footprint)
+        + water_wave_packet(q, vec2<f32>(0.31, -0.951), 0.37, 0.20, 1.8, t, footprint)
+        + water_wave_packet(q, vec2<f32>(-0.69, 0.724), 0.59, 0.115, 3.2, t, footprint)
+        + water_wave_packet(q, vec2<f32>(-0.54, -0.842), 0.91, 0.057, 4.9, t, footprint);
+}
+
+/// Caustic gain on a submerged bed, with a bright core and softer shoulders.
 fn water_bed_caustic(bed_xz: vec2<f32>, t: f32, depth: f32, footprint_m: f32) -> f32 {
     let shallow = exp(-depth * 0.55) * smoothstep(0.02, 0.15, depth);
     let resolved = fluid_pixel_weight(footprint_m);
@@ -36,27 +97,68 @@ fn water_bed_caustic(bed_xz: vec2<f32>, t: f32, depth: f32, footprint_m: f32) ->
     let r = mat2x2<f32>(0.80, -0.60, 0.60, 0.80);
     let a = uw_noise(q * 2.2 + vec2<f32>(t * 0.31, -t * 0.22));
     let b = uw_noise((r * q) * 2.9 + vec2<f32>(-t * 0.27, t * 0.35));
-    let line = smoothstep(0.74, 0.90, 1.0 - abs(a - b) * 1.7);
-    return mix(mean, line * 0.32, resolved) * shallow;
+    let separation = abs(a - b);
+    let shoulder = 1.0 - smoothstep(0.025, 0.14, separation);
+    let core = 1.0 - smoothstep(0.012, 0.052, separation);
+    return mix(mean, shoulder * 0.16 + core * 0.52, resolved) * shallow;
+}
+
+// Depth steers the fronts into the bank. Integrating the shallow-water
+// 1/sqrt(depth) travel time over a local beach slope bunches them in the
+// shallows. World-space modulation bends and interrupts adjacent fronts.
+// Returns crest phase and group strength for both displacement and foam.
+fn water_breaker(xz: vec2<f32>, depth: f32, t: f32) -> vec2<f32> {
+    let drift = vec2<f32>(0.27, -0.19) * t;
+    let group = surface_noise((xz - drift) * 0.094);
+    let bend = surface_noise(xz * 0.165 + vec2<f32>(0.015, 0.027) * t);
+    let travel = (sqrt(max(depth, 0.0) + 0.09) - 0.3) * 0.98;
+    let clock = t * 0.29 + 0.14 * sin(t * 0.67 + group * 4.0);
+    let phase = fract(travel + clock + (bend - 0.5) * 0.55 + (group - 0.5) * 0.45);
+    return vec2<f32>(phase, smoothstep(0.24, 0.76, group));
+}
+
+fn water_breaker_band(depth: f32) -> f32 {
+    return smoothstep(0.04, 0.22, depth) * (1.0 - smoothstep(0.55, 1.50, depth));
+}
+
+fn water_breaker_crest(phase: f32) -> f32 {
+    return smoothstep(0.32, 0.54, phase) * (1.0 - smoothstep(0.54, 0.69, phase));
+}
+
+// Reconstruct a tiny displacement of the interpolated bed colour. The offset
+// is bounded to one pixel because the mesh carries only local bed information.
+fn water_refract_bed(
+    bed: vec3<f32>, offset: vec2<f32>, chart_dx: vec2<f32>, chart_dy: vec2<f32>,
+    bed_dx: vec3<f32>, bed_dy: vec3<f32>,
+) -> vec3<f32> {
+    let det = chart_dx.x * chart_dy.y - chart_dx.y * chart_dy.x;
+    if abs(det) < 1e-8 { return bed; }
+    let pixels = vec2<f32>(
+        offset.x * chart_dy.y - offset.y * chart_dy.x,
+        chart_dx.x * offset.y - chart_dx.y * offset.x,
+    ) / det;
+    let step_px = pixels / max(1.0, length(pixels));
+    return clamp(bed + bed_dx * step_px.x + bed_dy * step_px.y, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 /// Foam coverage from the interpolated pinned-corner weight (1 on a solid).
-fn water_shore_foam(xz: vec2<f32>, contact: f32, t: f32, footprint_m: f32) -> f32 {
-    if contact <= 0.01 { return 0.0; }
+fn water_shore_foam(xz: vec2<f32>, contact: f32, current: vec2<f32>, t: f32, footprint_m: f32) -> f32 {
+    // The widest swell and noise perturbation still cannot reach the band here.
+    if contact <= 0.35 { return 0.0; }
     let resolved = fluid_pixel_weight(footprint_m);
     let mean = smoothstep(0.35, 1.0, contact) * 0.35;
     if resolved <= 0.0 { return mean; }
-    let texel = floor(xz * PIXEL_RES);
-    // The lace breathes: its edge advances and retreats along the shore.
-    let swell = 0.07 * sin(t * 1.3 + dot(texel, vec2<f32>(0.037, 0.029)));
-    let lace = surface_noise(texel * 0.29 + vec2<f32>(t * 0.30, -t * 0.21));
-    let s = contact + swell + (lace - 0.5) * 0.16;
-    // Even the contact line is lace, so a film pinned on every corner does
-    // not turn into a solid white sheet.
-    let rim = step(0.84, s) * step(0.50, surface_noise(texel * 0.61 + vec2<f32>(t * 0.22, 7.0)));
-    let holes = step(0.55, surface_noise(texel * 0.47 + vec2<f32>(-t * 0.18, t * 0.26)));
-    let band = step(0.56, s) * (1.0 - step(0.74, s)) * holes;
-    return mix(mean, max(rim, band), resolved);
+    let q = texel_centre(xz);
+    let phase = fract(t * 0.25);
+    // At 5 cycles/m a noise cell was about three texels, so the thresholded
+    // lace broke into isolated one-texel white specks. A lower frequency
+    // keeps the foam in connected strands several texels wide.
+    let a = surface_noise((q - current * (phase * 4.0)) * 1.7);
+    let b = surface_noise((q - current * (fract(phase + 0.5) * 4.0)) * 1.7);
+    let lace = mix(a, b, smoothstep(0.0, 1.0, abs(phase * 2.0 - 1.0)));
+    let rim = smoothstep(0.65, 0.96, contact + (lace - 0.5) * 0.27);
+    let coverage = rim * smoothstep(0.30, 0.62, lace);
+    return mix(mean, coverage, resolved);
 }
 
 // ---- Fire -----------------------------------------------------------------

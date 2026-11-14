@@ -19,12 +19,23 @@ const RECOVERY_CARGO: &[(u8,u32)] = &[(12,6),(5,2)];
 const FLIGHT_DAYS: f64 = 0.012;
 
 #[derive(Clone, Copy)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action {
+    DispatchCargo { receiver: bool },
+    CollectLoot,
     Deploy,
     Order,
     Collect,
     Restore,
     RecoverRelay,
+    LiftIron,
+    LowerIron,
+    CollectIron,
+    /// Board the express lift at the console and activate departure.
+    Board,
+    /// Return trip from a cabin docked at the crown.
+    Descend,
+    OrderCell { supply: super::cargo::Supply, receiver: bool },
 }
 
 #[derive(Default)]
@@ -90,9 +101,22 @@ pub struct View {
     pub can_deploy: bool,
     pub can_order: bool,
     pub can_collect: bool,
+    pub cargo_ready: bool,
     pub can_restore: bool,
     pub can_recover: bool,
+    pub can_board: bool,
     pub recovery_status: &'static str,
+    pub freight_unlocked:bool,
+    pub freight_status:&'static str,
+    pub orbital_iron:u32,
+    pub delivered_iron:u32,
+    pub capacity_kg:f64,
+    pub strain:f64,
+    pub lifted_kg:u64,
+    pub lowered_kg:u64,
+    pub can_lift:bool,
+    pub can_lower:bool,
+    pub can_collect_iron:bool,
 }
 
 fn affordable(world: &World, cost: &[(u8, u32)]) -> bool {
@@ -113,6 +137,9 @@ pub fn position(world: &World) -> Option<Vec3> {
         .anchor
         .map(|a| (a.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters())
 }
+pub fn cargo_ready(world: &World, day: &DayNightCycle) -> bool {
+    pending(world.orbital.receiver.stage) && calendar(day) >= world.orbital.receiver.due()
+}
 pub fn intact(world: &World) -> bool {
     world
         .orbital
@@ -124,6 +151,10 @@ fn near(world: &World, player: &Player) -> bool {
     position(world).is_some_and(|p| {
         (player.eye(world.voxel_scale) * world.voxel_scale.meters() - p).length() <= 6.0
     })
+}
+/// An intact console within reach; the express berth is beside it.
+pub fn boarding_available(world: &World, player: &Player) -> bool {
+    near(world, player) && intact(world)
 }
 pub fn focused(world: &World, player: &Player) -> bool {
     if !near(world, player) {
@@ -154,6 +185,12 @@ pub fn focused(world: &World, player: &Player) -> bool {
 fn deployment(world: &World, player: &Player) -> Result<IVec3, &'static str> {
     if world.orbital.receiver.anchor.is_some() {
         return Err("A receiver is already registered. Its contract ledger survives dismantling.");
+    }
+    let cfg=world.sample_config();
+    if engine_worldgen::meridian_terminal::enabled(&cfg) {
+        let a=engine_worldgen::meridian_terminal::console(&cfg);
+        if (player.pos*cfg.voxel_meters()-(a.as_vec3()+Vec3::splat(0.5))*cfg.voxel_meters()).length()<6.0
+            && world.get(a)==BlockId::Workbench && world.get(a-IVec3::Y).is_solid() {return Ok(a);}
     }
     let s = site(world.seed, IVec2::ZERO).unwrap();
     let scale = world.voxel_scale.meters();
@@ -242,7 +279,23 @@ pub fn view(world: &World, day: &DayNightCycle, player: &Player) -> View {
             && deployment(world, player).is_ok(),
         can_order: live && state.stage == 0 && affordable(world, ORDER_COST),
         can_collect: live && pending(state.stage) && calendar(day) >= state.due(),
+        cargo_ready: cargo_ready(world, day),
+        freight_unlocked:state.stage>=2,
+        freight_status:if world.orbital.dynamics.shipment.is_some() {"In Transit"}
+            else if world.orbital.dynamics.strain(world.seed)>=0.025 {"Tether Overload"}
+            else {"Ready"},
+        orbital_iron:world.orbital.dynamics.orbital_iron,
+        delivered_iron:world.orbital.dynamics.delivered_iron,
+        capacity_kg:world.orbital.dynamics.capacity_kg(world.seed),
+        strain:world.orbital.dynamics.strain(world.seed),
+        lifted_kg:world.orbital.dynamics.lifted_kg,
+        lowered_kg:world.orbital.dynamics.lowered_kg,
+        can_lift:live && state.stage>=2 && affordable(world,&[(8,super::dynamics::IRON_PER_CRATE)])
+            && world.orbital.dynamics.can_lift(world.seed),
+        can_lower:live && state.stage>=2 && world.orbital.dynamics.can_lower(),
+        can_collect_iron:live && world.orbital.dynamics.delivered_iron>0,
         can_recover: live && state.stage==2 && uplink && relay_visible && affordable(world,RECOVERY_COST),
+        can_board: super::express::can_board(world, player),
         recovery_status: if state.stage<2 {"Complete commissioning to unlock relay recovery."}
             else if state.stage==3 {"Relay recovery booked. Cargo arrives through the scheduled Meridian service."}
             else if state.stage==4 {"Relay recovery completed. This world entitlement is exhausted."}
@@ -297,8 +350,38 @@ pub fn action(
     player: &Player,
     action: Action,
 ) -> Vec<IVec3> {
+    match action {
+        Action::OrderCell { supply, receiver } => {
+            if !super::cargo::order_cell(world, player, supply, receiver) {
+                world.expedition.say("Mithril Order Unavailable");
+            }
+            return Vec::new();
+        }
+        Action::DispatchCargo { receiver } => { super::cargo::dispatch(world, player, receiver); return Vec::new(); }
+        Action::CollectLoot => { super::cargo::collect(world, player); return Vec::new(); }
+        _ => {}
+    }
+    world.orbital.dynamics.advance(world.seed,day);
     let mut changed = Vec::new();
     let message = match action {
+        Action::LiftIron if view(world,day,player).can_lift => {
+            if world.orbital.dynamics.queue(world.seed,day,true) {
+                pay(world,&[(8,super::dynamics::IRON_PER_CRATE)]);
+                "Iron lift queued."
+            } else {"Freight unavailable."}
+        }
+        Action::LowerIron if view(world,day,player).can_lower => {
+            if world.orbital.dynamics.queue(world.seed,day,false) {"Iron return queued."}
+            else {"Freight unavailable."}
+        }
+        Action::CollectIron if view(world,day,player).can_collect_iron => {
+            let count=world.orbital.dynamics.delivered_iron.min(super::dynamics::IRON_PER_CRATE);
+            let mut inventory=world.inventory.clone();
+            if inventory.try_insert(ItemStack::new(Item::Resource(8),count)).1==0 {
+                world.inventory=inventory;world.orbital.dynamics.delivered_iron-=count;
+                world.sync_from_inventory();"Iron collected."
+            } else {"Inventory full."}
+        }
         Action::Deploy => {
             match deployment(world, player) {
                 Err(reason) => reason,
@@ -306,6 +389,15 @@ pub fn action(
                     "Receiver requires 8 iron ingots and 4 copper ingots."
                 }
                 Ok(a) => {
+                    // Reclaim the generated exchange without replacing its
+                    // editable structure or resetting any freight contract.
+                    if engine_worldgen::meridian_terminal::enabled(&world.sample_config())
+                        && a==engine_worldgen::meridian_terminal::console(&world.sample_config())
+                        && world.get(a)==BlockId::Workbench {
+                        pay(world,BUILD_COST);world.orbital.receiver.anchor=Some(a);
+                        world.expedition.say("Ground exchange restored.");
+                        return changed;
+                    }
                     let r = world.sample_config().blocks_for_height(1.0);
                     let mut edits = Vec::new();
                     for z in -r..=r {
@@ -384,6 +476,8 @@ pub fn action(
                 .iter()
                 .all(|&(i, n)| inventory.try_insert(ItemStack::new(Item::Resource(i), n)).1 == 0);
             if fits {
+                let mass=cargo.iter().map(|&(id,n)|n as f64*match id {15=>20.0,12=>1.0,5=>5.0,_=>0.0}).sum();
+                world.orbital.dynamics.credit_import(world.seed,day,mass);
                 world.inventory = inventory;
                 world.orbital.receiver.stage = if recovery {4} else {2};
                 world.sync_from_inventory();
@@ -404,6 +498,11 @@ pub fn action(
                 "Console placement blocked by protected machinery."
             }
         }
+        Action::Board => {
+            if !super::express::board(world, player) { return changed; }
+            "Express lift · Departing"
+        }
+        Action::Descend if super::express::descend(world) => "Express lift · Departing",
         _ => {
             "Use an intact receiver within 6 m. Check order requirements."
         }

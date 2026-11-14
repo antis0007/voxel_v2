@@ -6,6 +6,7 @@ use action::{Phase, Run};
 pub(super) const KIND: u32 = 14;
 const MAX_GATE: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) enum Action {
     Shove,
     Thrust,
@@ -14,6 +15,7 @@ pub(super) enum Action {
     Retrieve,
 }
 #[derive(Clone, Default)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct State {
     pub run: Option<Run<Action>>,
     /// Owned timber cells in the carried gate. Zero means planted or destroyed.
@@ -31,6 +33,7 @@ pub(super) struct State {
     pub retrieved: u32,
 }
 #[derive(Clone)]
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Saved {
     pos: Vec3,
     home: Vec3,

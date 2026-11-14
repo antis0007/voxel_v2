@@ -114,7 +114,7 @@ impl Selector {
 mod tests {
     use super::*;
     use crate::{fluid::VoxelScalePreset,world::WorldType};
-    fn cfg(seed:u32)->WorldSampleConfig {WorldSampleConfig{seed,generator_version:25,world_type:WorldType::Hills,voxel_scale:VoxelScalePreset::OneMeter}}
+    fn cfg(seed:u32)->WorldSampleConfig {WorldSampleConfig{ planet: None,seed,generator_version:25,world_type:WorldType::Hills,voxel_scale:VoxelScalePreset::OneMeter}}
     fn view(eye:Vec3,forward:Vec3)->View {View{eye,forward,focal:512.0,viewport:[1280,720],ordinary_lod0_m:128.0}}
     #[test]
     fn projected_quality_is_bounded_and_retained_through_turns_then_world_reset() {

@@ -10,6 +10,7 @@ const STRIP: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 150);
 const TEXT: Color32 = Color32::from_rgb(224, 224, 224);
 const WARN: Color32 = Color32::from_rgb(255, 196, 92);
 const BAD: Color32 = Color32::from_rgb(255, 110, 96);
+const MACHINE: Color32 = Color32::from_rgb(133, 215, 227);
 const GRAPH: [f32; 2] = [180.0, 34.0];
 const RIGHT_BOTTOM: &str = "debug_overlay_right_bottom";
 
@@ -20,12 +21,15 @@ pub(super) struct Readout<'a> {
     pub yaw: f32,
     pub scale_label: &'a str,
     pub biome: &'a str,
+    pub danger: u8,
     pub elevation_m: f32,
     pub time_label: &'a str,
     pub environment_lag: u64,
     pub cave_culled: usize,
     pub cursor: String,
     pub pending_cells: usize,
+    /// Targeted machine, from `dev_panel::machine::lines`.
+    pub machine: Vec<String>,
 }
 
 /// Draws both columns; returns the left column's rect for HUD stacking.
@@ -80,7 +84,7 @@ fn left_lines(r: &Readout) -> Vec<(String, Color32)> {
             block.x - chunk.x * CHUNK_SIZE, block.y - chunk.y * CHUNK_SIZE,
             block.z - chunk.z * CHUNK_SIZE), TEXT),
         (format!("Facing {}  {:.1}°", facing(r.yaw), r.yaw.to_degrees().rem_euclid(360.0)), TEXT),
-        (format!("Biome {}  {:.0} m", r.biome, r.elevation_m), TEXT),
+        (format!("Biome {}  {:.0} m  Danger {}", r.biome, r.elevation_m, r.danger), TEXT),
         (format!("{}  voxel {}", r.time_label, r.scale_label), TEXT),
         (format!("Cave-culled {}", r.cave_culled), TEXT),
     ];
@@ -92,6 +96,9 @@ fn left_lines(r: &Readout) -> Vec<(String, Color32)> {
     }
     if r.pending_cells > 0 {
         out.push((format!("{} cells queued", r.pending_cells), WARN));
+    }
+    for (i, text) in r.machine.iter().enumerate() {
+        out.push((text.clone(), if i == 0 { MACHINE } else { TEXT }));
     }
     out
 }
@@ -224,17 +231,19 @@ mod tests {
                 events,
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                egui::Area::new("beneath".into()).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| {
+            let mut output = ctx.run_ui(input, |root| {
+                let ctx = root.ctx();
+                egui::Area::new(egui::Id::new("beneath")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| {
                     *clicked |= ui.add_sized([200.0, 60.0], egui::Button::new("Slot")).clicked();
                 });
                 let r = Readout {
-                    fps: 60, perf: &perf, pos: Vec3::ZERO, yaw: 0.0, scale_label: "1 m", biome: "Plains",
+                    fps: 60, perf: &perf, pos: Vec3::ZERO, yaw: 0.0, scale_label: "1 m", biome: "Plains", danger: 0,
                     elevation_m: 0.0, time_label: "Noon", environment_lag: 0, cave_culled: 0,
-                    cursor: String::new(), pending_cells: 0,
+                    cursor: String::new(), pending_cells: 0, machine: Vec::new(),
                 };
                 if overlay { draw(ctx, &r); }
             });
+            output.textures_delta.clear();
         };
         let press = |pressed| egui::Event::PointerButton {
             pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default(),
@@ -270,12 +279,14 @@ mod tests {
             yaw: 0.0,
             scale_label: "",
             biome: "",
+            danger: 0,
             elevation_m: 0.0,
             time_label: "",
             environment_lag: 0,
             cave_culled: 0,
             cursor: String::new(),
             pending_cells: 0,
+            machine: Vec::new(),
         };
         let lines = left_lines(&r);
         assert!(lines.iter().any(|(t, _)| t == "Block -1 70 -33"));

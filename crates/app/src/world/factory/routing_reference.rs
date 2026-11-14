@@ -18,7 +18,7 @@ impl Factory {
             let port_count = net.len() as i32;
             for k in 0..net.len() {
                 let p = net[(k + self.cursor) % net.len()];
-                if moved.contains(&p) || !self.nodes[&p].enabled {
+                if moved.contains(&p) || (!self.nodes[&p].enabled && self.nodes[&p].kind != Kind::Assembler) {
                     continue;
                 }
                 'items: for i in 0..RESOURCE_COUNT {

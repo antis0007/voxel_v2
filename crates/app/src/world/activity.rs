@@ -87,6 +87,9 @@ impl Activity {
     pub fn contains(&self, c: IVec3) -> bool {
         self.work.get(&c).is_some_and(|w| w.count > 0)
     }
+    pub(crate) fn active_chunks(&self) -> impl Iterator<Item = IVec3> + '_ {
+        self.work.iter().filter(|(_, w)| w.count > 0).map(|(&c, _)| c)
+    }
     pub fn has_deferred(&self) -> bool {
         !self.deferred.is_empty() || self.sweep.is_some()
     }
@@ -163,6 +166,13 @@ impl Activity {
             .count();
         self.work.len() + extra <= MAX_ACTIVE_CHUNKS
     }
+    pub(crate) fn can_wake_edit(&self, p: IVec3) -> bool {
+        let mut owners = [chunk_coord_from_world_block(p); WAKE_NEIGHBORS.len() + 1];
+        for (i, offset) in WAKE_NEIGHBORS.iter().enumerate() {
+            owners[i + 1] = chunk_coord_from_world_block(p + *offset);
+        }
+        self.can_wake(&owners)
+    }
     pub fn wake(&mut self, p: IVec3) -> bool {
         let c = chunk_coord_from_world_block(p);
         if !self.work.contains_key(&c) {
@@ -230,6 +240,18 @@ impl Activity {
             self.work.remove(&c);
         }
         None
+    }
+    /// Consume one foreground wake without walking the chunk's older frontier.
+    pub(crate) fn take_cell(&mut self, p: IVec3) -> bool {
+        let c = chunk_coord_from_world_block(p);
+        let Some(w) = self.work.get_mut(&c) else { return false };
+        let i = ChunkData::local_index(p.x, p.y, p.z);
+        let bit = 1u64 << (i % 64);
+        if w.bits[i / 64] & bit == 0 { return false; }
+        Arc::make_mut(&mut w.bits)[i / 64] &= !bit;
+        w.count -= 1;
+        self.pending -= 1;
+        true
     }
     pub fn take(&mut self, c: IVec3, limit: usize) -> Batch {
         let limit = limit.min(256);

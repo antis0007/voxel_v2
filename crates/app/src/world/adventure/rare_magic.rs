@@ -1,4 +1,5 @@
 use super::*;
+#[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub(super) struct Well {
     pub pos: Vec3,
     pub life: f32,
@@ -161,7 +162,7 @@ impl Adventure {
                     let at = |angle: f32| {
                         w.pos + turn * Vec3::new(angle.cos() * radius, angle.sin() * radius, 0.0)
                     };
-                    m.glow_beam(
+                    m.spell_current(
                         at(a),
                         at(b),
                         0.022 * fade,
@@ -172,17 +173,23 @@ impl Adventure {
                         },
                         3.0 * fade,
                         0.66 * fade,
+                        j as f32 * 2.0 * radius * (std::f32::consts::PI / 16.0).sin(),
                     );
                 }
             }
-            // Inward-spiraling accretion disk of 3D translucent micro-voxels
+            // Each shard emerges at the outer edge and fades into the core.
+            // The envelope hides the orbit wrap, rather than teleporting a
+            // full-bright fragment back across the disc each cycle.
             for i in 0..24 {
-                let a = self.time * 3.4 + i as f32 * 2.39996;
-                let r = 0.22 + (i as f32 * 0.17 - self.time * 0.95).rem_euclid(1.65);
-                let p = w.pos + Vec3::new(a.cos() * r, (a * 0.7).sin() * 0.36, a.sin() * r);
+                let phase = (self.time * 0.65 + i as f32 / 24.0).fract();
+                let envelope = (phase * 8.0).min(1.0) * ((1.0 - phase) * 6.0).min(1.0);
+                let a = phase * std::f32::consts::TAU * 1.5 + i as f32 * 2.39996;
+                let r = 0.22 + (1.0 - phase) * 1.65;
+                let tilt = Quat::from_rotation_z(0.38);
+                let p = w.pos + tilt * Vec3::new(a.cos() * r, 0.05 * (a * 2.0).sin(), a.sin() * r);
                 m.glow_voxel(
                     p,
-                    Vec3::splat((0.036 + (i % 3) as f32 * 0.012) * fade),
+                    Vec3::splat((0.036 + (i % 3) as f32 * 0.012) * fade * envelope),
                     Quat::from_rotation_y(a) * Quat::from_rotation_z(self.time * 2.0),
                     if i % 3 == 0 {
                         [0.45, 0.92, 1.0]
@@ -190,7 +197,7 @@ impl Adventure {
                         spell_color(6)
                     },
                     3.6 * fade,
-                    0.74 * fade,
+                    0.74 * fade * envelope,
                 );
             }
         }

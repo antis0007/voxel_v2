@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 impl State {
     pub fn encode(&self, bytes: &mut Vec<u8>) {
-        self.encode_versioned(bytes, 27);
+        self.encode_versioned(bytes, super::super::storage::SAVE_VERSION);
     }
     pub fn encode_versioned(&self, bytes: &mut Vec<u8>, version: u8) {
         let mut push = |v: u32| bytes.extend_from_slice(&v.to_le_bytes());
@@ -74,6 +74,9 @@ impl State {
                 s.deaths,
             ] {
                 push(v);
+            }
+            if version >= 65 {
+                push(s.beacon as u32);
             }
         }
         push(self.releases.len() as u32);
@@ -207,6 +210,14 @@ impl State {
             s.mana_used = read()?;
             s.xp_made = read()?;
             s.deaths = read()?;
+            if version >= 65 {
+                s.beacon = match read()? {
+                    0 => Beacon::Off,
+                    1 => Beacon::Mending,
+                    2 => Beacon::Harvest,
+                    _ => anyhow::bail!("Invalid habitat beacon mode"),
+                };
+            }
             ensure!(
                 [s.feed, s.charge, s.products, s.mana, s.xp, s.harvested]
                     .iter()
@@ -215,6 +226,7 @@ impl State {
                     && s.product_clock < 80
                     && (!s.automatic || s.receiver)
                     && (!s.emitter || s.receiver)
+                    && (s.beacon == Beacon::Off || (s.receiver && !s.emitter))
                     && s.emit_ticks <= 64,
                 "Invalid habitat inventory"
             );

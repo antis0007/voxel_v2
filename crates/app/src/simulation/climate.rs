@@ -25,6 +25,7 @@ struct Column {
     wet: f32,
     /// Top of the generated ground, metres.
     surface_m: f32,
+    season_c: f32,
 }
 
 /// Columns are a pure function of the config, so evicting them never changes
@@ -35,6 +36,7 @@ pub struct Climate {
     flat_c: f32,
     time_of_day: f32,
     cloud: f32,
+    day_index: u32,
     columns: RefCell<FastMap<(i32, i32), Column>>,
 }
 
@@ -47,7 +49,7 @@ impl Default for Climate {
 impl Climate {
     /// The same ambient everywhere, at every hour.
     pub fn flat(celsius: f32) -> Self {
-        Self { cfg: None, flat_c: celsius, time_of_day: 0.0, cloud: 0.0, columns: RefCell::default() }
+        Self { cfg: None, flat_c: celsius, time_of_day: 0.0, cloud: 0.0, day_index: 0, columns: RefCell::default() }
     }
 
     /// Called once per fixed step, before the thermal pass.
@@ -61,6 +63,13 @@ impl Climate {
         self.cloud = if cloud_cover.is_finite() { cloud_cover.clamp(0.0, 1.0) } else { 0.0 };
     }
 
+    /// Time of day from the last `sync`: midnight 0.0, noon 0.5.
+    pub fn time_of_day(&self) -> f32 {
+        self.time_of_day
+    }
+
+    pub fn set_day_index(&mut self, day_index: u32) { self.day_index = day_index; }
+
     /// Air or ground temperature at `p`, °C.
     pub fn ambient_c(&self, p: IVec3) -> f32 {
         let Some(cfg) = self.cfg else { return self.flat_c };
@@ -71,7 +80,11 @@ impl Climate {
         // Dry air swings further; cloud cover holds the night warmth in.
         let swing = (3.0 + 5.0 * (1.0 - column.wet)) * (1.0 - 0.6 * self.cloud);
         let day = (std::f32::consts::TAU * (self.time_of_day - WARMEST)).cos();
-        ecology::heat_celsius(heat) + GEOTHERMAL_C_PER_M * depth + swing * day * (-depth / SKIN_M).exp()
+        // The existing sky calendar has four five-day seasons; summer peaks
+        // midway through its second season. Deep ground damps seasonal swings.
+        let year = ((self.day_index % 20) as f32 + self.time_of_day - 7.5) / 20.0;
+        let seasonal = column.season_c * (std::f32::consts::TAU * year).cos() * (-depth / 8.0).exp();
+        ecology::heat_celsius(heat) + seasonal + GEOTHERMAL_C_PER_M * depth + swing * day * (-depth / SKIN_M).exp()
     }
 
     /// `ambient_c` as seen by `block`: liquid water does not sit below its floor.
@@ -86,7 +99,15 @@ impl Climate {
         }
         let (heat, wet) = landscape::lowland_climate(cfg, cfg.world_x(x), cfg.world_z(z));
         let surface_m = cfg.world_y(engine_worldgen::terrain_height(cfg, x, z) + 1);
-        let c = Column { heat, wet, surface_m };
+        let season_c = if engine_worldgen::planetary::active(cfg) {
+            let d = engine_worldgen::planetary::direction(cfg, f64::from(cfg.world_x(x)), f64::from(cfg.world_z(z)));
+            let c = engine_worldgen::planetary::climate_at(cfg, d);
+            (c.annual_c - c.winter_c).max(0.0) as f32
+        } else if engine_worldgen::geo::integrated(cfg) {
+            let p = engine_worldgen::geo::planet_for(cfg);
+            p.grid.bilinear(&p.season, cfg.world_x(x) as f64, cfg.world_z(z) as f64) as f32
+        } else { 0.0 };
+        let c = Column { heat, wet, surface_m, season_c };
         let mut columns = self.columns.borrow_mut();
         if columns.len() >= COLUMNS {
             columns.clear();

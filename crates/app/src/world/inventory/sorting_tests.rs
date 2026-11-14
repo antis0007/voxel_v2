@@ -1,4 +1,53 @@
 use super::*;
+
+#[test]
+fn auto_stack_keeps_locked_and_unrelated_positions() {
+    let mut inv=SurvivalInventory::empty();
+    let item=Item::Resource(6);
+    inv.pack[0]=Some(ItemStack{item,count:83});
+    inv.pack[2]=Some(ItemStack{item,count:117});
+    inv.pack[3]=Some(ItemStack{item,count:56});
+    inv.pack[5]=Some(ItemStack{item,count:7});
+    inv.toggle_protected(crate::world::inventory::SlotAddr::Pack(5));
+    inv.auto_stack_item(item);
+    assert_eq!(inv.pack[0].unwrap().count,256);
+    assert!(inv.pack[2].is_none() && inv.pack[3].is_none());
+    assert_eq!(inv.pack[5].unwrap().count,7);
+    inv.sort_pack();
+    assert_eq!(inv.pack[5].unwrap().count,7);
+}
+
+#[test]
+fn preset_reduction_keeps_recoverable_overflow_and_metadata() {
+    let mut inv=SurvivalInventory::empty();
+    let item=Item::Resource(6);
+    inv.pack.fill(Some(ItemStack{item,count:256}));
+    inv.hotbar.fill(Some(ItemStack{item,count:256}));
+    let before=u64::from(inv.count_item(item));
+    inv.migrate_balance(crate::world::inventory::stacks::Balance::Classic);
+    assert!(inv.pack.iter().flatten().all(|s|s.count<=64));
+    let total=u64::from(inv.count_item(item))+inv.overflow.iter().map(|s|u64::from(s.count)).sum::<u64>();
+    assert_eq!(before,total);
+    let mut bytes=Vec::new();inv.encode(&mut bytes);
+    let mut words=bytes.chunks_exact(4).map(|b|u32::from_le_bytes(b.try_into().unwrap()));
+    let restored=SurvivalInventory::decode(&mut ||Ok(words.next().unwrap())).unwrap();
+    assert_eq!(restored.overflow,inv.overflow);
+    assert_eq!(restored.balance,inv.balance);
+    inv.migrate_balance(crate::world::inventory::stacks::Balance::Builder);
+    assert!(inv.overflow.is_empty());
+    assert_eq!(u64::from(inv.count_item(item)),before);
+    assert_ne!(Item::Wand{id:1,look:1},Item::Wand{id:2,look:1});
+}
+
+#[test]
+fn material_capacity_preserves_integer_volume_at_every_scale() {
+    use crate::world::inventory::stacks::{Balance,volume_units};
+    let item=Item::Block(crate::world::BlockId::Stone);
+    for scale in [1.0,0.5,0.25] {
+        assert_eq!(Balance::Balanced.limit(item,scale)*volume_units(scale),256*64);
+    }
+    assert_eq!(ItemStack::new(item,16384).count,16384);
+}
 use crate::world::inventory::{ArmorTier, EquipSlot, FoodKind, HOTBAR_SLOTS, PACK_SLOTS};
 use engine_content::BlockId;
 use std::collections::HashMap;
@@ -127,14 +176,15 @@ fn sort_orders_by_category_then_id_then_count() {
     inv.pack[7] = Some(ItemStack::new(Item::Weapon(1), 1));
     inv.pack[8] = Some(ItemStack::new(Item::Resource(1), 9));
     inv.pack[11] = Some(ItemStack::new(Item::Food(FoodKind::FungalRation), 3));
-    inv.pack[26] = Some(ItemStack::new(planks, 60));
+    let max = planks.max_stack();
+    inv.pack[26] = Some(ItemStack::new(planks, max - 4));
     inv.sort_pack();
     let expected = [
         Some(ItemStack::new(Item::Weapon(1), 1)),
         Some(ItemStack::new(Item::Food(FoodKind::FungalRation), 3)),
         Some(ItemStack::new(Item::Resource(1), 9)),
         Some(ItemStack::new(Item::Resource(3), 5)),
-        Some(ItemStack::new(planks, 64)),
+        Some(ItemStack::new(planks, max)),
         Some(ItemStack::new(planks, 6)),
         None,
     ];

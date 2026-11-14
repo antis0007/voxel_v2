@@ -18,7 +18,7 @@ fn refresh(shelf: &mut Shelf, dir: &Path) {
     shelf.stale = false;
 }
 
-fn header(ui: &mut egui::Ui, tool: &mut BlueprintTool, history: (usize, usize), open: &mut bool) {
+fn header(ui: &mut egui::Ui, tool: &mut BlueprintTool, history: (usize, usize), open: &mut bool, civilization: bool) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Clipboard").color(style::AMBER));
         let summary = tool.clipboard().map_or_else(|| "Empty".to_owned(), |bp| format!("{} · {} Blocks", dims(bp.size()), bp.solid_count()));
@@ -27,10 +27,51 @@ fn header(ui: &mut egui::Ui, tool: &mut BlueprintTool, history: (usize, usize), 
     if let Some((done, total)) = tool.progress() {
         ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).text(format!("{done} / {total} Cells")));
     }
+    if civilization && ui.add_enabled(tool.clipboard().is_some(), egui::Button::new("Plan Settler Build"))
+        .on_hover_text("Aim, then press Paste. The settler builds solid blocks from stockpile materials.")
+        .clicked()
+    {
+        tool.arm_settler_build();
+        *open = false;
+    }
+    if civilization { starter_plans(ui, tool, open); }
     ui.horizontal(|ui| {
         ui.checkbox(&mut tool.paste_air, "Paste Air");
         ui.label(RichText::new(format!("Undo: {} · Redo: {}", history.0, history.1)).color(style::MUTED));
         if ui.button("Done").clicked() {
+            *open = false;
+        }
+    });
+}
+
+fn starter_plans(ui: &mut egui::Ui, tool: &mut BlueprintTool, open: &mut bool) {
+    use crate::world::{BlockId, blueprint::Blueprint};
+
+    ui.label("Starter plans · Stockpile planks");
+    ui.horizontal_wrapped(|ui| {
+        for (label, size) in [
+            ("Floor · 9", IVec3::new(3, 1, 3)),
+            ("Wall · 6", IVec3::new(3, 2, 1)),
+            ("Shelter · 44", IVec3::new(4, 3, 5)),
+        ] {
+            if !ui.button(label).on_hover_text("Aim at level ground and press Paste to queue").clicked() {
+                continue;
+            }
+            let Some(mut plan) = Blueprint::filled(size, BlockId::Planks) else { continue };
+            if size.y == 3 {
+                for y in 0..2 {
+                    for z in 1..size.z - 1 {
+                        for x in 1..size.x - 1 {
+                            plan.set(IVec3::new(x, y, z), BlockId::Air);
+                        }
+                    }
+                    for x in 1..size.x - 1 {
+                        plan.set(IVec3::new(x, y, 0), BlockId::Air);
+                    }
+                }
+            }
+            tool.set_clipboard(plan);
+            tool.arm_settler_build();
             *open = false;
         }
     });
@@ -97,7 +138,7 @@ fn rows(ui: &mut egui::Ui, shelf: &mut Shelf) -> Option<RowAction> {
 }
 
 /// `history`: undo and redo steps of the player's edit history.
-pub fn draw(ctx: &egui::Context, open: &mut bool, tool: &mut BlueprintTool, history: (usize, usize)) {
+pub fn draw(ctx: &egui::Context, open: &mut bool, tool: &mut BlueprintTool, history: (usize, usize), civilization: bool) {
     if !*open {
         return;
     }
@@ -111,7 +152,7 @@ pub fn draw(ctx: &egui::Context, open: &mut bool, tool: &mut BlueprintTool, hist
         .default_width(330.0)
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
         .show(ctx, |ui| {
-            header(ui, tool, history, open);
+            header(ui, tool, history, open, civilization);
             save_row(ui, tool, &dir);
             ui.separator();
             let action = rows(ui, &mut tool.shelf);

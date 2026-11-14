@@ -72,7 +72,7 @@ pub(super) fn canvas(ui: &mut egui::Ui, ed: &mut Editor, max_height: f32) {
     let (response, painter) = scroll.inner;
     ed.canvas = Some((response.rect.min, cell));
     if response.hovered() {
-        let (zoom, wheel) = ui.input(|i| (i.modifiers.command, i.raw_scroll_delta.y));
+        let (zoom, wheel) = ui.input(|i| (i.modifiers.command, i.smooth_scroll_delta().y));
         if zoom && wheel != 0.0 {
             ed.zoom = (ed.zoom * if wheel > 0.0 { 1.12 } else { 1.0 / 1.12 }).clamp(0.5, 4.0);
         }
