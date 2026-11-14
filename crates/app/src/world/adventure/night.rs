@@ -304,6 +304,11 @@ fn roofed_cached(cache: &mut roof::Cache, world: &World, cell: IVec3) -> bool {
     cache.covered(world, cell, (ROOF_SCAN_M / s).ceil() as u32, (ROOF_M / s).ceil() as u32)
 }
 
+/// Perception reads cover through the same cache as the daylight burn.
+pub(super) fn sheltered(state: &mut State, world: &World, cell: IVec3) -> bool {
+    roofed_cached(&mut state.roofs, world, cell)
+}
+
 #[cfg(test)]
 fn roofed(world: &World, cell: IVec3) -> bool {
     roofed_cached(&mut roof::Cache::default(), world, cell)

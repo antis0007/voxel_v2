@@ -72,6 +72,7 @@ pub mod status;
 mod tactics;
 mod vault_fight;
 mod navigation;
+mod perception;
 pub(crate) mod encounters;
 pub(crate) use encounters::focused_cache;
 mod encounter_placement;
@@ -306,6 +307,20 @@ pub struct Enemy {
     visible: bool,
     last_seen: Vec3,
     alert: f32,
+    /// Perception meter 0..1 (see `perception.rs`); transient, never saved.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    aware: f32,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    investigate: Option<Vec3>,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    search: f32,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    search_step: u8,
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    spotted_flash: f32,
+    /// Line of sight on the last perception check; pauses awareness decay.
+    #[cfg_attr(feature = "multiplayer", serde(default))]
+    glimpsed: bool,
     #[cfg_attr(feature = "multiplayer", serde(default))]
     provoked: bool,
     flash: f32,
@@ -389,6 +404,12 @@ impl Enemy {
             visible: false,
             last_seen: pos,
             alert: 0.0,
+            aware: 0.0,
+            investigate: None,
+            search: 0.0,
+            search_step: 0,
+            spotted_flash: 0.0,
+            glimpsed: false,
             provoked: false,
             flash: 0.0,
             stagger: 0.0,
@@ -485,6 +506,7 @@ impl Enemy {
         self.pos + up * height
     }
     pub fn model(&self, m: &mut Model, time: f32, world: &World) {
+        perception::marker(self, m, time);
         if wildlife::passive(self.kind) { wildlife::draw(self, m, time, world); return; }
         if burrowers::is_kind(self.kind) { burrowers::model(self, m, time); return; }
         if field_foes::is_kind(self.kind) { field_foes::model(self, m, time); return; }
@@ -909,6 +931,15 @@ pub struct Adventure {
     // and grows headless-host snapshots indefinitely.
     #[cfg_attr(feature = "multiplayer", serde(skip))]
     pub sounds: Vec<Sound>,
+    /// Audible events for enemy hearing, drained once per enemy pass.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    noises: Vec<perception::Noise>,
+    /// Countdown to the player's next body noise (steps, casting).
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    body_noise: f32,
+    /// Loudest `make_noise` level since the last enemy pass, placed at the player.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    pending_noise: f32,
     pub ward: f32,
     pub ward_hits: u32,
     pub hunger: f32,
@@ -1084,6 +1115,9 @@ impl Default for Adventure {
             arcs: Vec::new(),
             blooms: Vec::new(),
             sounds: Vec::new(),
+            noises: Vec::new(),
+            body_noise: 0.0,
+            pending_noise: 0.0,
             ward: 0.0,
             ward_hits: 0,
             hunger: 100.0,
@@ -1265,6 +1299,7 @@ impl Adventure {
     /// A loud act (mining, blasting) that `hears` hunters pick up; 0..1.
     pub fn make_noise(&mut self, level: f32) {
         self.burrowers.make_noise(level);
+        self.pending_noise = self.pending_noise.max(level);
     }
 
     pub fn casting(&self) -> bool {
@@ -1737,8 +1772,12 @@ impl Adventure {
                         * self.blade.damage
                         * (1.0 + self.resonance.stacks(0) * 0.08)
                         * world.progression.effects.melee_factor();
+                    // Sneak attack: an enemy that never noticed you takes double.
+                    let sneak = perception::unaware(e);
                     e.health -= damage * if e.encounter.exposed > 0.0 { 1.25 } else { 1.0 }
+                        * if sneak { 2.0 } else { 1.0 }
                         * if shield { 0.35 } else if e.kind == 8 { hart::damage_taken(e) } else { 1.0 };
+                    perception::struck(e, feet);
                     if e.kind == tollkeeper::KIND { tollkeeper::pressure(e, damage); }
                     if e.kind == engine::KIND {
                         let point = engine::melee_point(e, eye, forward);
@@ -1776,12 +1815,18 @@ impl Adventure {
                         e.charge = 0.0;
                         if !is_boss(e.kind) { e.cooldown = e.cooldown.max(0.65); }
                         e.knock = forward * if finisher { 5.4 } else if self.weapon > 0 { 3.1 } else { 2.6 };
+                        if sneak { e.stagger += 0.6; }
                     }
                     if shatter {
                         e.slow = 0.0;
                     }
                     let p = self.enemies[i].center();
                     self.melee_landed = self.melee_landed.wrapping_add(1);
+                    self.noises.push(perception::Noise { pos: p, radius: perception::MELEE_M });
+                    if sneak {
+                        sound(&mut self.sounds, Cue::Shatter, Some(p), 0.75);
+                        self.effect(p, [1.0, 0.86, 0.42], 0.9);
+                    }
                     sound(
                         &mut self.sounds,
                         if shield {
@@ -1943,6 +1988,36 @@ impl Adventure {
         if self.casting() {
             self.burrowers.make_noise(0.85);
         }
+        // Perception inputs shared by every hostile this pass.
+        let senses = perception::Senses {
+            light: perception::light_at(world, &mut self.night, eye),
+            crouched: player.crouch_t > 0.5,
+            still: (player.vel * Vec3::new(1.0, 0.0, 1.0)).length() * scale < 0.3,
+            sprinting: player.sprinting && player.vel.length_squared() > 0.25,
+            casting: self.casting(),
+            noticeable: visible_to_mobs,
+        };
+        self.body_noise -= dt;
+        if self.body_noise <= 0.0 {
+            self.body_noise = perception::BODY_NOISE_S;
+            let radius = if senses.casting {
+                perception::CAST_M
+            } else if senses.sprinting {
+                perception::SPRINT_M
+            } else if !senses.still && !senses.crouched && player.on_ground {
+                perception::WALK_M
+            } else {
+                0.0
+            };
+            if radius > 0.0 {
+                self.noises.push(perception::Noise { pos: feet, radius });
+            }
+        }
+        if self.pending_noise > 0.0 {
+            self.noises.push(perception::Noise { pos: feet, radius: self.pending_noise * perception::LEVEL_M });
+            self.pending_noise = 0.0;
+        }
+        let noises = std::mem::take(&mut self.noises);
         self.burrowers.settle_noise(dt);
         let ruckus = self.burrowers.ruckus;
         let mut burrow_fx = Vec::new();
@@ -1958,6 +2033,11 @@ impl Adventure {
             if !visible_to_mobs {
                 e.visible = false;
                 e.alert = 0.0;
+                e.aware = 0.0;
+                e.investigate = None;
+                e.search = 0.0;
+                e.spotted_flash = 0.0;
+                e.glimpsed = false;
             }
             if e.hostile() && !e.visible
                 && let Some((_, _, seen)) = alerts
@@ -1967,9 +2047,15 @@ impl Adventure {
                 {
                     e.last_seen = *seen;
                     e.alert = e.alert.max(3.0);
+                    // A raised alarm primes allies: they spot fast, but not instantly.
+                    e.aware = e.aware.max(0.7);
                 }
             if e.health <= 0.0 {
                 continue;
+            }
+            if visible_to_mobs && e.hostile() {
+                perception::hear(e, world, &noises);
+                perception::decay(e, dt);
             }
             if e.check_guard_break() {
                 let at = e.center();
@@ -2036,7 +2122,7 @@ impl Adventure {
                 crate::gameplay_trace::note("nav.wildlife", started.elapsed().as_secs_f64() * 1000.0);
                 continue;
             }
-            if encounters::ambush(e, world, feet, eye, forward, dt, &mut self.sounds) { continue; }
+            if encounters::ambush(e, world, feet, eye, forward, &senses, dt, &mut self.sounds) { continue; }
             if e.status.any() || !e.affixes.is_empty() {
                 // One mote when the half-second changes. The old gate was true
                 // for every frame inside a 24 Hz bin, so statuses strobed.
@@ -2150,13 +2236,13 @@ impl Adventure {
             let d = eye - e.center();
             let distance = d.length();
             if e.sight <= 0.0 {
-                e.sight = 0.12 + (e.slot % 4) as f32 * 0.025;
-                e.visible = visible_to_mobs
-                    && distance < modifiers::sight_range(self.site_modifier)
-                    && line(world, e.center(), eye);
-                if e.visible {
-                    e.last_seen = feet;
-                    e.alert = 4.0;
+                let interval = 0.12 + (e.slot % 4) as f32 * 0.025;
+                e.sight = interval;
+                let range = modifiers::sight_range(self.site_modifier);
+                let los = visible_to_mobs && distance < range && line(world, e.center(), eye);
+                if perception::see(e, &senses, eye, feet, distance, range, los, interval) {
+                    // The "spotted" sting: the player always hears the moment it happens.
+                    sound(&mut self.sounds, Cue::Warning, Some(e.center()), 0.6);
                 }
             }
             if e.visible {
@@ -2300,11 +2386,15 @@ impl Adventure {
                 e.lunge = along_floor(e.up, intercept - e.pos).normalize_or_zero();
                 continue;
             }
-            let chasing = (e.visible || e.alert > 0.0) && (e.pos - e.home).length() < 30.0;
+            let leashed = (e.pos - e.home).length() < 30.0;
+            // Without sight: last-seen trail, then a short search, then noises to check.
+            let hunt = if leashed { perception::pursue(e, dt) } else { None };
+            let pace = hunt.map_or(1.0, |(_, pace)| pace);
+            let chasing = (e.visible || hunt.is_some()) && leashed;
             let goal = if chasing {
                 if e.visible && e.kind == mobs::CREEPER {
                     mobs::stalk_goal(feet, player.flat_forward())
-                } else if e.visible { feet } else { e.last_seen }
+                } else if e.visible { feet } else { hunt.map_or(e.last_seen, |(at, _)| at) }
             } else {
                 e.home
                     + Vec3::new(
@@ -2328,7 +2418,7 @@ impl Adventure {
                 e.pos + tactical_direction * (distance * 0.5).clamp(2.0, 7.0)
             } else { goal };
             let direction = e.navigation.heading(world, e.pos, destination, e.kind, dt, e.slot, &mut navigation_budget);
-            let speed = if aberrations::roper_like(e.kind) { 0.0 } else if e.slow > 0.0 {
+            let speed = pace * if aberrations::roper_like(e.kind) { 0.0 } else if e.slow > 0.0 {
                 0.5
             } else {
                 bestiary::species(e.kind)
@@ -2730,6 +2820,10 @@ impl Adventure {
                     // burst visibility must not start inside the blocking voxel.
                     hit = true;
                     surface_contact = Some((impact, normal));
+                    // A player bolt striking stone is a lure: enemies go to look.
+                    if !shot.hostile {
+                        self.noises.push(perception::Noise { pos: impact, radius: perception::IMPACT_M });
+                    }
                     break;
                 }
                 shot.pos = end;
@@ -2833,6 +2927,15 @@ impl Adventure {
                             * if shield { 0.3 } else { 1.0 }
                             * e.affixes.damage_taken();
                     dealt *= Adventure::arcana_hit_mul(&shot.mods, e);
+                    // Sneak shot on an enemy that never noticed you; it reuses the crit spark.
+                    if !shot.hostile && perception::unaware(e) {
+                        dealt *= 1.5;
+                        crit_at = Some(e.center());
+                    }
+                    if !shot.hostile {
+                        perception::struck(e, feet);
+                        self.noises.push(perception::Noise { pos: shot.pos, radius: perception::IMPACT_M });
+                    }
                     let crit = shot.mods.crit && wands::crit_roll(self.time, e.slot);
                     if crit {
                         dealt *= wands::card_rules::CRITICAL_MULTIPLIER;

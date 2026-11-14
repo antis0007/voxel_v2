@@ -131,6 +131,8 @@ fn wake(e: &mut Enemy, feet: Vec3, disturbed: bool, sounds: &mut Vec<Sound>) {
     e.cooldown = 0.85;
     e.last_seen = feet;
     e.alert = 5.0;
+    e.aware = 1.0;
+    e.spotted_flash = 1.0;
     sound(sounds, Cue::Warning, Some(e.pos), 0.8);
 }
 
@@ -162,6 +164,7 @@ pub(super) fn ambush(
     feet: Vec3,
     eye: Vec3,
     forward: Vec3,
+    senses: &super::perception::Senses,
     dt: f32,
     sounds: &mut Vec<Sound>,
 ) -> bool {
@@ -175,12 +178,16 @@ pub(super) fn ambush(
             || e.status.any()
             || e.slow > 0.0
             || (e.pos - e.home).length() > 0.6;
-        let opportunity = if e.encounter.mechanic() == Mechanic::CacheAmbush {
+        let woken = if e.encounter.mechanic() == Mechanic::CacheAmbush {
             distance < 2.4 && forward.dot(offset.normalize_or_zero()) < -0.15
+                && line(world, e.pos + Vec3::Y * 0.25, eye)
         } else {
-            distance < 3.8 || (distance < 6.0 && forward.dot(offset.normalize_or_zero()) < 0.2)
+            // Rubble lurkers watch all round, but a crouched player in the dark can
+            // creep past at a few metres; noise nearby and close approach wake them.
+            let los = distance < 6.0 && line(world, e.pos + Vec3::Y * 0.25, eye);
+            super::perception::watch(e, senses, distance, los, dt)
         };
-        if disturbed || (opportunity && line(world, e.pos + Vec3::Y * 0.25, eye)) {
+        if disturbed || woken {
             wake(e, feet, disturbed, sounds);
         } else {
             e.visible = false;
@@ -214,12 +221,15 @@ pub(super) fn disguise(e: &Enemy, m: &mut Model, time: f32) -> bool {
         return true;
     }
     if !e.encounter.concealed { return false; }
-    for (x, y, z, w) in [
+    // A suspicious lurker shifts under its stones: the fair warning before it bursts.
+    let stir = ((e.aware - super::perception::SUSPICIOUS) / (1.0 - super::perception::SUSPICIOUS)).clamp(0.0, 1.0);
+    for (i, (x, y, z, w)) in [
         (-0.22, 0.12, 0.0, 0.4),
         (0.20, 0.15, 0.08, 0.42),
         (0.0, 0.24, -0.08, 0.45),
-    ] {
-        m.cuboid(e.pos + Vec3::new(x, y, z), Vec3::new(w, 0.25, 0.5),
+    ].into_iter().enumerate() {
+        let shake = stir * 0.035 * (time * 23.0 + i as f32 * 2.3 + e.slot as f32).sin();
+        m.cuboid(e.pos + Vec3::new(x + shake, y + shake.abs() * 0.6, z), Vec3::new(w, 0.25, 0.5),
             Quat::IDENTITY, [0.30, 0.29, 0.25], 0.0);
     }
     // A still seam and sparse glint let observant players spot and pre-empt the trap.
