@@ -1,0 +1,16 @@
+// Who hunts whom when no player holds their attention:
+// (predator kind, (prey: [kinds], bite: damage per strike, sense_m: how far it scents prey)).
+// Prey already flees any hostile within a few metres (wildlife.rs), so a chase
+// plays out without extra rules. A predator that sees the player drops the hunt.
+[
+    // Owlbears take deer and boar at the forest edge.
+    (53, (prey: [50, 51], bite: 14.0, sense_m: 18.0)),
+    // Gnoll bands run down cattle, goats and sheep on open ground.
+    (54, (prey: [49, 16, 17], bite: 9.0, sense_m: 22.0)),
+    // Yetis drag goats and sheep off the snow.
+    (58, (prey: [16, 17], bite: 16.0, sense_m: 16.0)),
+    // Hell hounds snap at anything soft that strays near the lava cuts.
+    (57, (prey: [49, 50, 51, 52, 16, 17], bite: 12.0, sense_m: 20.0)),
+    // Ropers seize marsh fowl that wade too close.
+    (28, (prey: [52], bite: 20.0, sense_m: 6.0)),
+]

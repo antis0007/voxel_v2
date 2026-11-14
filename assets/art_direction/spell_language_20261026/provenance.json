@@ -1,0 +1,78 @@
+{
+  "tool": "Built-in imagegen",
+  "status": "Concept references; visually inspected",
+  "selected_images": [
+    {
+      "file": "instrument_families.png",
+      "width": 1469,
+      "height": 1071,
+      "bytes": 1732942,
+      "sha256": "0C53BA57D1F4BF037DAC2CA6762B1F15D6CA7B4688B1B7AE890945E223CF6FCC"
+    },
+    {
+      "file": "material_effect_language.png",
+      "width": 1536,
+      "height": 1024,
+      "bytes": 2826321,
+      "sha256": "17128C18151141B20E69E6728FF3AA1BB5A05D34EEA2BDF085EFC02C140A4486"
+    },
+    {
+      "file": "first_person_casting.png",
+      "width": 1536,
+      "height": 1024,
+      "bytes": 2770913,
+      "sha256": "C7D4599C73AAB3B264FA1C34217D819F7413749B8E3F5005A51BF8CCE3D9538F"
+    },
+    {
+      "file": "program_workshop.png",
+      "width": 1774,
+      "height": 887,
+      "bytes": 2793988,
+      "sha256": "5D303182CE40919061B0077C4A48796A1F66F17DB05246AEA3BBCA323877023A"
+    },
+    {
+      "file": "proving_yard.png",
+      "width": 1774,
+      "height": 887,
+      "bytes": 3314703,
+      "sha256": "2EADDE79E99BD3A66336FC2E169AE0517B7215311AB08BF7A58D51ABF016B79F"
+    }
+  ],
+  "prompts": [
+    {
+      "file": "first_person_casting.prompt.txt",
+      "sha256": "2F9FADE7F957FCAE2BD8B84A5A3D027E87DB7E628CDE25A62CE10026FADFE833"
+    },
+    {
+      "file": "first_person_growth_revision.prompt.txt",
+      "sha256": "3B1358F5FA8BE188CEFBBCFA409F67C858551E3DE08CF16B3C5A43DD17DD5659"
+    },
+    {
+      "file": "instrument_families.prompt.txt",
+      "sha256": "2153574D176819E0FF86D31E2139BCB3B39505DB02D5CE7DD6F546405A1B4A18"
+    },
+    {
+      "file": "material_effect_language.prompt.txt",
+      "sha256": "EC8A4EBF80DD454C8D349F650FE9E28C4645B5984F410D0BBF47B69AB5B293B4"
+    },
+    {
+      "file": "program_workshop.prompt.txt",
+      "sha256": "C7801E2291324A4392BF63B08FB6B9478354981CA21E09C3EA644EA23EA7E032"
+    },
+    {
+      "file": "proving_yard_revision.prompt.txt",
+      "sha256": "08B024C48832ED9E5AC7D433FB334E46E588B3E8AB37FB8E4B94119BFFFD2E89"
+    },
+    {
+      "file": "proving_yard.prompt.txt",
+      "sha256": "612613E2B58C8D0FCC6B8EC710986346647BA7BF39FF91B9FECD4BDED85E65D9"
+    }
+  ],
+  "palette_unique_colors": 32,
+  "equipment_families": 12,
+  "source_brief_sha256": "A8B7FE2BB1F3A56A3547403415098A25221C8D6824011282F87DAC67514F3FA7",
+  "retained_versions": [
+    "first_person_casting_v1.png",
+    "proving_yard_v1.png"
+  ]
+}

@@ -10,6 +10,19 @@
 // `cargo test -p engine_content dump_reactions_ron -- --ignored` to restore the canonical layout.
 [
     (
+        why: "Molten copper and tin combine into bronze in the authored volume ratio.",
+        batch_counts: Some((3, 1)),
+        a: Block(MoltenCopper),
+        b: Some(Block(MoltenTin)),
+        a_above: Some(K(1223.15)),
+        a_below: None,
+        rate: 1.0,
+        a_into: Some(MoltenBronze),
+        b_into: Some(MoltenBronze),
+        a_temp: None,
+        b_temp: None,
+    ),
+    (
         why: "Lava touching water skins over as basalt and flashes the water to steam.",
         a: Block(Lava),
         b: Some(Block(Water)),
@@ -20,6 +33,42 @@
         b_into: Some(Steam),
         a_temp: None,
         b_temp: Some(383.15),
+    ),
+    // Each reaction spends one charge and opens the contacted cell.
+    (
+        why: "Sulfuric acid quickly eats through lime plaster.",
+        a: Block(SulfuricAcid), b: Some(Block(LimePlaster)),
+        rate: 0.32, a_into: Some(Air), b_into: Some(Air),
+    ),
+    (
+        why: "Sulfuric acid opens a hole in limestone.",
+        a: Block(SulfuricAcid), b: Some(Block(Limestone)),
+        rate: 0.20, a_into: Some(Air), b_into: Some(Air),
+    ),
+    (
+        why: "Concrete takes longer for sulfuric acid to erode.",
+        a: Block(SulfuricAcid), b: Some(Block(Concrete)),
+        rate: 0.035, a_into: Some(Air), b_into: Some(Air),
+    ),
+    (
+        why: "Exposed iron corrodes under sulfuric acid.",
+        a: Block(SulfuricAcid), b: Some(Block(IronBlock)),
+        rate: 0.065, a_into: Some(Air), b_into: Some(Air),
+    ),
+    (
+        why: "Rust gives sulfuric acid a faster way through steel.",
+        a: Block(SulfuricAcid), b: Some(Block(RustedSteel)),
+        rate: 0.055, a_into: Some(Air), b_into: Some(Air),
+    ),
+    (
+        why: "Solid steel slows sulfuric acid.",
+        a: Block(SulfuricAcid), b: Some(Block(SteelBlock)),
+        rate: 0.025, a_into: Some(Air), b_into: Some(Air),
+    ),
+    (
+        why: "Steel plates corrode slowly under sulfuric acid.",
+        a: Block(SulfuricAcid), b: Some(Block(SteelPlate)),
+        rate: 0.025, a_into: Some(Air), b_into: Some(Air),
     ),
     (
         why: "Water puts a flame out and boils where it touched.",

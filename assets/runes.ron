@@ -1,0 +1,112 @@
+// The rune table. One row per rune; a spell is a phrase of runes:
+//   FORM[QUALIFIER] then EFFECT(MATERIAL)[QUALIFIER] then EVENT { child phrase }
+// Edit here, not in Rust. `cargo run -p engine_content --example check_runes` checks the
+// table and compiles a phrase: `-- assets/runes.ron "BOLT then FIRE"`.
+//
+// Every named rune takes one wand slot. `mana` is paid per cast, `upkeep` per second while
+// a SUSTAIN qualifier holds the phrase. A qualifier's `scale` multiplies the part it sits on.
+// `card` is the deck spell (assets/spells.ron id) a rune lowers to on today's wands;
+// `card_after` puts that card behind the form instead of in front of it. A rune without a
+// card needs a ritual circle. `field` is what an effect does inside a circle, `block` what a
+// material builds with, `reach` how far a qualifier widens the circle.
+// `glyph` is the carved rune on a 4 x 6 grid (y down): Elder Futhark letters, a few
+// Younger Futhark ones for events, and cipher staves for qualifiers (branches up on a form
+// qualifier, down on an effect one, level on either). `hue` picks its goggle colour.
+// Glyph rules, free cipher staves and where glyphs show: docs/design/RUNE_GLYPHS.md.
+(
+    version: 1,
+    // Rune slots held by wand tiers I to V.
+    capacity: (4, 6, 8, 10, 12),
+    max_depth: 3,
+    max_events: 4,
+    runes: [
+        // Forms: where the magic goes. A form grants no effect.
+        (key: "TOUCH", name: "Touch", role: Form, mana: 2.0, card: Some(34), hue: Form, glyph: Strokes([(0.5, 0.0, 0.5, 6.0), (3.5, 0.0, 3.5, 6.0), (0.5, 0.0, 3.5, 3.0), (3.5, 0.0, 0.5, 3.0)])),
+        (key: "BOLT", name: "Bolt", role: Form, mana: 4.0, card: Some(80), hue: Form, glyph: Strokes([(2.0, 0.0, 2.0, 6.0), (2.0, 0.0, 0.4, 1.8), (2.0, 0.0, 3.6, 1.8)])),
+        (key: "ORB", name: "Orb", role: Form, mana: 6.0, card: Some(76), hue: Form, glyph: Strokes([(1.8, 0.8, 0.4, 2.2), (0.4, 2.2, 1.8, 3.6), (2.2, 2.4, 3.6, 3.8), (3.6, 3.8, 2.2, 5.2)])),
+        (key: "SCATTER", name: "Scatter", role: Form, mana: 8.0, card: Some(87), hue: Form, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 0.0, 3.0, 1.5), (3.0, 1.5, 1.0, 3.0), (1.0, 3.0, 3.0, 6.0)])),
+        (key: "BEAM", name: "Beam", role: Form, mana: 6.0, upkeep: 12.0, tier: 2, hue: Form, glyph: Strokes([(2.0, 0.0, 2.0, 6.0), (2.0, 0.0, 3.4, 1.2), (2.0, 6.0, 0.6, 4.8)])),
+        (key: "RING", name: "Ring", role: Form, mana: 12.0, upkeep: 8.0, circle: true, hue: Form, glyph: Strokes([(2.0, 1.0, 3.6, 3.0), (3.6, 3.0, 2.0, 5.0), (2.0, 5.0, 0.4, 3.0), (0.4, 3.0, 2.0, 1.0)])),
+        (key: "DISK", name: "Disk", role: Form, mana: 14.0, upkeep: 10.0, circle: true, hue: Form, glyph: Strokes([(0.5, 0.5, 0.5, 5.5), (3.5, 0.5, 3.5, 5.5), (0.5, 0.5, 3.5, 5.5), (3.5, 0.5, 0.5, 5.5)])),
+        // Effects: what it does there.
+        (key: "FIRE", name: "Fire", role: Effect, mana: 2.0, upkeep: 6.0, card: Some(56), field: Some(Burn), hue: Fire, glyph: Strokes([(3.0, 1.0, 1.0, 3.0), (1.0, 3.0, 3.0, 5.0)])),
+        (key: "CHILL", name: "Chill", role: Effect, mana: 2.0, upkeep: 6.0, card: Some(60), field: Some(Chill), hue: Frost, glyph: Strokes([(2.0, 0.0, 2.0, 6.0)])),
+        (key: "SHOCK", name: "Shock", role: Effect, mana: 2.0, upkeep: 6.0, card: Some(57), field: Some(Shock), hue: Shock, glyph: Strokes([(3.0, 0.5, 1.0, 2.4), (1.0, 2.4, 3.0, 3.6), (3.0, 3.6, 1.0, 5.5)])),
+        (key: "VENOM", name: "Venom", role: Effect, mana: 2.0, upkeep: 6.0, card: Some(58), field: Some(Venom), hue: Venom, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 1.8, 3.0, 3.0), (3.0, 3.0, 1.0, 4.2)])),
+        (key: "DRENCH", name: "Drench", role: Effect, mana: 2.0, upkeep: 6.0, card: Some(59), field: Some(Drench), hue: Water, glyph: Strokes([(1.2, 0.0, 1.2, 6.0), (1.2, 0.0, 3.0, 1.8)])),
+        (key: "PUSH", name: "Push", role: Effect, mana: 3.0, upkeep: 8.0, field: Some(Push), hue: Force, glyph: Strokes([(0.5, 0.0, 0.5, 6.0), (3.5, 0.0, 3.5, 6.0), (0.5, 0.0, 2.0, 1.8), (2.0, 1.8, 3.5, 0.0)])),
+        (key: "GRIP", name: "Grip", role: Effect, mana: 4.0, upkeep: 10.0, tier: 2, hue: Force, glyph: Strokes([(0.5, 0.5, 3.5, 5.5), (3.5, 0.5, 0.5, 5.5)])),
+        (key: "GROW", name: "Grow", role: Effect, mana: 6.0, upkeep: 4.0, card: Some(35), card_after: true, hue: Life, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 0.0, 3.0, 1.5), (3.0, 1.5, 1.0, 3.0), (1.0, 3.0, 3.0, 4.5), (3.0, 4.5, 1.0, 6.0)])),
+        (key: "SHRINK", name: "Shrink", role: Effect, mana: 6.0, card: Some(39), card_after: true, hue: Life, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (3.0, 0.0, 3.0, 6.0), (1.0, 2.0, 3.0, 4.0)])),
+        (key: "PLACE", name: "Place", role: Effect, mana: 8.0, operand: true, field: Some(Place), hue: Earth, glyph: Strokes([(2.0, 0.0, 3.6, 2.0), (2.0, 0.0, 0.4, 2.0), (3.6, 2.0, 0.6, 6.0), (0.4, 2.0, 3.4, 6.0)])),
+        (key: "PURGE", name: "Purge", role: Effect, mana: 10.0, upkeep: 20.0, tier: 2, field: Some(Purge), hue: Arcane, glyph: Strokes([(2.0, 0.0, 2.0, 6.0), (2.0, 2.4, 0.4, 0.6), (2.0, 2.4, 3.6, 0.6)])),
+        // Materials: what PLACE builds with.
+        (key: "STONE", name: "Stone", role: Material, mana: 4.0, block: Some(Stone), hue: Earth, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 0.0, 3.0, 1.2), (3.0, 1.2, 3.0, 2.0), (1.0, 6.0, 3.0, 4.8), (3.0, 4.8, 3.0, 4.0)])),
+        (key: "GLASS", name: "Glass", role: Material, mana: 6.0, block: Some(WindowGlass), hue: Earth, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 0.0, 3.0, 1.5), (3.0, 1.5, 1.0, 3.0)])),
+        (key: "COPPER", name: "Copper", role: Material, mana: 8.0, tier: 2, block: Some(CopperBlock), hue: Earth, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 2.0, 3.0, 0.5), (1.0, 3.8, 3.0, 2.3)])),
+        // Qualifiers: attached to one form or effect.
+        (key: "PIERCE", name: "Pierce", role: Qualifier, scale: 1.5, on: Form, card: Some(90), hue: Force, glyph: Cipher(0, 1)),
+        (key: "WIDER", name: "Wider", role: Qualifier, scale: 1.5, reach: 1.5, card: Some(37), hue: Arcane, glyph: Cipher(1, 1)),
+        (key: "HOMING", name: "Homing", role: Qualifier, scale: 1.5, on: Form, card: Some(19), hue: Force, glyph: Cipher(0, 2)),
+        (key: "BOUNCE", name: "Bounce", role: Qualifier, scale: 1.25, on: Form, card: Some(53), hue: Force, glyph: Cipher(0, 3)),
+        (key: "SWIFT", name: "Swift", role: Qualifier, scale: 1.25, on: Form, card: Some(54), hue: Force, glyph: Cipher(1, 0)),
+        (key: "HEAVY", name: "Heavy", role: Qualifier, scale: 1.5, on: Form, card: Some(21), hue: Force, glyph: Cipher(1, 1)),
+        (key: "LASTING", name: "Lasting", role: Qualifier, scale: 1.25, on: Form, card: Some(52), hue: Arcane, glyph: Cipher(1, 2)),
+        (key: "CURVE", name: "Curve", role: Qualifier, scale: 1.1, on: Form, card: Some(42), hue: Force, glyph: Cipher(1, 3)),
+        (key: "FALLING", name: "Falling", role: Qualifier, scale: 1.1, on: Form, card: Some(65), hue: Force, glyph: Cipher(2, 0)),
+        (key: "PHASE", name: "Phase", role: Qualifier, scale: 1.75, tier: 2, on: Form, card: Some(66), hue: Arcane, glyph: Cipher(2, 1)),
+        (key: "FORK", name: "Fork", role: Qualifier, scale: 1.5, on: Form, card: Some(69), hue: Force, glyph: Cipher(2, 2)),
+        (key: "CHAIN", name: "Chain", role: Qualifier, scale: 1.5, on: Effect, card: Some(61), hue: Arcane, glyph: Cipher(0, 1)),
+        (key: "BLAST", name: "Blast", role: Qualifier, scale: 2.0, tier: 2, on: Effect, card: Some(89), hue: Force, glyph: Cipher(0, 2)),
+        (key: "PULL", name: "Pull", role: Qualifier, scale: 1.5, on: Effect, card: Some(94), hue: Force, glyph: Cipher(0, 3)),
+        (key: "KEEN", name: "Keen", role: Qualifier, scale: 1.5, on: Effect, card: Some(78), hue: Arcane, glyph: Cipher(1, 0)),
+        (key: "STRONG", name: "Strong", role: Qualifier, scale: 1.5, on: Effect, card: Some(55), hue: Arcane, glyph: Cipher(1, 1)),
+        (key: "SUSTAIN", name: "Sustain", role: Qualifier, sustain: true, on: Effect, hue: Arcane, glyph: Cipher(1, 2)),
+        // Events: start a child phrase.
+        (key: "ON_FIRST_HIT", name: "On first hit", role: Event, mana: 1.0, card: Some(18), hue: Event, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 0.0, 3.0, 1.8), (3.0, 1.8, 3.0, 6.0)])),
+        (key: "AFTER_DELAY", name: "After delay", role: Event, mana: 1.0, card: Some(70), hue: Event, glyph: Strokes([(2.0, 0.0, 2.0, 6.0), (1.0, 2.2, 3.0, 3.8)])),
+        (key: "ON_EXPIRE", name: "On expire", role: Event, mana: 1.0, card: Some(79), hue: Event, glyph: Strokes([(1.0, 0.0, 1.0, 6.0), (1.0, 0.4, 3.0, 2.0), (1.0, 2.2, 3.0, 3.8)])),
+        (key: "ON_BOUNCE", name: "On bounce", role: Event, mana: 1.0, card: Some(92), hue: Event, glyph: Strokes([(2.0, 0.0, 2.0, 6.0), (2.0, 3.6, 0.4, 5.4), (2.0, 3.6, 3.6, 5.4)])),
+        (key: "ON_NEAR", name: "On near", role: Event, mana: 1.0, card: Some(93), hue: Event, glyph: Strokes([(2.0, 0.0, 2.0, 6.0), (0.6, 1.8, 3.4, 4.2), (3.4, 1.8, 0.6, 4.2)])),
+        (key: "ON_RELEASE", name: "On release", role: Event, mana: 1.0, hue: Event, glyph: Strokes([(2.0, 0.0, 2.0, 6.0), (2.0, 2.6, 0.4, 1.2), (2.0, 2.6, 3.6, 4.0)])),
+    ],
+    // Rune goggle colours, one per hue (sRGB bytes). Without goggles runes read in plain ink.
+    palette: [
+        (Form, (222, 214, 192)),
+        (Fire, (238, 104, 52)),
+        (Frost, (138, 206, 246)),
+        (Shock, (246, 226, 92)),
+        (Venom, (148, 212, 72)),
+        (Water, (64, 136, 236)),
+        (Force, (236, 150, 206)),
+        (Life, (92, 198, 112)),
+        (Earth, (192, 146, 92)),
+        (Arcane, (172, 122, 238)),
+        (Event, (82, 206, 192)),
+    ],
+    // Pre-assembled phrases offered before a player writes their own.
+    presets: [
+        "BOLT then FIRE",
+        "TOUCH then GROW",
+        "BOLT[HOMING] then SHOCK[CHAIN]",
+        "ORB[BOUNCE] then VENOM",
+        "BOLT then FIRE then ON_FIRST_HIT { SCATTER then CHILL }",
+        "RING then PLACE(STONE)",
+        "DISK then PURGE[SUSTAIN]",
+        "DISK[WIDER] then FIRE[SUSTAIN]",
+        "RING then PUSH",
+    ],
+    // Deck spells read as rune phrases. A found spell shows its phrase for editing.
+    recipes: [
+        (spell: 2, phrase: "BOLT[SWIFT] then CHILL"),
+        (spell: 12, phrase: "ORB[FALLING] then FIRE"),
+        (spell: 13, phrase: "SCATTER then CHILL[BLAST]"),
+        (spell: 14, phrase: "BOLT then SHOCK[CHAIN]"),
+        (spell: 73, phrase: "BOLT then DRENCH[BLAST]"),
+        (spell: 74, phrase: "SCATTER then VENOM"),
+        (spell: 81, phrase: "BOLT then CHILL"),
+        (spell: 82, phrase: "ORB[FALLING] then VENOM"),
+        (spell: 83, phrase: "BOLT[SWIFT] then SHOCK[CHAIN]"),
+        (spell: 85, phrase: "ORB[BOUNCE,FALLING]"),
+    ],
+)

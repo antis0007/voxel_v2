@@ -1,7 +1,7 @@
 // Survival mining: break seconds = hardness (assets/materials.ron) x seconds_per_hardness / speed.
 // A tool of the wrong class mines at speed x wrong_class_factor, never below the hand, and
 // harvests like the hand. A block above the tool's tier takes under_tier_factor times longer
-// and drops nothing. `kit` lists the item each workbench bore upgrade (expedition tool tier
+// and drops nothing. Dig fits rock, Cut fits timber, Scoop fits soil. `kit` lists the item each workbench bore upgrade (expedition tool tier
 // 1, 2) mines as when the held item has no row. Blocks without a rule are Dig, tier 0.
 // `cargo test mining_ron_round_trips` checks the format.
 (
@@ -15,6 +15,24 @@
         Tool(2),
     ],
     tools: [
+        (
+            item: Tool(6),
+            class: Dig,
+            tier: 1,
+            speed: 2.0,
+        ),
+        (
+            item: Tool(7),
+            class: Dig,
+            tier: 2,
+            speed: 4.0,
+        ),
+        (
+            item: Tool(8),
+            class: Dig,
+            tier: 3,
+            speed: 6.0,
+        ),
         (
             item: Weapon(1),
             class: Cut,
@@ -57,13 +75,69 @@
             tier: 4,
             speed: 6.0,
         ),
+        (
+            item: Tool(12),
+            class: Cut,
+            tier: 1,
+            speed: 2.0,
+        ),
+        (
+            item: Tool(13),
+            class: Cut,
+            tier: 2,
+            speed: 4.0,
+        ),
+        (
+            item: Tool(14),
+            class: Cut,
+            tier: 3,
+            speed: 6.0,
+        ),
+        (
+            item: Tool(15),
+            class: Scoop,
+            tier: 1,
+            speed: 2.0,
+        ),
+        (
+            item: Tool(16),
+            class: Scoop,
+            tier: 2,
+            speed: 4.0,
+        ),
+        (
+            item: Tool(17),
+            class: Scoop,
+            tier: 3,
+            speed: 6.0,
+        ),
     ],
     blocks: [
+        // Ruins retain their valuable metal, but harvesting it needs the
+        // corresponding tool progression rather than an empty hand.
+        (
+            class: Dig,
+            tier: 2,
+            blocks: [CopperBlock, TinBlock, IronBlock, BronzeBlock, SilverBlock, GoldBlock],
+        ),
+        (
+            class: Dig,
+            tier: 3,
+            blocks: [PlatinumBlock],
+        ),
+        (
+            class: Dig,
+            tier: 4,
+            blocks: [MithrilBlock],
+        ),
         (
             class: Dig,
             tier: 2,
             blocks: [
                 IronOre,
+                Hematite,
+                Magnetite,
+                GoldQuartz,
                 Crystal,
             ],
         ),
@@ -84,6 +158,22 @@
                 RedCap,
                 AmberCap,
                 UmberCap,
+            ],
+        ),
+        (
+            class: Scoop,
+            tier: 0,
+            blocks: [
+                Grass,
+                Dirt,
+                Sand,
+                Gravel,
+                Paydirt,
+                Clay,
+                Mud,
+                SnowGrass,
+                FungalSoil,
+                SnowLayer,
             ],
         ),
     ],

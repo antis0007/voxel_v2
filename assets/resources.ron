@@ -1,0 +1,33 @@
+// Factory resources. Append only: a row's index is its `Item::Resource` id,
+// which saves, machines.ron and recipes.ron refer to. Never reorder or remove
+// rows. `key` is a stable lowercase id; `name` is the player-visible label.
+// Plan: docs/design/RESOURCE_REGISTRY_PLAN_20261113.md
+(
+    resources: [
+        (key: "copper_ore", name: "Copper ore"),
+        (key: "tin_ore", name: "Tin ore"),
+        (key: "iron_ore", name: "Iron ore"),
+        (key: "coal", name: "Coal"),
+        (key: "lumen_fibre", name: "Lumen fibre"),
+        (key: "resonant_crystal", name: "Resonant crystal"),
+        (key: "copper_ingots", name: "Copper ingots"),
+        (key: "tin_ingots", name: "Tin ingots"),
+        (key: "iron_ingots", name: "Iron ingots"),
+        (key: "copper_dust", name: "Copper dust"),
+        (key: "tin_dust", name: "Tin dust"),
+        (key: "iron_dust", name: "Iron dust"),
+        (key: "circuit_boards", name: "Circuit boards"),
+        (key: "fungal_biomass", name: "Fungal biomass"),
+        (key: "bronze_ingots", name: "Bronze ingots"),
+        (key: "steel_ingots", name: "Steel ingots"),
+        (key: "induction_coils", name: "Induction coils"),
+        (key: "arcane_cores", name: "Arcane cores"),
+        (key: "wild_essence", name: "Wild essence"),
+        (key: "coal_coke", name: "Coal coke"),
+        (key: "creosote_oil", name: "Creosote oil"),
+        (key: "bio_ethanol", name: "Bio-ethanol"),
+        (key: "gold_concentrate", name: "Gold Concentrate"),
+        (key: "gold_ingot", name: "Gold Ingot"),
+        (key: "feathers", name: "Feathers"),
+    ],
+)

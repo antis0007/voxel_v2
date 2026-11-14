@@ -7,7 +7,7 @@ ChipTable(
     processes: [
         Process(
             id: "p8um",
-            name: "Prepared 8 µm blank",
+            name: "8 µm Controller",
             site_um: 120.0,
             vdd: 5.0,
             wire_ns_per_site: 0.9,

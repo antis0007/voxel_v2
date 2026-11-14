@@ -1,4 +1,4 @@
-// The spell table. One entry per spell, sorted by id; ids 0-95 fit the save format.
+// The spell table. One entry per spell, sorted by id.
 // Edit here, not in Rust. `cargo test spells_ron_round_trips` checks the format.
 // color is linear RGB; audio is (cue, gain); class and unlock are enum names from spell_defs.rs.
 [
@@ -17,6 +17,7 @@
         audio: (Spark, 1.0),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 1,
@@ -33,6 +34,7 @@
         audio: (Mend, 0.92),
         class: Other,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 2,
@@ -49,6 +51,7 @@
         audio: (Frost, 0.88),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 3,
@@ -65,6 +68,7 @@
         audio: (Burst, 0.8),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 4,
@@ -81,6 +85,7 @@
         audio: (Ward, 0.86),
         class: Other,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 5,
@@ -97,6 +102,7 @@
         audio: (Bloom, 1.16),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 6,
@@ -113,6 +119,7 @@
         audio: (Rift, 0.62),
         class: Projectile,
         unlock: RareBit,
+        palette: Bolts,
     ),
     (
         id: 7,
@@ -129,6 +136,7 @@
         audio: (Echo, 1.32),
         class: Other,
         unlock: RareBit,
+        palette: Effects,
     ),
     (
         id: 8,
@@ -145,6 +153,7 @@
         audio: (Spark, 1.0),
         class: Other,
         unlock: Never,
+        palette: Hidden,
     ),
     (
         id: 9,
@@ -161,6 +170,7 @@
         audio: (Spark, 1.12),
         class: Other,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 10,
@@ -177,11 +187,12 @@
         audio: (Rift, 0.62),
         class: Projectile,
         unlock: ThirdWandOrTwoRare,
+        palette: Bolts,
     ),
     (
         id: 11,
         name: "Plasma cross",
-        tag: "STATIC FIELD",
+        tag: "FIELD",
         color: (0.55, 0.74, 0.82),
         cost: 34.0,
         cooldown: 0.75,
@@ -191,8 +202,9 @@
         damage: 48.0,
         speed: 22.0,
         audio: (Burst, 0.92),
-        class: Projectile,
-        unlock: SecondWandOrRare,
+        class: Other,
+        unlock: ThirdWand,
+        palette: Concentration,
     ),
     (
         id: 12,
@@ -209,6 +221,7 @@
         audio: (CinderStrike, 0.76),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 13,
@@ -225,6 +238,7 @@
         audio: (Frost, 0.88),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 14,
@@ -241,6 +255,7 @@
         audio: (Clang, 0.84),
         class: Projectile,
         unlock: SecondWandOrRare,
+        palette: Bolts,
     ),
     (
         id: 15,
@@ -257,6 +272,7 @@
         audio: (Treasure, 0.78),
         class: Projectile,
         unlock: ThirdWandOrTwoRare,
+        palette: Bolts,
     ),
     (
         id: 16,
@@ -273,6 +289,7 @@
         audio: (Spark, 1.24),
         class: Modifier,
         unlock: FirstWand,
+        palette: ShotMods,
     ),
     (
         id: 17,
@@ -289,6 +306,7 @@
         audio: (Spark, 1.24),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 18,
@@ -305,6 +323,7 @@
         audio: (Echo, 1.08),
         class: Modifier,
         unlock: FirstWand,
+        palette: ShotMods,
     ),
     (
         id: 19,
@@ -321,6 +340,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 20,
@@ -337,6 +357,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: ShotMods,
     ),
     (
         id: 21,
@@ -353,6 +374,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 22,
@@ -369,6 +391,7 @@
         audio: (Spark, 0.92),
         class: Modifier,
         unlock: FirstWand,
+        palette: ShotMods,
     ),
     (
         id: 23,
@@ -385,6 +408,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: ShotMods,
     ),
     (
         id: 24,
@@ -401,6 +425,7 @@
         audio: (Spark, 1.0),
         class: Other,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 25,
@@ -417,6 +442,7 @@
         audio: (Spark, 1.0),
         class: Other,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 26,
@@ -433,6 +459,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 27,
@@ -449,6 +476,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 28,
@@ -465,6 +493,7 @@
         audio: (CinderStrike, 0.98),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 29,
@@ -481,6 +510,7 @@
         audio: (Burst, 0.66),
         class: Projectile,
         unlock: ThirdWandOrTwoRare,
+        palette: Bolts,
     ),
     (
         id: 30,
@@ -497,6 +527,7 @@
         audio: (Spark, 1.0),
         class: Other,
         unlock: SecondWandOrRare,
+        palette: Effects,
     ),
     (
         id: 31,
@@ -513,6 +544,7 @@
         audio: (Spark, 1.0),
         class: Other,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 32,
@@ -529,6 +561,24 @@
         audio: (Spark, 1.0),
         class: Other,
         unlock: FirstWand,
+        palette: Effects,
+    ),
+    (
+        id: 33,
+        name: "Aegis field",
+        tag: "BARRIER",
+        color: (0.32, 0.76, 0.92),
+        cost: 22.0,
+        cooldown: 0.35,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 24.0,
+        audio: (Ward, 0.8),
+        class: Other,
+        unlock: ThirdWand,
+        palette: Concentration,
     ),
     (
         id: 34,
@@ -545,6 +595,7 @@
         audio: (Spark, 1.0),
         class: Other,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 35,
@@ -561,6 +612,7 @@
         audio: (Spark, 1.0),
         class: Effect,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 36,
@@ -577,6 +629,7 @@
         audio: (Spark, 1.0),
         class: Effect,
         unlock: FirstWand,
+        palette: Summons,
     ),
     (
         id: 37,
@@ -593,6 +646,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 38,
@@ -609,6 +663,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 39,
@@ -625,6 +680,7 @@
         audio: (Spark, 1.0),
         class: Effect,
         unlock: FirstWand,
+        palette: Effects,
     ),
     (
         id: 40,
@@ -641,6 +697,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 41,
@@ -657,6 +714,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 42,
@@ -673,6 +731,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 43,
@@ -689,6 +748,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 44,
@@ -705,6 +765,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 45,
@@ -721,6 +782,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 46,
@@ -737,6 +799,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 47,
@@ -753,6 +816,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 48,
@@ -769,6 +833,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 49,
@@ -785,6 +850,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 50,
@@ -801,6 +867,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 51,
@@ -817,6 +884,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 52,
@@ -833,6 +901,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 53,
@@ -849,6 +918,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 54,
@@ -865,6 +935,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 55,
@@ -881,6 +952,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 56,
@@ -897,6 +969,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: Elements,
     ),
     (
         id: 57,
@@ -913,6 +986,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: Elements,
     ),
     (
         id: 58,
@@ -929,6 +1003,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: Elements,
     ),
     (
         id: 59,
@@ -945,6 +1020,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: Elements,
     ),
     (
         id: 60,
@@ -961,6 +1037,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: Elements,
     ),
     (
         id: 61,
@@ -977,6 +1054,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Elements,
     ),
     (
         id: 62,
@@ -993,6 +1071,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Elements,
     ),
     (
         id: 63,
@@ -1009,6 +1088,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Elements,
     ),
     (
         id: 64,
@@ -1025,6 +1105,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 65,
@@ -1041,6 +1122,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: FirstWand,
+        palette: ShotMods,
     ),
     (
         id: 66,
@@ -1057,6 +1139,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 67,
@@ -1073,6 +1156,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: ThirdWandOrTwoRare,
+        palette: ShotMods,
     ),
     (
         id: 68,
@@ -1089,6 +1173,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: ThirdWandOrTwoRare,
+        palette: ShotMods,
     ),
     (
         id: 69,
@@ -1105,6 +1190,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 70,
@@ -1121,6 +1207,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 71,
@@ -1137,6 +1224,7 @@
         audio: (Spark, 1.5),
         class: Projectile,
         unlock: SecondWandOrRare,
+        palette: Bolts,
     ),
     (
         id: 72,
@@ -1153,6 +1241,7 @@
         audio: (Echo, 1.2),
         class: Projectile,
         unlock: SecondWandOrRare,
+        palette: Bolts,
     ),
     (
         id: 73,
@@ -1169,6 +1258,7 @@
         audio: (Splash, 1.0),
         class: Projectile,
         unlock: SecondWandOrRare,
+        palette: Bolts,
     ),
     (
         id: 74,
@@ -1185,6 +1275,7 @@
         audio: (Bloom, 0.8),
         class: Projectile,
         unlock: SecondWandOrRare,
+        palette: Bolts,
     ),
     (
         id: 75,
@@ -1201,6 +1292,7 @@
         audio: (Frost, 0.8),
         class: Other,
         unlock: SecondWandOrRare,
+        palette: Effects,
     ),
     (
         id: 76,
@@ -1217,6 +1309,7 @@
         audio: (Spark, 1.35),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 77,
@@ -1233,6 +1326,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 78,
@@ -1249,6 +1343,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 79,
@@ -1265,6 +1360,7 @@
         audio: (Spark, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 80,
@@ -1281,6 +1377,7 @@
         audio: (Spark, 1.3),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 81,
@@ -1297,6 +1394,7 @@
         audio: (Frost, 1.2),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 82,
@@ -1313,6 +1411,7 @@
         audio: (Bloom, 1.15),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 83,
@@ -1329,6 +1428,7 @@
         audio: (Spark, 0.8),
         class: Projectile,
         unlock: SecondWandOrRare,
+        palette: Bolts,
     ),
     (
         id: 84,
@@ -1345,6 +1445,7 @@
         audio: (Rift, 0.7),
         class: Projectile,
         unlock: ThirdWandOrTwoRare,
+        palette: Bolts,
     ),
     (
         id: 85,
@@ -1361,6 +1462,7 @@
         audio: (Burst, 1.25),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 86,
@@ -1377,6 +1479,7 @@
         audio: (Impact, 1.1),
         class: Projectile,
         unlock: FirstWand,
+        palette: Bolts,
     ),
     (
         id: 87,
@@ -1393,6 +1496,7 @@
         audio: (Spark, 0.9),
         class: Projectile,
         unlock: SecondWandOrRare,
+        palette: Bolts,
     ),
     (
         id: 88,
@@ -1409,6 +1513,7 @@
         audio: (Splash, 1.1),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 89,
@@ -1425,6 +1530,7 @@
         audio: (Burst, 0.9),
         class: Modifier,
         unlock: ThirdWandOrTwoRare,
+        palette: ShotMods,
     ),
     (
         id: 90,
@@ -1441,6 +1547,7 @@
         audio: (Clang, 1.2),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
     ),
     (
         id: 91,
@@ -1457,6 +1564,7 @@
         audio: (Echo, 1.1),
         class: Modifier,
         unlock: ThirdWandOrTwoRare,
+        palette: Program,
     ),
     (
         id: 92,
@@ -1473,6 +1581,7 @@
         audio: (Spark, 1.15),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 93,
@@ -1489,6 +1598,7 @@
         audio: (Spark, 0.95),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: Program,
     ),
     (
         id: 94,
@@ -1505,5 +1615,108 @@
         audio: (Rift, 1.0),
         class: Modifier,
         unlock: SecondWandOrRare,
+        palette: ShotMods,
+    ),
+    (
+        id: 95,
+        name: "Water transfer",
+        tag: "UTILITY",
+        color: (0.3, 0.75, 0.85),
+        cost: 8.0,
+        cooldown: 0.5,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 26.0,
+        audio: (Splash, 1.0),
+        class: Other,
+        unlock: FirstWand,
+        palette: Effects,
+    ),
+    (
+        id: 96,
+        name: "Teleportation Circle",
+        tag: "TRAVERSAL",
+        color: (0.64, 0.57, 0.92),
+        cost: 18.0,
+        cooldown: 0.45,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 24.0,
+        audio: (Echo, 0.82),
+        class: Other,
+        unlock: FirstWand,
+        palette: Effects,
+    ),
+    (
+        id: 97,
+        name: "Salvage draw",
+        tag: "UTILITY",
+        color: (0.84, 0.68, 0.33),
+        cost: 9.0,
+        cooldown: 0.5,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 24.0,
+        audio: (Spark, 0.68),
+        class: Other,
+        unlock: FirstWand,
+        palette: Effects,
+    ),
+    (
+        id: 98,
+        name: "Storm Surge",
+        tag: "PROJECTILE",
+        color: (0.51, 0.79, 1.0),
+        cost: 42.0,
+        cooldown: 0.7,
+        cast_delay: 0.12,
+        recharge: 0.2,
+        spread: 0.0,
+        damage: 28.0,
+        speed: 34.0,
+        audio: (Spark, 0.62),
+        class: Projectile,
+        unlock: ThirdWand,
+        palette: Bolts,
+    ),
+    (
+        id: 99,
+        name: "Snapline",
+        tag: "TETHER",
+        color: (0.98, 0.34, 0.58),
+        cost: 36.0,
+        cooldown: 0.48,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 26.0,
+        speed: 24.0,
+        audio: (Swing, 1.28),
+        class: Other,
+        unlock: FirstWand,
+        palette: Bolts,
+    ),
+    (
+        id: 100,
+        name: "Don't Panic",
+        tag: "UTILITY",
+        color: (0.88, 0.67, 0.24),
+        cost: 18.0,
+        cooldown: 5.0,
+        cast_delay: 0.0,
+        recharge: 0.0,
+        spread: 0.0,
+        damage: 0.0,
+        speed: 24.0,
+        audio: (Ward, 0.74),
+        class: Other,
+        unlock: FirstWand,
+        palette: Effects,
     ),
 ]

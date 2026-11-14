@@ -1,0 +1,140 @@
+{
+  "name": "Axiom Anchor 32",
+  "color_space": "sRGB",
+  "status": "Authoring target; generated concept images are not quantized shipping atlases.",
+  "usage": {
+    "ink": "Shared outlines and cavities",
+    "body": "Quiet broad planes",
+    "edge": "Sparse material edges; no automatic full-object glow"
+  },
+  "colors": [
+    {
+      "name": "Ink",
+      "hex": "#25262c"
+    },
+    {
+      "name": "Charcoal",
+      "hex": "#39383b"
+    },
+    {
+      "name": "Walnut shadow",
+      "hex": "#503b32"
+    },
+    {
+      "name": "Walnut body",
+      "hex": "#7a5941"
+    },
+    {
+      "name": "Walnut edge",
+      "hex": "#ad8257"
+    },
+    {
+      "name": "Bone shadow",
+      "hex": "#8b8271"
+    },
+    {
+      "name": "Bone body",
+      "hex": "#c6b99e"
+    },
+    {
+      "name": "Bone edge",
+      "hex": "#eee1bf"
+    },
+    {
+      "name": "Moss shadow",
+      "hex": "#414c35"
+    },
+    {
+      "name": "Moss body",
+      "hex": "#717a47"
+    },
+    {
+      "name": "Moss edge",
+      "hex": "#a3a76b"
+    },
+    {
+      "name": "Ember shadow",
+      "hex": "#663632"
+    },
+    {
+      "name": "Ember body",
+      "hex": "#a34f3b"
+    },
+    {
+      "name": "Ember edge",
+      "hex": "#d78657"
+    },
+    {
+      "name": "Iron shadow",
+      "hex": "#3a3f46"
+    },
+    {
+      "name": "Iron body",
+      "hex": "#69747a"
+    },
+    {
+      "name": "Iron edge",
+      "hex": "#a2adb1"
+    },
+    {
+      "name": "Brass shadow",
+      "hex": "#6e5939"
+    },
+    {
+      "name": "Brass body",
+      "hex": "#a1844e"
+    },
+    {
+      "name": "Brass edge",
+      "hex": "#d4b86e"
+    },
+    {
+      "name": "Blue shadow",
+      "hex": "#354e62"
+    },
+    {
+      "name": "Blue body",
+      "hex": "#66879c"
+    },
+    {
+      "name": "Blue edge",
+      "hex": "#a3bfca"
+    },
+    {
+      "name": "Ceramic shadow",
+      "hex": "#6a7c7c"
+    },
+    {
+      "name": "Ceramic body",
+      "hex": "#a8bdb9"
+    },
+    {
+      "name": "Ceramic edge",
+      "hex": "#dfebe0"
+    },
+    {
+      "name": "Silicon shadow",
+      "hex": "#49405e"
+    },
+    {
+      "name": "Silicon body",
+      "hex": "#7a6592"
+    },
+    {
+      "name": "Silicon edge",
+      "hex": "#b4a0be"
+    },
+    {
+      "name": "Copper shadow",
+      "hex": "#634538"
+    },
+    {
+      "name": "Copper body",
+      "hex": "#a16d48"
+    },
+    {
+      "name": "Copper edge",
+      "hex": "#ceaa77"
+    }
+  ]
+}

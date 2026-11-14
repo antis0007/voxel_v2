@@ -1,0 +1,9 @@
+// IDs are saved in placed machines. Append new rows without renumbering.
+// Quantities use 64 units per item. One tick is 0.25 s, and power is in kW.
+[
+    (id: 0, name: "Coils", inputs: [(6, 128), (4, 64)], output: (16, 128), ticks: 20, power: 10),
+    (id: 1, name: "Core", inputs: [(5, 64), (12, 64), (18, 64)], output: (17, 64), ticks: 28, power: 14),
+    (id: 2, name: "Wild Essence", inputs: [(5, 64), (13, 128)], output: (18, 64), ticks: 48, power: 24),
+    (id: 3, name: "Circuit boards", inputs: [(6, 128), (7, 64), (4, 64)], output: (12, 128), ticks: 48, power: 16),
+    (id: 4, name: "Bio-resin boards", inputs: [(14, 64), (21, 64), (6, 64)], output: (12, 128), ticks: 40, power: 14),
+]

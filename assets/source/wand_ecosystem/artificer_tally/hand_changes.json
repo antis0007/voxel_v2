@@ -1,0 +1,33 @@
+{
+  "source": "hand_v3/hand_continuity.blend",
+  "changes": [
+    "Thumb bridge lowered toward shaft; cross-section reduced 6 percent",
+    "Quiet olive leather cuff instead of diagonal bands",
+    "Solid cuff caps replaced by open rolled rims",
+    "Cloth entrance cap removed; skin extends inside the garment"
+  ],
+  "clips": "Nine inherited actions; no new finger animation",
+  "cuff_texture": {
+    "tile": [
+      64,
+      0,
+      64,
+      128
+    ],
+    "edge_rows": [
+      0,
+      8,
+      120,
+      128
+    ],
+    "highlight_columns": [
+      24,
+      30
+    ],
+    "colors": [
+      "4b4940",
+      "626450",
+      "7b7862"
+    ]
+  }
+}

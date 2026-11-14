@@ -1,0 +1,14 @@
+// Lectern lines in a generator-294 dungeon entry. One line per row, shown in
+// order; rows whose condition is false are skipped. Placeholders:
+// {small} small locks in this complex, {held} small keys held, {great} 1 or 0.
+// Lines follow crates/app/src/egui_ui/UI_RULES.md: nouns and numbers, no
+// second person, no exclamation marks. Max 16 lines, 24 characters each.
+(
+    lines: [
+        (when: Always, text: "Locked Doors: {small}"),
+        (when: GreatLock, text: "Great Door: 1"),
+        (when: SmallLocks, text: "Small Keys: side caches"),
+        (when: GreatLock, text: "Great Key: deep cache"),
+        (when: Always, text: "Keys Held: {held}"),
+    ],
+)

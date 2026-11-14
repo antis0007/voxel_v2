@@ -1,0 +1,45 @@
+// Stack limits per item class; `active` names the preset in play. Wands, tools, weapons, armor,
+// buckets, casts and packed kits always stack to 1. Classic keeps the pre-overhaul limits and
+// decides which recipes need a workbench, so raising a preset never moves a recipe off the bench.
+// Stack quantities survive preset changes; excess is retained for recovery.
+// `cargo test stacks_ron_round_trips` checks the format.
+(
+    active: "Balanced",
+    resources: [
+        (9, Small),
+        (10, Small),
+        (11, Small),
+        (12, Component),
+        (16, Component),
+        (17, Component),
+    ],
+    presets: [
+        (
+            name: "Classic",
+            assembly: 16,
+            component: 64,
+            material: 64,
+            small: 64,
+            food: 16,
+            potion: 16,
+        ),
+        (
+            name: "Balanced",
+            assembly: 16,
+            component: 128,
+            material: 256,
+            small: 1024,
+            food: 64,
+            potion: 32,
+        ),
+        (
+            name: "Builder",
+            assembly: 16,
+            component: 512,
+            material: 1024,
+            small: 4096,
+            food: 128,
+            potion: 64,
+        ),
+    ],
+)

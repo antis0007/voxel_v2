@@ -1,0 +1,14 @@
+{
+  "image": "botanical_crafted_found_v2.png",
+  "status": "Concept reference, not production sprites or renderer acceptance",
+  "tool": "built-in image_gen",
+  "sources": ["https://botaniamod.net/index.html", "https://slimeknights.github.io/docs/guides/tool-part/"],
+  "layout": "3 columns x 3 rows; botanical, crafted, found",
+  "items": ["Seed Pod Switch", "Petal Lens", "Reed Siphon", "Copper Splitter", "Slate Ward Key", "Cobalt Scribe", "Cinder Splinter", "Moth Bone", "Hollow Star"],
+  "improvements": ["Brighter botanical palette broadens the previous dark artifact set", "Short key, thin reed, compact charcoal and open frame have different silhouettes", "Material junctions make ceramic, wood, copper and iron components legible", "Botanical items grow their functional shapes instead of adding leaves to identical rods"],
+  "remaining_issues": ["Generated pixel grid is not exact 32x32", "Stone and metal still contain too many tiny shade changes", "Hollow Star is too symmetrical and decorative", "Reed sap bulb should be a small growth, not a gemstone", "Cinder particles are not part of the base item sprite"],
+  "keep": ["Seed Pod Switch silhouette and green/cream palette", "Petal Lens flower as functional aperture", "Slate Ward Key compact negative space", "Moth Bone asymmetry and quiet ivory shaft"],
+  "simplify_next": {"Petal Lens":"Three petals, two leaf clusters, dark aperture; no hanging strands", "Reed Siphon":"Two stem segments, hollow end, tiny sap node", "Hollow Star":"Irregular incomplete mineral frame and off-center grip; star stays tiny"},
+  "construction_rules": ["Material changes occur at plausible joints", "No universal collar count or mandatory gemstone", "Only moving or spatially important parts justify extra geometry", "One dominant visual feature and at most two supporting details per small item"],
+  "behavior_notes": "Names and functional shapes are design intentions, not implemented capabilities"
+}

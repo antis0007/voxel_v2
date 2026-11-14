@@ -1,0 +1,46 @@
+{
+  "generator": "built-in imagegen",
+  "selected_sheets": [
+    {
+      "file": "keepers_garden.png",
+      "width": 1159,
+      "height": 1358,
+      "sha256": "FBC57DCF8F462094F26CA3E3F0F8EEBDE3B9079DEBC6600F6CFA76F7D6B3DD00"
+    },
+    {
+      "file": "archive_logistics.png",
+      "width": 1159,
+      "height": 1358,
+      "sha256": "54DEC35A1D783A04AC7B0B113CA5586F569FA783D179959507FF610AA3B9389D"
+    },
+    {
+      "file": "founders_drive_train.png",
+      "width": 1159,
+      "height": 1357,
+      "sha256": "40072167C27445F5062A44007FC4E52944EE7AB537AB9AD09D204B69E2A6F25E"
+    },
+    {
+      "file": "rites_of_resonance.png",
+      "width": 1159,
+      "height": 1358,
+      "sha256": "ED948A2300195EE142B0848D0AA108701F291692763FAE51DA4E758C04963E4E"
+    },
+    {
+      "file": "arrival_day_exchange.png",
+      "width": 1774,
+      "height": 887,
+      "sha256": "2A195FC53BEBC1F374A6517F8EAD9933A9C8A6B3D065AEB94E623BDEA993B649"
+    }
+  ],
+  "palette_colors": 32,
+  "new_object_concepts": 30,
+  "prompts": [
+    "archive_logistics.prompt.txt",
+    "arrival_day_exchange.prompt.txt",
+    "founders_drive_train.prompt.txt",
+    "founders_gearbox_revision.prompt.txt",
+    "keepers_garden.prompt.txt",
+    "rites_of_resonance.prompt.txt"
+  ],
+  "retained_earlier_drawing": "founders_drive_train_v1.png"
+}

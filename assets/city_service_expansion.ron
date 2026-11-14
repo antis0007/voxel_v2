@@ -1,0 +1,21 @@
+(
+    version: 1,
+    style: (name: "Unfinished timber", wall: Planks, frame: Log, roof: Planks, form: Gable),
+    foundation: Planks,
+    frontage: Planks,
+    open_windows: true,
+    apron: 1,
+    complexity: 1,
+    capacity: 8,
+    furniture: (1, 1, 13),
+    candidates: [
+        (hub: (20, 12), origin: (27, 0), turn: false, approach: (20, 11),
+            route: [(25, 11), (25, -4), (31, -4), (31, -3)]),
+        (hub: (20, -12), origin: (27, -16), turn: false, approach: (20, -11),
+            route: [(25, -11), (25, -20), (31, -20), (31, -19)]),
+        (hub: (-20, -12), origin: (-27, 0), turn: true, approach: (-20, -11),
+            route: [(-25, -11), (-25, 4), (-31, 4), (-31, 3)]),
+        (hub: (-20, 12), origin: (-27, 16), turn: true, approach: (-20, 11),
+            route: [(-25, 11), (-25, 20), (-31, 20), (-31, 19)]),
+    ],
+)

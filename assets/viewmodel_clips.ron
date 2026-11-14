@@ -1,0 +1,58 @@
+// Held-item clips, played on top of each item's rest hold. Times are seconds at swing speed 1;
+// faster or slower blades scale the whole clip. `offset` is metres (right, up, forward) from the
+// hold point. `turn` is a rotation vector in radians about camera axes (right, up, back), applied
+// about the hold point before the item's own rest turn. `ease` shapes the motion into its key:
+// Out settles into the key, In accelerates into it, InOut eases both ends.
+// `impact` is when the strike lands. Melee and mining time their hits from it, so the drawn
+// contact and the hit agree. Strokes play 1 forehand, 2 backhand, 3 overhead finisher.
+// `cargo test viewmodel_clips` checks the format and the timing rules.
+(
+    idle: (duration: 3.2, looped: true, keys: [
+        (t: 0.0),
+        (t: 1.6, offset: (0.0, 0.003, 0.0), turn: (0.012, 0.0, -0.008)),
+        (t: 3.2),
+    ]),
+    // Raised from below the frame after the hand changes item.
+    equip: (duration: 0.30, keys: [
+        (t: 0.0, offset: (0.02, -0.30, -0.04), turn: (0.70, 0.0, 0.0)),
+        (t: 0.30, ease: Out),
+    ]),
+    // Slow wind-up, a 70 ms cut that is still accelerating at contact, then an eased recovery.
+    forehand: (duration: 0.30, impact: Some(0.18), keys: [
+        (t: 0.0),
+        (t: 0.11, offset: (0.06, 0.10, -0.04), turn: (0.420, 2.698, -0.562), ease: Out),
+        (t: 0.18, offset: (-0.24, 0.04, -0.04), turn: (-2.228, 1.244, -1.077), ease: In),
+        (t: 0.215, offset: (-0.36, -0.12, -0.02), turn: (2.522, -0.537, 1.789), ease: Out),
+        (t: 0.30),
+    ]),
+    // Rising cut: the off hand and torch sit low right, so the blade sweeps up and over them.
+    backhand: (duration: 0.30, impact: Some(0.18), keys: [
+        (t: 0.0),
+        (t: 0.11, offset: (-0.30, 0.02, -0.04), turn: (0.203, 1.153, 0.121), ease: Out),
+        (t: 0.18, offset: (-0.12, 0.14, -0.08), turn: (0.175, -0.078, -1.413), ease: In),
+        (t: 0.215, offset: (0.0, 0.20, -0.06), turn: (-0.016, -1.413, -0.152), ease: Out),
+        (t: 0.30),
+    ]),
+    // The hand stays right of centre and reaches forward, so the forearm is short on screen.
+    overhead: (duration: 0.46, impact: Some(0.26), keys: [
+        (t: 0.0),
+        (t: 0.19, offset: (-0.05, 0.18, -0.04), turn: (0.587, 1.783, -0.359), ease: Out),
+        (t: 0.26, offset: (-0.01, -0.03, 0.13), turn: (-2.067, 0.178, -1.201), ease: In),
+        (t: 0.31, offset: (0.01, -0.12, 0.09), turn: (-2.437, 0.011, -1.355), ease: Out),
+        (t: 0.46),
+    ]),
+    // Mining stroke: cocked back, driven down about the camera's right axis. Break timing
+    // stretches the stroke so the last impact lands as the cell breaks.
+    chop: (duration: 0.30, impact: Some(0.135), keys: [
+        (t: 0.0),
+        (t: 0.075, offset: (0.009, 0.019, -0.028), turn: (0.40, 0.0, -0.056), ease: Out),
+        (t: 0.135, offset: (-0.025, -0.055, 0.08), turn: (-1.10, 0.0, 0.16), ease: In),
+        (t: 0.30),
+    ]),
+    // Placing or using pokes the item forward and down.
+    use: (duration: 0.30, keys: [
+        (t: 0.0),
+        (t: 0.07, offset: (-0.03, -0.03, 0.06), turn: (-0.40, 0.0, 0.0), ease: Out),
+        (t: 0.30),
+    ]),
+)

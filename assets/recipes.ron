@@ -5,6 +5,380 @@
 (
     hand: [
         (
+            name: "Hang glider",
+            output: (
+                item: Armor(Chest, Glider),
+                count: 1,
+            ),
+            pattern: [
+                "LLL",
+                "PIP",
+                " P ",
+            ],
+            key: [
+                ('L', Resource(4)),
+                ('P', Block(Planks)),
+                ('I', Resource(6)),
+            ],
+            description: "[Jump] Deploy in air · Look down to dive",
+        ),
+        (
+            name: "Slime boots",
+            output: (
+                item: Armor(Feet, Slime),
+                count: 1,
+            ),
+            pattern: [
+                "BL",
+                "BL",
+            ],
+            key: [
+                ('B', Resource(13)),
+                ('L', Resource(4)),
+            ],
+            description: "Bounces on landing · [Sneak] Settle",
+        ),
+        (
+            name: "Slime sling",
+            output: (
+                item: Tool(19),
+                count: 1,
+            ),
+            pattern: [
+                "PL",
+                "BP",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('L', Resource(4)),
+                ('B', Resource(13)),
+            ],
+            description: "[RMB] Charge on ground · Release to launch",
+        ),
+        (
+            name: "Seared Brick",
+            output: (
+                item: Block(SearedBrick),
+                count: 4,
+            ),
+            pattern: [
+                "CG",
+                "GC",
+            ],
+            key: [
+                ('C', Block(Clay)),
+                ('G', Block(Gravel)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Kiln Lining",
+            output: (
+                item: Block(KilnLining),
+                count: 1,
+            ),
+            pattern: [
+                "BSB",
+            ],
+            key: [
+                ('B', Block(SearedBrick)),
+                ('S', Block(KilnScale)),
+            ],
+            description: "2 m above Smeltery Controller · +25% heat",
+        ),
+        (
+            name: "Smeltery Controller",
+            output: (
+                item: Block(SmelteryController),
+                count: 1,
+            ),
+            pattern: [
+                "SSS",
+                "SIS",
+                "SSS",
+            ],
+            key: [
+                ('S', Block(SearedBrick)),
+                ('I', Resource(8)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Smeltery Drain",
+            output: (
+                item: Block(SmelteryDrain),
+                count: 1,
+            ),
+            pattern: [
+                "S S",
+                "S S",
+                "SSS",
+            ],
+            key: [
+                ('S', Block(SearedBrick)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Smeltery Faucet",
+            output: (
+                item: Block(SmelteryFaucet),
+                count: 1,
+            ),
+            pattern: [
+                "CC",
+                " C",
+            ],
+            key: [
+                ('C', Resource(6)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Casting Table",
+            output: (
+                item: Block(CastingTable),
+                count: 1,
+            ),
+            pattern: [
+                "SSS",
+                "S S",
+            ],
+            key: [
+                ('S', Block(SearedBrick)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Casting Basin",
+            output: (
+                item: Block(CastingBasin),
+                count: 1,
+            ),
+            pattern: [
+                "S S",
+                "SSS",
+            ],
+            key: [
+                ('S', Block(SearedBrick)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Bucket",
+            output: (
+                item: Bucket(0),
+                count: 1,
+            ),
+            pattern: [
+                "I I",
+                " I ",
+            ],
+            key: [
+                ('I', Resource(8)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Output crate",
+            output: (
+                item: Block(StorageCrate),
+                count: 1,
+            ),
+            pattern: [
+                "PPP",
+                "PIP",
+                "PPP",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('I', Resource(8)),
+            ],
+            description: "Factory output buffer.",
+        ),
+        (
+            name: "Wooden pickaxe",
+            output: (
+                item: Tool(6),
+                count: 1,
+            ),
+            pattern: [
+                "PPP",
+                " P ",
+                " P ",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Stone pickaxe",
+            output: (
+                item: Tool(7),
+                count: 1,
+            ),
+            pattern: [
+                "CCC",
+                " P ",
+                " P ",
+            ],
+            key: [
+                ('C', Block(Cobblestone)),
+                ('P', Block(Planks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Iron pickaxe",
+            output: (
+                item: Tool(8),
+                count: 1,
+            ),
+            pattern: [
+                "III",
+                " P ",
+                " P ",
+            ],
+            key: [
+                ('I', Resource(8)),
+                ('P', Block(Planks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Hand-wound induction coil",
+            output: (
+                item: Resource(16),
+                count: 1,
+            ),
+            pattern: [
+                "CFC",
+            ],
+            key: [
+                ('C', Resource(6)),
+                ('F', Resource(4)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Wooden axe",
+            output: (
+                item: Tool(12),
+                count: 1,
+            ),
+            pattern: [
+                "PP",
+                "P ",
+                "P ",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "Cut the trunk base to fell trees.",
+        ),
+        (
+            name: "Stone axe",
+            output: (
+                item: Tool(13),
+                count: 1,
+            ),
+            pattern: [
+                "CC",
+                "CP",
+                " P",
+            ],
+            key: [
+                ('C', Block(Cobblestone)),
+                ('P', Block(Planks)),
+            ],
+            description: "Cut the trunk base to fell trees.",
+        ),
+        (
+            name: "Iron axe",
+            output: (
+                item: Tool(14),
+                count: 1,
+            ),
+            pattern: [
+                "II",
+                "IP",
+                " P",
+            ],
+            key: [
+                ('I', Resource(8)),
+                ('P', Block(Planks)),
+            ],
+            description: "Cut the trunk base to fell trees.",
+        ),
+        (
+            name: "Wooden shovel",
+            output: (
+                item: Tool(15),
+                count: 1,
+            ),
+            pattern: [
+                "P",
+                "P",
+                "P",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Stone shovel",
+            output: (
+                item: Tool(16),
+                count: 1,
+            ),
+            pattern: [
+                "C",
+                "P",
+                "P",
+            ],
+            key: [
+                ('C', Block(Cobblestone)),
+                ('P', Block(Planks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Iron shovel",
+            output: (
+                item: Tool(17),
+                count: 1,
+            ),
+            pattern: [
+                "I",
+                "P",
+                "P",
+            ],
+            key: [
+                ('I', Resource(8)),
+                ('P', Block(Planks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Iron hoe",
+            output: (
+                item: Tool(20),
+                count: 1,
+            ),
+            pattern: [
+                "II",
+                "P ",
+                "P ",
+            ],
+            key: [
+                ('I', Resource(8)),
+                ('P', Block(Planks)),
+            ],
+            description: "[RMB] Till soil",
+        ),
+        (
             name: "Oak door",
             output: (
                 item: Block(OakDoor),
@@ -299,7 +673,7 @@
             key: [
                 ('P', Block(Planks)),
             ],
-            description: "2×2 plank bench. Place and press F to assemble machines and bores.",
+            description: "3×3 crafting grid.",
         ),
         (
             name: "Bed",
@@ -395,7 +769,7 @@
             description: "Knap rough stone into high-grip cobblestone.",
         ),
         (
-            name: "Ore processor",
+            name: "Field smelter",
             output: (
                 item: Block(Smelter),
                 count: 1,
@@ -407,7 +781,7 @@
             key: [
                 ('c', Block(Cobblestone)),
             ],
-            description: "Field smelter. Place and press F to smelt ores with coal.",
+            description: "Hand-fed stone hearth. 1 ingot per ore, 0.25 coal per batch.",
         ),
         (
             name: "Sandstone",
@@ -573,7 +947,8 @@
                 count: 1,
             ),
             pattern: [
-                "UFU",
+                "U U",
+                " F ",
             ],
             key: [
                 ('U', Resource(6)),
@@ -749,6 +1124,21 @@
             description: "Cast into water; reel in on a bite.",
         ),
         (
+            name: "Shears",
+            output: (
+                item: Tool(11),
+                count: 1,
+            ),
+            pattern: [
+                " I",
+                "I ",
+            ],
+            key: [
+                ('I', Resource(8)),
+            ],
+            description: "Cuts fleece from a grown sheep; regrows in one day.",
+        ),
+        (
             name: "Gold pan",
             output: (
                 item: Tool(18),
@@ -764,8 +1154,506 @@
             ],
             description: "Washes one wet gravel or sand cell for heavy grains.",
         ),
+        (
+            name: "Tin cladding",
+            output: (
+                item: Block(TinBlock),
+                count: 1,
+            ),
+            pattern: [
+                "UU",
+                "UU",
+            ],
+            key: [
+                ('U', Resource(7)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Iron cladding",
+            output: (
+                item: Block(IronBlock),
+                count: 1,
+            ),
+            pattern: [
+                "UU",
+                "UU",
+            ],
+            key: [
+                ('U', Resource(8)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Bronze cladding",
+            output: (
+                item: Block(BronzeBlock),
+                count: 1,
+            ),
+            pattern: [
+                "UU",
+                "UU",
+            ],
+            key: [
+                ('U', Resource(14)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Steel cladding",
+            output: (
+                item: Block(SteelBlock),
+                count: 1,
+            ),
+            pattern: [
+                "UU",
+                "UU",
+            ],
+            key: [
+                ('U', Resource(15)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Copper ingots from cladding",
+            output: (
+                item: Resource(6),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(CopperBlock), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Tin ingots from cladding",
+            output: (
+                item: Resource(7),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(TinBlock), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Iron ingots from cladding",
+            output: (
+                item: Resource(8),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(IronBlock), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Bronze ingots from cladding",
+            output: (
+                item: Resource(14),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(BronzeBlock), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Unpack Steel Cladding",
+            output: (
+                item: Resource(15),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(SteelBlock), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Bookcase",
+            output: (
+                item: Block(Bookcase),
+                count: 1,
+            ),
+            pattern: [
+                "PPP",
+                "FFF",
+                "PPP",
+            ],
+            key: [
+                ('P', Block(Planks)),
+                ('F', Resource(4)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Enchanting Table",
+            output: (
+                item: Block(EnchantingTable),
+                count: 1,
+            ),
+            pattern: [
+                " B ",
+                "CSC",
+                "SSS",
+            ],
+            key: [
+                ('B', Block(Bookcase)),
+                ('C', Resource(5)),
+                ('S', Block(StoneBricks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Dressed stone",
+            output: (
+                item: Block(DressedStone),
+                count: 4,
+            ),
+            pattern: [
+                "SS",
+                "SS",
+            ],
+            key: [
+                ('S', Block(StoneBricks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Carved stone",
+            output: (
+                item: Block(CarvedStone),
+                count: 2,
+            ),
+            pattern: [
+                "S",
+                "S",
+            ],
+            key: [
+                ('S', Block(StoneBricks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Weathered bricks",
+            output: (
+                item: Block(WeatheredBricks),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(StoneBricks), 2),
+                (Block(Gravel), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Glazed tiles",
+            output: (
+                item: Block(GlazedTiles),
+                count: 4,
+            ),
+            pattern: [
+                "CC",
+                "CC",
+            ],
+            key: [
+                ('C', Block(Clay)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Roof tiles",
+            output: (
+                item: Block(RoofTiles),
+                count: 6,
+            ),
+            pattern: [
+                "C  ",
+                "CC ",
+                "CCC",
+            ],
+            key: [
+                ('C', Block(Clay)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Lime plaster",
+            output: (
+                item: Block(LimePlaster),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Limestone), 1),
+                (Block(Sand), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Concrete",
+            output: (
+                item: Block(Concrete),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(Limestone), 1),
+                (Block(Sand), 1),
+                (Block(Gravel), 2),
+            ],
+            description: "Slows sulfuric acid corrosion.",
+        ),
+        (
+            name: "Timber post",
+            output: (
+                item: Block(TimberPost),
+                count: 2,
+            ),
+            pattern: [
+                "L",
+                "L",
+            ],
+            key: [
+                ('L', Block(Log)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Timber beam",
+            output: (
+                item: Block(TimberBeamX),
+                count: 2,
+            ),
+            pattern: [
+                "LL",
+            ],
+            key: [
+                ('L', Block(Log)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Crop harvester",
+            output: (
+                item: Block(CropHarvester),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(8), 2),
+                (Block(Planks), 3),
+            ],
+            description: "Range 4 m · Harvest, replant · Output: touching chest",
+        ),
+        (
+            name: "Compost: water plants",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Seagrass), 4),
+            ],
+            description: "",
+        ),
+        (
+            name: "Compost: kelp",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Kelp), 4),
+            ],
+            description: "",
+        ),
+        (
+            name: "Compost: grasses",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(SeaOats), 2),
+                (Block(Cattail), 2),
+            ],
+            description: "",
+        ),
+        (
+            name: "Compost: leaves",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Leaves), 8),
+            ],
+            description: "",
+        ),
+        (
+            name: "Mana flower",
+            output: (
+                item: Block(ManaFlower),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Lavender), 1),
+                (Block(Orchid), 1),
+                (Resource(5), 1),
+            ],
+            description: "Open sky · 1 mana / 2 s to receiver or wand · Range 8 m",
+        ),
+        (
+            name: "Collector flower",
+            output: (
+                item: Block(CollectorFlower),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Lavender), 2),
+                (Resource(8), 1),
+            ],
+            description: "Range 6 m · Output: touching chest",
+        ),
+        (
+            name: "Iron fern",
+            output: (
+                item: Block(IronFern),
+                count: 1,
+            ),
+            ingredients: [
+                (Resource(18), 2),
+                (Resource(11), 4),
+            ],
+            description: "Tilled bed · Harvest: iron dust",
+        ),
+        (
+            name: "Claim Stake",
+            output: (
+                item: Block(ClaimStake),
+                count: 2,
+            ),
+            pattern: [
+                "P",
+                "P",
+            ],
+            key: [
+                ('P', Block(Planks)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Lightless Shaft",
+            output: (
+                item: Block(LightlessShaft),
+                count: 1,
+            ),
+            pattern: [
+                "SIS",
+                "ITI",
+                "SIS",
+            ],
+            key: [
+                ('S', Block(StoneBricks)),
+                ('I', Resource(8)),
+                ('T', Block(Torch)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Gilded Gate",
+            output: (
+                item: Block(GildedGate),
+                count: 1,
+            ),
+            pattern: [
+                "GSG",
+                "SCS",
+                "GSG",
+            ],
+            key: [
+                ('G', Block(GoldBlock)),
+                ('S', Block(Sandstone)),
+                ('C', Block(Crystal)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Rune Goggles",
+            output: (
+                item: Armor(Head, Runesight),
+                count: 1,
+            ),
+            pattern: [
+                "XFX",
+            ],
+            key: [
+                ('X', Block(Crystal)),
+                ('F', Resource(4)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Survey Goggles",
+            output: (
+                item: Armor(Head, Survey),
+                count: 1,
+            ),
+            pattern: [
+                "C C",
+                "GCG",
+            ],
+            key: [
+                ('C', Resource(6)),
+                ('G', Block(StarGlass)),
+            ],
+            description: "",
+        ),
     ],
     bench: [
+        (
+            name: "Steel plate",
+            output: (
+                item: Block(SteelPlate),
+                count: 2,
+            ),
+            ingredients: [
+                (Resource(15), 2),
+            ],
+            description: "Slows sulfuric acid corrosion.",
+        ),
+        (
+            name: "Clock",
+            output: (
+                item: Tool(40),
+                count: 1,
+            ),
+            pattern: [
+                " C ",
+                "CRC",
+                " C ",
+            ],
+            key: [
+                ('C', Resource(6)),
+                ('R', Resource(5)),
+            ],
+            description: "Time of day while held.",
+        ),
+        (
+            name: "Map",
+            output: (
+                item: Tool(41),
+                count: 1,
+            ),
+            pattern: [
+                "FFF",
+                "FCF",
+                "FFF",
+            ],
+            key: [
+                ('F', Resource(4)),
+                ('C', Resource(6)),
+            ],
+            description: "Opens the world map.",
+        ),
         (
             name: "Anvil",
             output: (
@@ -830,6 +1718,23 @@
                 ('S', Block(CobbleSlab)),
             ],
             description: "Combine and salvage. No XP cost.",
+        ),
+        (
+            name: "Circuit board",
+            output: (
+                item: Resource(12),
+                count: 1,
+            ),
+            pattern: [
+                "U U",
+                "FTF",
+            ],
+            key: [
+                ('U', Resource(6)),
+                ('F', Resource(4)),
+                ('T', Resource(7)),
+            ],
+            description: "Copper connections on a fibre carrier.",
         ),
         (
             name: "Mulch leaves",
@@ -911,6 +1816,98 @@
     ],
     crystal_tech: [
         (
+            name: "Ballast octo arms",
+            output: (
+                item: Armor(Chest, Ballast),
+                count: 1,
+            ),
+            pattern: [
+                "NEN",
+                "BCB",
+                "NEN",
+            ],
+            key: [
+                ('N', Resource(16)),
+                ('E', Resource(15)),
+                ('B', Resource(14)),
+                ('C', Resource(12)),
+            ],
+            description: "[Alt+Jump] Grip · [Jump] Rise · [Sneak] Descend",
+        ),
+        (
+            name: "Burner jetpack",
+            output: (
+                item: Armor(Chest, Burner),
+                count: 1,
+            ),
+            pattern: [
+                "B B",
+                "BCB",
+                "N N",
+            ],
+            key: [
+                ('B', Resource(14)),
+                ('C', Resource(12)),
+                ('N', Resource(16)),
+            ],
+            description: "[Jump] Thrust · [Alt+Sneak] Hover · Bio-ethanol",
+        ),
+        (
+            name: "Induction jetpack",
+            output: (
+                item: Armor(Chest, Induction),
+                count: 1,
+            ),
+            pattern: [
+                "ENE",
+                "CJC",
+                " A ",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('N', Resource(16)),
+                ('C', Resource(12)),
+                ('J', Armor(Chest, Burner)),
+                ('A', Resource(17)),
+            ],
+            description: "[Jump] Thrust · [Alt+Sneak] Hover · Charged battery",
+        ),
+        (
+            name: "Kinetic greaves",
+            output: (
+                item: Armor(Legs, Kinetic),
+                count: 1,
+            ),
+            pattern: [
+                "EEE",
+                "N N",
+                " X ",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('N', Resource(16)),
+                ('X', Resource(5)),
+            ],
+            description: "Thruster greaves (+5% reduction). Unlock dash, air dash and the mid-air jump.",
+        ),
+        (
+            name: "Kinetic boots",
+            output: (
+                item: Armor(Feet, Kinetic),
+                count: 1,
+            ),
+            pattern: [
+                "E E",
+                "NAN",
+            ],
+            key: [
+                ('E', Resource(15)),
+                ('N', Resource(16)),
+                ('A', Resource(17)),
+            ],
+            description: "Grip-field boots (+5% reduction). Unlock wall running, wall jumps and air strafing.",
+        ),
+        (
             name: "Resonant crystal block",
             output: (
                 item: Block(Crystal),
@@ -974,6 +1971,223 @@
                 ('A', Resource(17)),
             ],
             description: "Infuse steel with crystal, essence and an arcane core. Hard pale-blue building metal with a restrained travelling sheen.",
+        ),
+        (
+            name: "Bread",
+            output: (
+                item: Food(Bread),
+                count: 1,
+            ),
+            pattern: [
+                "WWW",
+            ],
+            key: [
+                ('W', Block(WheatCrop)),
+            ],
+            description: "Three wheat baked into a loaf (+40 hunger, +4 health).",
+        ),
+        (
+            name: "Root stew",
+            output: (
+                item: Food(RootStew),
+                count: 2,
+            ),
+            pattern: [
+                "CB",
+                "CB",
+            ],
+            key: [
+                ('C', Block(CarrotCrop)),
+                ('B', Block(BeetCrop)),
+            ],
+            description: "Carrot and beetroot stewed down (+46 hunger, +8 health).",
+        ),
+        (
+            name: "Cooked Fish",
+            output: (
+                item: Food(CookedFish),
+                count: 1,
+            ),
+            pattern: [
+                "F",
+                "C",
+            ],
+            key: [
+                ('F', Food(RawFish)),
+                ('C', Resource(3)),
+            ],
+            description: "Fish cooked over coal.",
+        ),
+        (
+            name: "Harvest cake",
+            output: (
+                item: Food(HarvestCake),
+                count: 2,
+            ),
+            pattern: [
+                "WC",
+                "WB",
+            ],
+            key: [
+                ('W', Block(WheatCrop)),
+                ('C', Block(CarrotCrop)),
+                ('B', Block(BeetCrop)),
+            ],
+            description: "Wheat, carrot and beetroot baked together (+34 hunger, brief speed).",
+        ),
+        (
+            name: "Vegetable stew",
+            output: (
+                item: Food(VegetableStew),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Tomato), 1),
+                (Block(Onion), 1),
+                (Block(Cabbage), 1),
+                (Block(Potato), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Baked potato",
+            output: (
+                item: Food(BakedPotato),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Potato), 2),
+                (Resource(3), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Fruit salad",
+            output: (
+                item: Food(FruitSalad),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Apple), 1),
+                (Block(SweetBerries), 2),
+                (Block(Grapes), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Pumpkin pie",
+            output: (
+                item: Food(PumpkinPie),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(Pumpkin), 1),
+                (Block(WheatCrop), 2),
+                (Block(Sugarcane), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Rice bowl",
+            output: (
+                item: Food(RiceBowl),
+                count: 2,
+            ),
+            ingredients: [
+                (Block(RiceCrop), 2),
+                (Block(Onion), 1),
+                (Block(Cabbage), 1),
+            ],
+            description: "",
+        ),
+        (
+            name: "Cocoa biscuit",
+            output: (
+                item: Food(CocoaBiscuit),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(CocoaPod), 1),
+                (Block(WheatCrop), 2),
+            ],
+            description: "",
+        ),
+        (
+            name: "Copper chest",
+            output: (
+                item: Block(ChestCopper),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(Chest), 1),
+                (Resource(6), 8),
+            ],
+            description: "",
+        ),
+        (
+            name: "Iron chest",
+            output: (
+                item: Block(ChestIron),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(ChestCopper), 1),
+                (Resource(8), 8),
+            ],
+            description: "",
+        ),
+        (
+            name: "Steel chest",
+            output: (
+                item: Block(ChestSteel),
+                count: 1,
+            ),
+            ingredients: [
+                (Block(ChestIron), 1),
+                (Resource(15), 8),
+            ],
+            description: "",
+        ),
+        (
+            name: "Grass Mulch",
+            output: (
+                item: Resource(13),
+                count: 1,
+            ),
+            pattern: [
+                "GG",
+                "GG",
+            ],
+            key: [
+                ('G', Block(Grass)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Gold Block",
+            output: (
+                item: Block(GoldBlock),
+                count: 1,
+            ),
+            pattern: [
+                "GG",
+                "GG",
+            ],
+            key: [
+                ('G', Resource(23)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Gold Ingots",
+            output: (
+                item: Resource(23),
+                count: 4,
+            ),
+            ingredients: [
+                (Block(GoldBlock), 1),
+            ],
+            description: "",
         ),
     ],
 )

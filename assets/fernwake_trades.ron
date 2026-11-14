@@ -1,0 +1,26 @@
+// District occupations. Named stock rules bind offers to persisted inventory.
+[
+    [
+        (give: [(item: Resource(13), count: 16)], get: (item: Food(Trailcake), count: 2), uses: 6, stock: LegacyMeals),
+        (give: [(item: Resource(4), count: 8)], get: (item: Resource(13), count: 16), uses: 4),
+    ],
+    [
+        (give: [(item: Resource(3), count: 8)], get: (item: Resource(8), count: 2), uses: 4),
+        (give: [(item: Resource(4), count: 16)], get: (item: Tool(9), count: 1), uses: 1),
+    ],
+    [
+        (give: [(item: Resource(13), count: 24)], get: (item: Resource(5), count: 1), uses: 4),
+        (give: [(item: Resource(13), count: 2)], get: (item: Block(GlowCap), count: 1), uses: 16, stock: Nursery),
+    ],
+    [
+        (give: [(item: Resource(4), count: 4)], get: (item: Resource(18), count: 1), uses: 3),
+    ],
+    [
+        (give: [(item: Resource(8), count: 4)], get: (item: Food(Trailcake), count: 2), uses: 4, stock: PantrySale),
+        (give: [(item: Resource(13), count: 16)], get: (item: Resource(12), count: 1), uses: 2),
+        (give: [(item: Resource(13), count: 3)], get: (item: Block(GlowCap), count: 1), uses: 12, stock: FreightSale),
+        (give: [(item: Block(GlowCap), count: 1)], get: (item: Resource(13), count: 2), uses: 12, stock: FreightDelivery),
+        (give: [(item: Resource(13), count: 4)], get: (item: Resource(8), count: 1), uses: 6, stock: PantryBiomass),
+        (give: [(item: Food(Trailcake), count: 1)], get: (item: Resource(8), count: 1), uses: 16, stock: PantryMeals),
+    ],
+]

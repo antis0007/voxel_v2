@@ -1,0 +1,5 @@
+[
+    (name: "Timber Framing", wall: LimePlaster, frame: Log, roof: RoofTiles, form: Gable),
+    (name: "Courtyard Masonry", wall: Sandstone, frame: DressedStone, roof: Sandstone, form: Courtyard),
+    (name: "Terraced Stone", wall: StoneBricks, frame: CarvedStone, roof: GlazedTiles, form: Terrace),
+]

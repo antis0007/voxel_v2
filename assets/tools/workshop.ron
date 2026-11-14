@@ -1,0 +1,13 @@
+// Material supply and processing rules. Resource costs use factory units (64/item).
+[
+ (material: "wood", block: Some(Log), resource: None, cast: false),
+ (material: "stone", block: Some(Stone), resource: None, cast: false),
+ (material: "flint", block: Some(Gravel), resource: None, cast: false),
+ (material: "basalt", block: Some(Basalt), resource: None, cast: false),
+ (material: "copper", block: None, resource: Some(6), cast: true),
+ (material: "tin", block: None, resource: Some(7), cast: true),
+ (material: "iron", block: None, resource: Some(8), cast: true),
+ (material: "bronze", block: None, resource: Some(14), cast: true),
+ (material: "steel", block: None, resource: Some(15), cast: true),
+ (material: "gold", block: None, resource: Some(23), cast: true),
+]

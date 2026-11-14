@@ -1,0 +1,306 @@
+Phase 6 — Real spell-system architecture
+Audit the current casting implementation before introducing new systems.
+
+Build an extensible, strongly typed spell execution layer in Rust.
+
+The core model should support:
+- Wand-specific statistics
+- Ordered spell lists
+- Shuffle and non-shuffle modes
+- Cast delay and recharge
+- Mana/capacitor energy
+- Multicast
+- Triggers and timers
+- Projectile and field operations
+- Modifier composition
+- Spell-deck manipulation
+- Persistent/always-active effects
+- Conditional operations
+- Reusable spell programs
+Use structured spell representations that can be validated, compiled or preprocessed, inspected, and evaluated without unnecessary allocations.
+
+Separate authoritative gameplay effects from cosmetic GPU presentation.
+
+Provide meaningful performance budgets, effect provenance, and behavior for pathological recursive combinations.
+
+Do not simply prevent every powerful interaction. Preserve extraordinary combinations wherever the underlying rules permit them.
+Phase 7 — Material and world interactions
+Spells must interact with actual 3D voxel material state.
+
+Start with a carefully selected range covering:
+- Excavation and controlled destruction
+- Thermal transfer and combustion
+- Freezing and melting
+- Liquid and gas displacement
+- Electric conduction
+- Kinetic impulse and attraction
+- Teleportation and movement
+- Material deposition or transformation
+- Biological growth and summoning
+- Environmental scanning and measurement
+- Structural manipulation
+- Protective fields
+Ensure interactions work across supported voxel sizes.
+
+World edits caused by spells must persist correctly and invalidate rendering, collisions, lighting, and simulation state appropriately.
+
+Do not simulate every visual particle as a persistent voxel unless gameplay requires it.
+Phase 8 — Magitech crafting and research
+Create coherent connections between equipment construction and the existing world systems.
+
+Possible physical wand components include rods, caps, foci, conductors, crystals, biological materials, inscriptions, and unusual ancient components.
+
+Their properties must matter.
+
+An industrial conductor can provide useful electrical integration.
+
+A grown fungal wand may support biological magic.
+
+An ancient relic may have an intrinsic casting property not normally reproducible.
+
+Support both handcrafted equipment and discovered artifacts.
+
+Exploration should provide unusual items and knowledge. Crafting should enable deliberate design, modification, and eventually reproducible manufacturing.
+
+Do not turn every interesting wand into a simple linear upgrade recipe.
+Phase 9 — Placeable magic and automation
+Magic must not be restricted to handheld weapons.
+
+Provide the architecture for spells or magical operations to be executed through:
+- Casting turrets
+- Ritual arrays
+- Runic machinery
+- Mana or aether reservoirs
+- Field emitters
+- Arcane sensors
+- Material processing devices
+- Creature cultivation machinery
+- Magical transportation apparatus
+- Programmable controllers
+A player-authored spell should be reusable in compatible stationary machinery where its physical and gameplay semantics make sense.
+
+This is essential to the game's Factorio/modded-Minecraft identity.
+
+Implement real ports, interfaces, operational states, energy consumption, and world interactions.
+
+Do not build decorative machines that only play animations.
+Phase 10 — Visual spell language
+Give every major effect family a distinctive visual grammar.
+
+Fire must communicate heat and ignition.
+
+Electricity should communicate conductive paths and violent energy transfer.
+
+Kinetic effects should communicate momentum, force, and distortion.
+
+Growth magic should visibly suggest organic expansion, roots, spores, or cellular organization.
+
+Ancient spatial magic should not look like ordinary cyan plasma.
+
+Use sprite-based elements, controlled pixel-art particle shapes, procedural ribbons, localized distortion, geometric patterns, and carefully selected light sources.
+
+An idle wand may exhibit small spell-specific indications of its contents or active state, inspired by Noita's readable held-wand effects.
+
+Do not cover every item in constant particles.
+
+Build effects from shared shader primitives and data-driven parameters while preserving recognizable differences between material and magical families.
+
+The magic must look especially good when it interacts with water, rock, foliage, metal, machinery, and creatures.
+Phase 11 — Gameplay proving grounds
+Build one small experimental testing facility inside the actual world.
+
+It needs:
+- Destructible stone and wooden test walls
+- Water and conductive materials
+- Heat-sensitive materials
+- Several functional enemy targets
+- One simple industrial machine
+- One programmable magical emitter
+- A safe testing area for high-energy or recursive spells
+- An interface that displays the current wand's characteristics and execution behavior
+Implement a minimum initial set of diverse spell operations sufficient to demonstrate real combinations. Do not claim full spell-content parity from this slice.
+
+Required demonstrations:
+1. A simple early wand performs basic combat and excavation.
+2. A modified wand creates a recognizable multicast interaction.
+3. A collision trigger executes a second spell.
+4. A material effect changes terrain and produces consequences.
+5. An electrical effect interacts with conductive material.
+6. A biological or growth effect changes an actual entity or environment.
+7. A compatible spell program operates through a placeable machine.
+8. The effects remain correct across supported voxel-resolution transitions.
+Phase 12 — Acceptance and review
+Capture real in-game evidence of at least six markedly different artifacts in the first integration slice, then expand to 12 authored families.
+
+Review the complete procedural catalog for repeated silhouettes and material monotony.
+
+Compare:
+- Inventory-size sprites
+- Large item inspection views
+- First-person held items
+- Items dropped into the world
+- Active casting
+- Multiple materials and lighting environments
+- Several spell effects simultaneously
+- Combat and mining in realistic gameplay scenes
+Benchmark GPU particle cost, draw calls, shader time, material updates, spell evaluation, and world-edit latency.
+
+Run tests on casting semantics, trigger behavior, mana consumption, generation validity, world persistence, and voxel-scale correctness.
+
+Preserve existing save compatibility and other developers' working-tree changes.
+
+Report actual executed commands, Blender files, output hashes, native screenshots, build/test results, measured performance, and unresolved issues.
+Final acceptance standard
+The first accepted milestone must demonstrate:
+- Distinct, desirable equipment with original visual personalities
+- Real Blender or pixel-art source assets
+- Quality in the actual Rust/WGPU game
+- Genuine spell composition
+- Meaningful physical effects
+- Connections to Minecraft-style crafting and automation
+- Modular architecture that can support much greater content breadth
+Do not claim Noita or modpack parity from a small set of prototypes.
+
+This milestone establishes the artistic and architectural foundation. Subsequent phases expand the catalog, spell library, placeable machinery, discoveries, and magical traditions toward the intended content depth.
+
+The goal is not an attractive screenshot of a magic wand. It is a world in which finding, studying, crafting, modifying, and mastering magical instruments is one of the most satisfying activities in the entire game.
+
+
+
+
+7. The acceptance standard I would use going forward
+I would separate proof of quality from actual content parity.
+Milestone	Minimum meaningful result
+Visual proof	Six strikingly distinct items that look excellent in first person and inventory
+Art-system proof	Twelve authored families and 100 attractive, valid procedural appearances
+Magic-system proof	Dozens of combinable operations with real casting semantics and environmental effects
+World integration	Spells interact with multiscale terrain, machinery, organisms, and physical materials
+Modpack foundation	Wand crafting, foci, magical research, rituals, placeable equipment, and automation
+Long-term parity	A genuinely extensive spell/equipment/content catalog, memorable discoveries, and interconnected progression
+
+The first milestone shouldn't take the form of another three-item parchment concept sheet. It should show a full equipment inventory with dramatically different silhouettes, at least a few interesting working spell combinations, and first-person in-game captures that demonstrate why players would want to find and use these artifacts.
+
+One final distinction: the mundane must be beautiful too. Noita works partly because a humble early wand can be mechanically interesting, while a rare wand can look visually simple. Minecraft modpacks work because the modest tools and machines grow into a vast system of interacting possibilities.
+
+Axiom should embrace that range. Not every item needs to look legendary, not every object needs intricate geometry, and not every spell needs a spectacular screen-filling shader.
+
+But every equipment family should have a clear identity, every magical effect should have a reason to exist, and the whole system should offer creative depth far beyond the current prototypes.
+
+I haven't modified the game or generated new Blender assets in this pass. This is a researched replacement specification, with the next acceptance milestone explicitly tied to real assets and real in-engine evidence.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Pasted markdown(20261026-113904).mdDocument
+Integrate your ideas together with this and create the most detailed optimal voxel engine spec and game design spec that will result in the best voxel game ever
+
+
+
+
+
+
+
+
+
+
+
+
+Worked for 2m 24s
+Planned the specification
+
+
+
+I’ll turn the uploaded Underkingdom bible into a unified set of implementation documents: a game-design bible, a Rust/WGPU engine architecture, and a milestone/verification plan for an AI coding team. I’ll preserve its distinctive ideas—the Work, three buried civilizations, the Primer, the shared rune/machine VM, physical secrets, and the FTL-style delve structure—while reconciling them with our previous multiscale physics, art-direction, wand, automation, and world-generation work. I’ll also flag requirements that sound rigorous but would actually damage performance, maintainability, or gameplay if enforced literally.
+
+
+
+
+
+
+
+
+Read voxel design attachments and prior specifications
+
+
+
+
+
+Searched library for related files and exact title matches
+
+
+
+
+
+Searched 13 websites
+
+
+
+
+
+Structured deliverables and refined technical decisions
+
+
+
+
+
+Fact-checked future Blender and wgpu documentation
+
+
+
+
+
+
+
+
+
+
+
+
+
+Underkingdom / Axiom — Unified Master Specification
+Design consolidation · October 26, 2026 · Rust/WGPU
+
+The uploaded bible provides something our earlier work lacked: a strong central premise that can unify the physics engine, the magic system, industrial automation, exploration, and the world's mysteries.
+
+I would preserve its core identity:
+Matter has rules. Rules can be learned. Learning them is power.
+
+Underkingdom works as the provisional game title; Axiom can remain the engine/project codename until naming is settled.
+
+The player is a delver exploring a planet built upon the remains of older civilizations. Each layer contains functioning machines, forgotten magical techniques, ecosystems, ruins, and evidence of previous catastrophes.
+
+Technology and magic are two incomplete traditions descended from a deeper discipline called the Work. Their eventual unification is both a gameplay achievement and a major narrative discovery.
+
+The crucial improvement over our earlier proposals is that the player isn't just advancing along separate technology trees. They're gradually learning to manipulate the same world through scientific engineering, magic, biology, automation, and eventually programmable matter.
+Five nonnegotiable product principles
+1. Minecraft-quality foundations: Mining, building, exploration, inventory, crafting, farming, multiplayer-ready architecture, and permanent worlds must feel good before advanced features are considered complete.
+2. Noita-quality systemic discovery: Matter, spells, creatures, and environments interact through rules players can experiment with, including hidden interactions and exceptional secrets.
+3. Factorio-quality automation: Factories have meaningful throughput, logistics, energy constraints, controls, reusable blueprints, bottlenecks, and long-term optimization.
+4. FTL- and immersive-sim-quality consequences: Vehicles, dungeons, machines, and enemies have functional components. Unexpected failures create decisions, not arbitrary instant defeat.
+5. Exceptional audiovisual quality: Distinctive SNES/GBA-inspired pixel art, Minecraft-compatible modular construction, visually magnificent underground worlds, original magical effects, and fully integrated Blender-authored assets.
+The engine exists to support these experiences at scale—not to maximize its theoretical voxel count.
+The biggest corrections to the uploaded proposal
+Several requirements in the original bible deserve modification before they become binding architecture contracts.
+Original requirement	My revision
+Every energy form converts into every other	Use typed, physically constrained converters; not every conversion must exist, and magical sources must be explicitly accounted for
+At least 30% of all material pairs react	Require complete interaction resolution, but use sparse, authored reaction rules and inert defaults; otherwise material growth creates combinatorial design problems
+One million meaningful spell combinations	Measure behavior diversity, compositional correctness, performance and actual player discovery—not raw combinatorial counts alone
+No floating-point state anywhere	Use deterministic, quantized authority where necessary; allow bounded floating-point numerical solvers and nonauthoritative GPU computation
+Every system must remain separate	Keep explicit domain boundaries, but allow shared infrastructure and sensible module consolidation
+Orbital engineering within the initial 40-hour progression	Make the orbital ring visible early, but reserve operational orbital engineering for a much later, genuinely earned capability
+Major catastrophes may erase archives and progress	Make catastrophic world transitions understandable and recoverable; permanent-loss variants belong in optional modes
+All physical systems run at 60 ticks/sec	Use a stable authoritative clock and multirate simulation, with higher-frequency substeps or slower background updates as needed
+
+This preserves the ambition while avoiding several requirements that would otherwise make the project slower, less fun, or harder to maintain.

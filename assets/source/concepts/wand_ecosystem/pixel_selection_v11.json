@@ -1,0 +1,51 @@
+{
+  "status": "Concept selection only; not user-approved or production-ready",
+  "source": "docs/NEW/03_ART_CONTENT_AND_WORLDGEN.md, sections 1 and 3; art production prompt pack pixel/palette grammar",
+  "rounds": [
+    {
+      "image": "pixel_exploration_v9.png",
+      "count": 12
+    },
+    {
+      "image": "pixel_shortlist_v10.png",
+      "count": 8
+    },
+    {
+      "image": "pixel_finalists_v11.png",
+      "count": 3
+    }
+  ],
+  "selected": [
+    {
+      "name": "Broken ceramic",
+      "reason": "Interrupted silhouette communicates an anomaly with few parts.",
+      "remaining": "Generator retained an extra tiny floating fragment; remove during authored development. Reduce the oversized detached tip."
+    },
+    {
+      "name": "Folded shadow",
+      "reason": "Continuous angular body and open notch differ from rod-plus-head construction.",
+      "remaining": "Still too broad and bevel-like at the top; narrow the upper limb and reduce perimeter highlights."
+    },
+    {
+      "name": "Crooked bell",
+      "reason": "Quiet sound relic with distinctive downward opening and visible clapper.",
+      "remaining": "Bell remains larger than intended; reduce shell and keep grip/stem readable at pickup scale."
+    }
+  ],
+  "rejected": [
+    {
+      "names": "Hollow seed, measure of absence, tide shard, soot ladder",
+      "reason": "Too close to prior fork/ring/stick shapes."
+    },
+    {
+      "names": "Fossil quills",
+      "reason": "Read as blades more than casting implements."
+    },
+    {
+      "names": "Red ceramic open loop",
+      "reason": "Returns to familiar ring-on-stick shape."
+    }
+  ],
+  "heldForLater": "Burial shuttle, salt comb, thread fossil and cinder tongue are not selected for refinement in this round.",
+  "boundary": "Generated pixel grids and palette counts are approximate, not validated sprite assets. No source models or runtime files edited."
+}

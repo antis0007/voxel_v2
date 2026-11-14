@@ -1,0 +1,46 @@
+// Biome family prototypes. Each axis is a tolerance curve: `centre` is the best value, `width` the
+// distance at which the family's weight has fallen by a factor of e. Missing axes do not constrain.
+// `open: Above` removes the penalty past the centre (a treeline, a floor); `open: Below` the reverse.
+// `requires` gates a family on the matching rock field; `bias` shifts its log-weight.
+// Temperature and moisture are 0..1, elevation is metres, slope is rise over run, wetness is 0..1.
+// Wetness reads river banks and lake shores (generator 66); only Fen constrains it.
+// Starting values come from the generator 15-55 thresholds, then tuned against the generator 55
+// label counts (`biome_report_dump`, `biome_migration_matrix`) and captures.
+(
+    families: [
+        (name: "Meadow", id: "meadow",
+            temperature: (centre: 0.46, width: 0.20), moisture: (centre: 0.42, width: 0.14)),
+        (name: "Forest", id: "forest",
+            temperature: (centre: 0.48, width: 0.22), moisture: (centre: 0.70, width: 0.16)),
+        (name: "Taiga", id: "taiga",
+            temperature: (centre: 0.16, width: 0.07, open: Below), moisture: (centre: 0.62, width: 0.20)),
+        (name: "Tundra", id: "tundra",
+            temperature: (centre: 0.12, width: 0.07, open: Below), moisture: (centre: 0.25, width: 0.18)),
+        (name: "Alpine", id: "alpine",
+            temperature: (centre: 0.20, width: 0.45), moisture: (centre: 0.50, width: 0.50),
+            elevation: Some((centre: 135.0, width: 35.0, open: Above)), bias: 0.8),
+        (name: "Desert", id: "desert",
+            temperature: (centre: 0.78, width: 0.12), moisture: (centre: 0.18, width: 0.12),
+            slope: Some((centre: 0.05, width: 0.15))),
+        (name: "Badlands", id: "badlands",
+            temperature: (centre: 0.74, width: 0.14), moisture: (centre: 0.24, width: 0.14),
+            slope: Some((centre: 0.45, width: 0.25))),
+        (name: "Savanna", id: "savanna",
+            temperature: (centre: 0.66, width: 0.12), moisture: (centre: 0.38, width: 0.10)),
+        (name: "Rainforest", id: "rainforest",
+            temperature: (centre: 0.74, width: 0.12), moisture: (centre: 0.86, width: 0.12)),
+        (name: "Heathland", id: "heathland",
+            temperature: (centre: 0.34, width: 0.12), moisture: (centre: 0.46, width: 0.14),
+            elevation: Some((centre: 38.0, width: 12.0, open: Above))),
+        (name: "Fen", id: "fen",
+            temperature: (centre: 0.46, width: 0.20), moisture: (centre: 0.86, width: 0.10),
+            elevation: Some((centre: 20.0, width: 5.0)), slope: Some((centre: 0.05, width: 0.08)),
+            wetness: Some((centre: 0.5, width: 0.5, open: Above))),
+        (name: "VolcanicField", id: "volcanic_field",
+            temperature: (centre: 0.50, width: 0.50), moisture: (centre: 0.40, width: 0.50),
+            requires: Some(Volcanic), bias: 0.6),
+        (name: "KarstUpland", id: "karst_upland",
+            temperature: (centre: 0.50, width: 0.25), moisture: (centre: 0.62, width: 0.22),
+            elevation: Some((centre: 70.0, width: 25.0)), requires: Some(Carbonate), bias: 0.2),
+    ],
+)

@@ -1,0 +1,10 @@
+(
+    radius_m: 6,
+    length_m: 16,
+    shell_m: 2,
+    pressure_pa: 101325.0,
+    tank_volume_m3: 12.0,
+    tank_pressure_pa: 400000.0,
+    minimum_breach_radius_m: 6.0,
+    hull_cost_per_m3: 100.0,
+)

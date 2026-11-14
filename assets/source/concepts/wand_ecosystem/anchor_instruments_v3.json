@@ -1,0 +1,19 @@
+{
+  "status": "Reference-led concept art, not game-ready sprites or implemented equipment",
+  "image": "anchor_instruments_v3.png",
+  "tool": "built-in image_gen",
+  "references_inspected": ["Downloads/Ancient Relayworks in a Civic Vault.png", "Downloads/Sepulchre of the Last Bearers.png", "Downloads/Rime Hart Sentinel creature concept.png"],
+  "reference_scope": "These three named Axiom sheets were inspected full-size. Other Downloads art has not all been visually reviewed.",
+  "lore_source": "docs/design/WORLD_LORE.md",
+  "material_grammar": ["Pale replaceable ceramic cheeks", "Dark load-bearing iron", "Brass at actual joints and contacts", "Sparse red/teal alignment and tally marks", "Small amber signal slots or violet crystal substrate"],
+  "items": [
+    {"name":"Tally reader","office":"Artificers / Archivists","connection":"Handheld contact reader for maker counts and signed coils","shape":"Narrow ceramic-protected contact strip and wrist loop"},
+    {"name":"Ballast key","office":"Founders / Sluice","connection":"Maintenance instrument for counterweight couplings","shape":"Short offset fork, sliding mass, stamped ceramic plate"},
+    {"name":"Quench probe","office":"Artificers","connection":"Checks heat dumped by failing resonant substrate","shape":"Conductive needle with stepped ceramic heat shields"},
+    {"name":"Choir gauge","office":"Choir","connection":"Measures braid tension through unequal resonant bars","shape":"Open dark frame with three pale resonators"},
+    {"name":"Braid splice tool","office":"Founders","connection":"Repairs conductors on the service return","shape":"Compact clamp, braided conductor and insulated grip"},
+    {"name":"Archive card reader","office":"Archivists","connection":"Accepts routines etched on crystal cards","shape":"Side-loaded wafer, dark frame and ceramic cheeks"}
+  ],
+  "critique": ["Closer to reference machinery and lore than the botanical sheet", "Still too much small surface wear for final 16-bit textures", "Ballast key has gun-like side grip; simplify toward maintenance key", "Card reader is larger equipment, not a standard wand replacement", "Keep operational marks; remove random chips and tiny rivets at inventory scale"],
+  "behavior_status": "Proposed roles only; no new spell operations, lore revelations or runtime behavior implemented"
+}

@@ -1,0 +1,49 @@
+{
+  "status": "Integrated and visually reviewed; user art acceptance remains open",
+  "source": "assets/source/wand_ecosystem/hand_v5/hand_v5.blend",
+  "reproduce": "Blender --background --python tools/blender/author_grip_hand_v5.py",
+  "runtime": "assets/runtime/viewmodels/hand_v5/hand.glb",
+  "runtime_sha256": "474AAF5B2AFD57BF1A73F17F93850F8AB5466C8BE93308798818B30C8E7A910F",
+  "candidate": "target/hand-v5/combined-r4.exe",
+  "candidate_sha256": "C0843BE4AFDF815E1D1FB2E6B7BC44F915250191D62DA184E6625D7B17242DED",
+  "production": {
+    "blender": "5.0.1 Python API executed, four visual iterations",
+    "triangles": 792,
+    "vertices": 1504,
+    "joints": 19,
+    "clips": ["equip", "idle", "index_extend", "inspect", "open", "recovery", "release", "strong_grip", "windup"],
+    "materials": ["skin", "cloth", "leather"],
+    "texture_source": "paint.json and packed albedo.png; four-tone material ramps"
+  },
+  "references_reviewed": [
+    "assets/source/concepts/wand_ecosystem/civic_salvage_user_reference.png",
+    "assets/source/concepts/wand_ecosystem/lineages_v14_refined.png (unapproved concept)",
+    "assets/source/wand_ecosystem/png_modular/source.png",
+    "docs/NEW/01_GAME_DESIGN_BIBLE.md",
+    "docs/NEW/03_ART_CONTENT_AND_WORLDGEN.md"
+  ],
+  "changes": [
+    "Curved, tapered finger pads and staggered knuckles around the shared wand socket",
+    "Smaller opposing thumb with root embedded in the palm",
+    "Continuous wrist with fitted hollow cuff and gathered cloth silhouette",
+    "Correct outward palm winding; native capture confirms the previous dark cuff opening is gone",
+    "Wrist underlap follows runtime forearm bending",
+    "Finger pressure and relaxation tracks rewritten at every frame; wrist/socket tracks preserved"
+  ],
+  "native_evidence": {
+    "idle_day": "target/artificer-20261025/hand-v5-r4-idle/camera.png",
+    "inspect_day": "target/artificer-20261025/hand-v5-r4-inspect/camera.png",
+    "underground_release_pose": "target/artificer-20261025/hand-v5-r4-underground/camera.png",
+    "pose_cycle": "target/artificer-20261025/hand-v5-r4-cycle",
+    "visually_reviewed_cycle_frames": [0, 20, 40, 57],
+    "static_capture_exit_codes": [0, 0, 0],
+    "static_capture_validation_errors": 0
+  },
+  "limits": [
+    "Pose-cycle process exited zero, but ENOSPC caused late frame write failures: 55 files exceed 1KB and 14 are truncated 53-byte outputs. This is partial capture evidence.",
+    "Pose-cycle camera is stationary; walking, sprinting, live sustained casting and performance acceptance are not established by this review.",
+    "PNG-derived wands belong to the coordinated art chat; their dark contrast still needs palette refinement.",
+    "No claim that all wand families or all bible production requirements are complete.",
+    "Previous assets remain available. Only this task's superseded combined-r1.exe and combined-r3.exe were removed to recover disk space."
+  ]
+}

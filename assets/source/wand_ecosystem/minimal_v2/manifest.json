@@ -1,0 +1,22 @@
+{
+  "blender": "5.0.1",
+  "items": {
+    "bone_needle": [
+      -0.013,
+      0.396,
+      0.0
+    ],
+    "runic_key": [
+      0.0,
+      0.35100000000000003,
+      0.0
+    ],
+    "cinder_rod": [
+      -0.003,
+      0.38165,
+      0.0
+    ]
+  },
+  "hand_vertices": 440,
+  "status": "Shorter item proportions and authored quad hand. Native acceptance pending."
+}

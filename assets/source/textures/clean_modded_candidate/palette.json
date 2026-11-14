@@ -1,0 +1,96 @@
+{
+  "palette": {
+    "wood": [
+      "503a2b",
+      "765337",
+      "946d46"
+    ],
+    "skin": [
+      "a77357",
+      "cb9670",
+      "dfb08a"
+    ],
+    "cloth": [
+      "344953",
+      "49616a",
+      "617880"
+    ],
+    "leather": [
+      "4e3830",
+      "705040",
+      "906a4c"
+    ],
+    "copper": [
+      "774831",
+      "ad7045",
+      "d59b61"
+    ],
+    "mineral": [
+      "35655e",
+      "65a28a",
+      "aed6b1"
+    ],
+    "ceramic": [
+      "a29878",
+      "ccc2a0",
+      "e4dabb"
+    ],
+    "dark": [
+      "292e35",
+      "3d454d",
+      "535d65"
+    ]
+  },
+  "tiles": {
+    "wood": [
+      0,
+      0,
+      16,
+      64
+    ],
+    "skin": [
+      16,
+      0,
+      24,
+      32
+    ],
+    "cloth": [
+      40,
+      0,
+      24,
+      32
+    ],
+    "leather": [
+      16,
+      32,
+      24,
+      16
+    ],
+    "copper": [
+      40,
+      32,
+      16,
+      16
+    ],
+    "mineral": [
+      56,
+      32,
+      8,
+      16
+    ],
+    "ceramic": [
+      16,
+      48,
+      24,
+      16
+    ],
+    "dark": [
+      40,
+      48,
+      24,
+      16
+    ]
+  },
+  "status": "candidate; requires mapped model and native review",
+  "direction": "clean modded Minecraft; three shades per material; nearest filtering; no noise"
+}

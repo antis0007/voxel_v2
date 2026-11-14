@@ -1,0 +1,17 @@
+{
+  "title": "Axiom selected concept-art collection",
+  "date": "2026-10-26",
+  "status": "Imagegen concept references; not a production asset inventory",
+  "object_concepts": 66,
+  "environment_concepts": 4,
+  "selected_image_sheets": 15,
+  "equipment_family_studies": 12,
+  "effect_family_studies": 6,
+  "first_person_concept_views": 6,
+  "sets": [
+    {"path": "equipment_material_study.png", "objects": 12, "environments": 0, "images": 1},
+    {"path": "anchor_expansion_20261026/manifest.json", "objects": 24, "environments": 1, "images": 4},
+    {"path": "modded_systems_20261026/manifest.json", "objects": 30, "environments": 1, "images": 5},
+    {"path": "spell_language_20261026/manifest.json", "objects": 0, "environments": 2, "images": 5, "existing_equipment_families_revisited": 12, "effect_families": 6, "first_person_views": 6}
+  ]
+}

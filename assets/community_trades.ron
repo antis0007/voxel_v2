@@ -1,0 +1,8 @@
+// Shared village inventory. These rows have no automatic daily replenishment.
+[
+    (give: [(item: Block(Log), count: 1)], get: (item: Food(Bread), count: 2), uses: 65535, stock: Community),
+    (give: [(item: Block(WheatCrop), count: 3)], get: (item: Food(Bread), count: 1), uses: 65535, stock: Community),
+    (give: [(item: Food(Bread), count: 1)], get: (item: Block(WheatCrop), count: 3), uses: 65535, stock: Community),
+    (give: [(item: Food(Bread), count: 1)], get: (item: Block(Planks), count: 4), uses: 65535, stock: Community),
+    (give: [(item: Block(Cobblestone), count: 4)], get: (item: Food(Bread), count: 1), uses: 65535, stock: Community),
+]

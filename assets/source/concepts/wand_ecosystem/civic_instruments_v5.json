@@ -1,0 +1,20 @@
+{
+  "status": "Concept exploration, not exported game assets",
+  "reference": "civic_salvage_user_reference.png",
+  "userFeedback": {
+    "cardFan": "I really like the art direction on this piece",
+    "listeningHookRegion": "Keep making more interesting items like these, this artstyle is closer to what we want"
+  },
+  "direction": "Preserve the first textured salvage sheet's material depth, muted colors, repaired construction and varied silhouettes. The later flat simplified edit is not the selected reference.",
+  "items": [
+    "Folding circuit tool",
+    "Choir tuning fork",
+    "Sluice counterweight",
+    "Braid shuttle",
+    "Keeper propagation tool",
+    "Tally punch"
+  ],
+  "review": "Distinct open-frame counterweight and compact shuttle expand the silhouettes. The propagation tool overlaps the folding-card family; avoid making green plates universal. Wear is still dense in places and must be selectively simplified when authoring small game textures.",
+  "generator": "Built-in image_gen",
+  "prompt": "civic_instruments_v5.prompt.txt"
+}

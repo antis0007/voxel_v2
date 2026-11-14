@@ -320,19 +320,22 @@ e 5a3c1e
 f 8c6432
 g c89650
 h f0d28c
+j 5a646e
+k 9aa6ae
+l e4ecf0
 ................
 .oooooooooooooo.
 .odccccccccccdo.
-.ociieeeeeeiiao.
-.ociieffffeiiao.
-.ociiieffeiiiao.
-.ociiiegheiiiao.
-.ociiiighgiiiao.
-.ociiiighgiiiao.
-.ociiiiggiiiiao.
-.ociiiighiiiiao.
-.ociiiiihiiiiao.
-.ociiiiiiiiiiao.
+.ociefghhgfeiao.
+.ocieeffffeeiao.
+.ociiijkkjiiiao.
+.ociiilkkjiiiao.
+.ociiijlkkiiiao.
+.ociiijjlkiiiao.
+.ociiiilkjiiiao.
+.ociiiijlkiiiao.
+.ociiiiilkiiiao.
+.ocibbiikibbiao.
 .odaaaaaaaaaado.
 .oooooooooooooo.
 ................
@@ -903,5 +906,180 @@ oooooooooooooooo
 ................
 ................
 ................
+................
+end
+
+sprite 39 quarry
+a 32363d
+b 57616b
+c 8d969f
+d d6a141
+e 9be0ff
+................
+...oooooooooo...
+..occcccccccco..
+.ocddddddddddco.
+.obbbbbbbbbbbbo.
+.oboooooooooabo.
+.oboaaaeeeaoabo.
+.oboaaaeeeaoabo.
+.oboaaaaaaaoabo.
+.oboooooooooabo.
+.obdbdbdbdbdabo.
+.obbbbbbbbbbbbo.
+.oaaaaaaaaaaaao.
+.oooooooooooooo.
+................
+................
+end
+
+sprite 33 exhaust_duct
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+................
+................
+....oooooooo....
+....odcccdo.....
+....odbbbdo.....
+...ooodbdoooooo.
+...odcccccccdo..
+...odbbbbbbdo...
+...odbiiiibdo...
+...odbiiiibdo...
+...odbbbbbbdo...
+...odcccccccdo..
+...oooooooooooo.
+................
+................
+................
+end
+
+sprite 38 gas_generator
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocbbbdddbbbbao.
+.ocbbbdddbbbbao.
+.ocbbbdddbbbbao.
+.ocbbiddbbbbbao.
+.ocbibiibbbbbao.
+.ocbbiibbbbbbao.
+.ocbbbdddbbbbao.
+.ocbbbdddbbbbao.
+.ocbbbdddbbbbao.
+.ocbbbdddbbbbao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 34 chimney
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocbbbbbbbbbbao.
+.ocbbbbbbbbbbao.
+.ocibibibibibao.
+.ocibibibibibao.
+.ocbbbbbbbbbbao.
+.ocbbbbbbbbbbao.
+.ocibibibibibao.
+.ocibibibibibao.
+.ocbbbbbbbbbbao.
+.ocbbbbbbbbbbao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+end
+
+sprite 35 dust_filter
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ocidididididco.
+.ocidididididco.
+.ocidididididco.
+.ocidididididco.
+.ocidididididco.
+.ocidididididco.
+.ocidididididco.
+.ocidididididco.
+.ocidididididco.
+.odccccccccccdo.
+.oooooooooooooo.
+................
+................
+end
+
+sprite 36 wet_scrubber
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+e 1a3860
+f 2a6cb0
+g 3ab0d8
+h 00d8ff
+................
+.oooooooooooooo.
+.obbbbbbbbbbbbo.
+.ociiiiiiiiiiao.
+.ociiiiiiiiiiao.
+.ocihggggggfiao.
+.ocigggghgffiao.
+.ociggghgfffiao.
+.ocigffffffeiao.
+.ocieeeeeeeeiao.
+.ociiiiiiiiiiao.
+.ociiiiiiiiiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
+................
+................
+end
+
+sprite 37 gas_tank
+a 3c4046
+b 5c646c
+c 8a949c
+d c8a050
+i 1c1c22
+j 3e6a40
+k 8ad890
+h b8c2c8
+................
+.oooooooooooooo.
+.odccccccccccdo.
+.ociiiiddiiiiao.
+.ociiibhcbiiiao.
+.ocibhccccbaiao.
+.ocihccbjbbaiao.
+.ocihcbbkbbaiao.
+.ocidddddddaiao.
+.ocihcbbkbbaiao.
+.ocihcbbjbbaiao.
+.ocibccbbbbaiao.
+.ociiaaiiaaiiao.
+.odaaaaaaaaaado.
+.oooooooooooooo.
 ................
 end

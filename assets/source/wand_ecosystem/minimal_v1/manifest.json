@@ -1,0 +1,33 @@
+{
+  "blender": "5.0.1",
+  "items": [
+    {
+      "name": "bone_needle",
+      "triangles": 152,
+      "muzzle": [
+        -0.013,
+        0.495,
+        0.0
+      ]
+    },
+    {
+      "name": "runic_key",
+      "triangles": 128,
+      "muzzle": [
+        0.0,
+        0.39,
+        0.0
+      ]
+    },
+    {
+      "name": "cinder_rod",
+      "triangles": 132,
+      "muzzle": [
+        -0.003,
+        0.449,
+        0.0
+      ]
+    }
+  ],
+  "status": "Original minimal studies. Hand/animation inherited. Native review required."
+}

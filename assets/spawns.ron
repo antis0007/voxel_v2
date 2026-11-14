@@ -33,4 +33,52 @@
     (54, (weight: 3, biomes: ["Savanna", "Badlands", "Desert"], realms: [Surface], time: Night)),
     (58, (weight: 2, biomes: ["Tundra", "Alpine"], realms: [Surface], time: Night)),
     (57, (weight: 4, realms: [Nether])),
+    // Shell realms (Manyfold, Hall) have no sky; their haunts rise at any hour.
+    (10, (weight: 2, realms: [Shell])),
+    (25, (weight: 3, realms: [Shell])),
+    (29, (weight: 2, realms: [Shell])),
+    (26, (weight: 1, realms: [Shell])),
+    (23, (weight: 2, realms: [Shell])),
+    // Hell by day: kiln crawlers along the lava cuts, imps and lights among the ruins.
+    (12, (weight: 2, realms: [Nether])),
+    (21, (weight: 2, realms: [Nether])),
+    (25, (weight: 1, realms: [Nether])),
+    // Field foes: rotors over open ground and caves, colossi by day, walkers by night.
+    (60, (weight: 1, realms: [Surface, Underground])),
+    (61, (weight: 1, realms: [Surface], time: Day)),
+    (62, (weight: 1, realms: [Surface], time: Night)),
+    // Rotor blooms hide among the thick green of jungle and garden.
+    (63, (weight: 1, biomes: ["Rainforest", "OvergrownGardens", "CloudForest", "CycadMarsh"], realms: [Surface])),
+    // Biome identity: each landscape gets a signature threat so a border
+    // crossing changes what you watch for.
+    // Wetlands: boggarts and marsh lights by day as well as night.
+    (24, (weight: 2, biomes: ["Marsh", "Fen", "CycadMarsh"], realms: [Surface])),
+    (25, (weight: 2, biomes: ["Marsh", "Fen"], realms: [Surface], time: Night)),
+    // Volcanic fields: kiln crawlers on the flows, imps after dark.
+    (12, (weight: 3, biomes: ["VolcanicField"], realms: [Surface])),
+    (21, (weight: 2, biomes: ["VolcanicField"], realms: [Surface], time: Night)),
+    // Fungal groves: spore sentinels stand among the caps, stirges in the gloom.
+    (1, (weight: 3, biomes: ["FungalGrove"], realms: [Surface])),
+    (55, (weight: 2, biomes: ["FungalGrove"], realms: [Surface], time: Night)),
+    // Karst uplands: ropers lurk where the sinkholes open, colossi on the pavements.
+    (28, (weight: 1, biomes: ["KarstUpland"], realms: [Surface, Underground])),
+    (61, (weight: 2, biomes: ["KarstUpland", "LostPlateau"], realms: [Surface])),
+    // Lost plateau: ruin walkers patrol the old ground at any hour.
+    (62, (weight: 2, biomes: ["LostPlateau"], realms: [Surface])),
+    // Badlands and desert by day: gnoll bands and blade rotors over open ground.
+    (54, (weight: 1, biomes: ["Badlands", "Desert"], realms: [Surface], time: Day)),
+    (60, (weight: 2, biomes: ["Badlands", "Desert"], realms: [Surface], time: Day)),
+    // Old forests: brambleburst thickets and redcaps by day.
+    (18, (weight: 1, biomes: ["RedwoodGrove", "OvergrownGardens", "Rainforest"], realms: [Surface])),
+    (22, (weight: 1, biomes: ["RedwoodGrove", "Forest"], realms: [Surface], time: Night)),
+    // Last shore and coast: drowned dead walk the tideline at night.
+    (23, (weight: 2, biomes: ["LastShore", "Coast"], realms: [Surface], time: Night)),
+    // Snowfields by day: yetis roam when the weather is clear.
+    (58, (weight: 1, biomes: ["Tundra", "Alpine", "Taiga"], realms: [Surface], time: Day)),
+    // Frontier (assets/danger.ron): the far, deadly land fields heavier hitters
+    // anywhere on the surface, so pushing outward is a choice with a cost.
+    (53, (weight: 1, realms: [Surface], danger: 2)),
+    (61, (weight: 1, realms: [Surface], danger: 3)),
+    (62, (weight: 1, realms: [Surface], danger: 3)),
+    (63, (weight: 1, biomes: ["Meadow", "Savanna", "Heathland"], realms: [Surface], danger: 3)),
 ]

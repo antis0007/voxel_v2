@@ -1,0 +1,30 @@
+{
+  "status": "Generated concept reference only; not grid-clean sprites or approved runtime assets",
+  "generator": "Built-in image_gen",
+  "image": "pixel_families_v1.png",
+  "brief": "f1431198-c7cc-462e-aa9c-89486d9e5547/Pasted text.txt",
+  "direction": "Economical 16-bit item art, clean modded Minecraft readability, Noita-like discovered silhouette variety",
+  "supersedes": "Three-wand collection as central equipment direction; previous studies retained as minor candidates",
+  "layout": "4 columns, 3 rows, row-major",
+  "families": [
+    {"name":"Witchwood switch","lineage":"vernacular","representation":"24-32px sprite and slim proxy","read":"crooked twig, knot, one leaf","mechanical_hint":"cheap fast casting","revision":"Simplify bark highlights and remove excess twig detail"},
+    {"name":"Bifurcated focus","lineage":"vernacular","representation":"minimal mesh and authored 32px icon","read":"unequal branching tips","mechanical_hint":"branching or multicast","revision":"Retain two-prong asymmetry without decorative ribbing"},
+    {"name":"Bone needle","lineage":"vernacular","representation":"24-32px sprite and slim proxy","read":"fine pale bone and black point","mechanical_hint":"precision and piercing","revision":"Preserve sparse silhouette and short red tie"},
+    {"name":"Runic key","lineage":"scholarly","representation":"minimal mesh and authored 32px icon","read":"hollow bow and asymmetric teeth","mechanical_hint":"wards and spatial operations","revision":"Make key squat; reduce chain-like shaft detail"},
+    {"name":"Rootbound scepter","lineage":"biological","representation":"minimal mesh and authored 48px icon","read":"grown roots embracing narrow mineral","mechanical_hint":"growth and entanglement","revision":"Use two structural roots rather than many overlapping strands"},
+    {"name":"Cinder rod","lineage":"vernacular","representation":"24-32px sprite and slim proxy","read":"snapped charcoal, sparse ember cracks","mechanical_hint":"heat and combustion","revision":"Retain plain silhouette; two ember clusters only"},
+    {"name":"Alchemical quill","lineage":"scholarly","representation":"minimal mesh and authored 32px icon","read":"tapered ivory stylus and cobalt reservoir","mechanical_hint":"sigils and precise material placement","revision":"Reduce central oval; emphasize writing point over gem"},
+    {"name":"Forked conductor","lineage":"industrial","representation":"minimal mesh and authored 32px icon","read":"parallel copper prongs and cream insulator","mechanical_hint":"electrical and kinetic operations","revision":"Straight manufactured joins, one functional insulator"},
+    {"name":"Shard cluster","lineage":"ancient","representation":"minimal mesh and authored 48px icon","read":"unequal slivers on irregular spine","mechanical_hint":"unusual spell order","revision":"Keep slivers narrow and bindings minimal"},
+    {"name":"Grave reliquary","lineage":"vernacular","representation":"selective low-poly detail and authored 48px icon","read":"short cage and offset tooth charm","mechanical_hint":"summoning and lingering effects","revision":"Reduce tiny cage details to three readable bars"},
+    {"name":"Astral filament","lineage":"ancient","representation":"minimal open-frame mesh and authored 32px icon","read":"negative space around tiny star","mechanical_hint":"gravity and teleportation","revision":"Preserve open frame; no large luminous centerpiece"},
+    {"name":"Ancient prism","lineage":"ancient","representation":"minimal mesh and authored 32px icon","read":"short chipped monolith with one seam","mechanical_hint":"intrinsic permanent effect","revision":"Three planar tones and one thin pale seam"}
+  ],
+  "next_comparison": {
+    "samples": ["Bone needle", "Runic key", "Cinder rod"],
+    "reason": "Three distinct proportions and material constructions without a shared gem-and-collar formula",
+    "views": ["native-size inventory icon", "nearest enlarged icon", "held view at native FOV", "dropped world item"],
+    "criteria": ["recognizable at native icon size", "deliberate consistent pixel grid", "no floating grip or tip mismatch", "same identity held and dropped", "palette and cluster scale fit existing block textures"]
+  },
+  "limitations": ["Mechanical hints are design intent, not implemented behavior", "No spell-engine parity claimed", "No generated sheet cell accepted as a finished inventory sprite", "No existing source or live assets replaced"]
+}

@@ -1,0 +1,47 @@
+// World systems: whole gameplay pillars a new world can leave out. Nothing is
+// installed; every system ships in the game and a world simply plays without
+// the ones switched off. Read by crates/app/src/world/systems.rs.
+//
+// bit:      stable index into the per-world mask; never reuse or renumber.
+// id:       stable key written to <world>/systems.ron (the world stores the
+//           ids it switched OFF, so worlds older than a system keep it on).
+// requires: systems that must be on for this one; switching one off also
+//           switches off everything that requires it.
+// tabs:     inventory page ids hidden while the system is off.
+// parity:   MOD_FEATURE_MATRIX id prefixes this system owns, so the parity
+//           loop and the dev tools know which switch a feature belongs to.
+[
+    (
+        bit: 0,
+        id: "automation",
+        label: "Machines & Power",
+        hint: "Machines, power networks, conveyors and production statistics",
+        tabs: [3, 7],
+        parity: ["A03", "A04", "A08", "A09", "A10", "A12", "A13", "B-CREATE", "B-IE", "B-GT", "B-DE", "B-AE2"],
+    ),
+    (
+        bit: 1,
+        id: "magic",
+        label: "Magic",
+        hint: "Wands, spells, runes and mana",
+        tabs: [1],
+        parity: ["B-TC", "B-BM", "B-BOT"],
+    ),
+    (
+        bit: 2,
+        id: "forging",
+        label: "Tool Forging",
+        hint: "Part-built tools and the forge page",
+        tabs: [5],
+        parity: ["A02"],
+    ),
+    (
+        bit: 3,
+        id: "space",
+        label: "Space Travel",
+        hint: "Orbital cargo, stations and other worlds",
+        requires: ["automation"],
+        tabs: [8],
+        parity: ["A05"],
+    ),
+]

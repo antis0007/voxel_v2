@@ -1,0 +1,20 @@
+{
+  "status": "Concept proposal; no gameplay implementation or approval implied",
+  "tierInterpretation": "Next after salvage: Tier 1 crystal detector, first made point-contact circuit. Based on docs/design/WORLD_LORE.md semiconductor tier table.",
+  "style": "Maintain richer pixel-painted salvage reference; no global simplification into coarse icons or smooth product renders.",
+  "items": [
+    "Laminated receiver",
+    "Split amber focus",
+    "Ceramic listener",
+    "Hollow tongue",
+    "Clay scribe",
+    "Grafted crystal"
+  ],
+  "strongest": [
+    "Laminated receiver: integrated grip and clear negative space",
+    "Clay scribe: distinct scholarly form with compact side-mounted contact"
+  ],
+  "review": "Amber focus, listener and hollow tongue are lineage continuations rather than new silhouettes. Cracking remains too widespread for newly made components; target localized wear in future authored textures without flattening material shading. Copper contacts and crystals are larger than intended in several variants.",
+  "prompt": "workshop_tier1_v13.prompt.txt",
+  "generator": "Built-in image_gen"
+}

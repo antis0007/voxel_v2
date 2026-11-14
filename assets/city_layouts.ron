@@ -1,0 +1,5 @@
+[
+    (name: "Ordered Lanes", diagonal_cost: 22, bend_cost: 24, terrain_cost: 30, frontage_jitter: 1, setback_jitter: 0),
+    (name: "Mixed Frontages", diagonal_cost: 5, bend_cost: 8, terrain_cost: 40, frontage_jitter: 3, setback_jitter: 2),
+    (name: "Organic Paths", diagonal_cost: 1, bend_cost: 4, terrain_cost: 55, frontage_jitter: 5, setback_jitter: 4),
+]

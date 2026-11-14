@@ -1,0 +1,3 @@
+// Authored openings are additive. Empty by default: existing saves and gates keep their behavior.
+// Positions are opening centres in metres, not voxel coordinates. Rebuild after publishing.
+(version: 1, nodes: [], links: [])

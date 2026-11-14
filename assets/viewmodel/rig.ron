@@ -1,0 +1,13 @@
+// Shared with the editable Blender source in pixel_source/workshop_kit.blend.
+(rest:(offset:(0.25,-0.245,0.53),axis:(-0.30,0.84,0.45),roll:-0.18),
+aim:(offset:(0.16,-0.215,0.60),axis:(-0.12,0.55,0.82),roll:0.02),
+inspect:(offset:(0.13,-0.18,0.53),axis:(-0.70,0.69,0.18),roll:0.55),
+interact:(offset:(0.25,-0.30,0.60),axis:(-0.25,0.58,0.77),roll:-0.22),
+windup_offset:(0.012,0.018,-0.045),release_offset:(-0.018,-0.012,0.075),
+wrist:(0.082,-0.040,-0.004),elbow:(0.46,-0.58,0.20),head_height:0.235,
+bones:(
+(pivot:(0.028,0.039,-0.010),axis:(0.0,1.0,0.0),angle:-0.22),
+(pivot:(0.030,0.016,-0.010),axis:(0.0,1.0,0.0),angle:-0.20),
+(pivot:(0.030,-0.006,-0.010),axis:(0.0,1.0,0.0),angle:-0.18),
+(pivot:(0.030,-0.025,-0.010),axis:(0.0,1.0,0.0),angle:-0.16),
+(pivot:(0.050,0.052,0.018),axis:(0.0,0.0,1.0),angle:-0.18)))

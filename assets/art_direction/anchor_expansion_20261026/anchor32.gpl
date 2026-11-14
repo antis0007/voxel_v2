@@ -1,0 +1,36 @@
+GIMP Palette
+Name: Axiom Anchor 32
+Columns: 8
+# Shared authoring palette; concept images are references, not quantized atlases.
+ 37  38  44  Ink
+ 57  56  59  Charcoal
+ 80  59  50  Walnut shadow
+122  89  65  Walnut body
+173 130  87  Walnut edge
+139 130 113  Bone shadow
+198 185 158  Bone body
+238 225 191  Bone edge
+ 65  76  53  Moss shadow
+113 122  71  Moss body
+163 167 107  Moss edge
+102  54  50  Ember shadow
+163  79  59  Ember body
+215 134  87  Ember edge
+ 58  63  70  Iron shadow
+105 116 122  Iron body
+162 173 177  Iron edge
+110  89  57  Brass shadow
+161 132  78  Brass body
+212 184 110  Brass edge
+ 53  78  98  Blue shadow
+102 135 156  Blue body
+163 191 202  Blue edge
+106 124 124  Ceramic shadow
+168 189 185  Ceramic body
+223 235 224  Ceramic edge
+ 73  64  94  Silicon shadow
+122 101 146  Silicon body
+180 160 190  Silicon edge
+ 99  69  56  Copper shadow
+161 109  72  Copper body
+206 170 119  Copper edge

@@ -1,0 +1,231 @@
+{
+  "title": "Axiom spell language and working-instrument studies",
+  "date": "2026-10-26",
+  "scope": "Imagegen concepts only, as explicitly selected by the user after supplying the Phase 6-12 brief.",
+  "palette": "Axiom Anchor 32; shared sRGB authoring target copied unchanged. Generated images are not palette-quantized atlases.",
+  "counts": {
+    "selected_images": 5,
+    "equipment_family_interpretations": 12,
+    "inventory_icon_interpretations": 12,
+    "effect_family_studies": 6,
+    "first_person_concept_views": 6,
+    "environment_concepts": 2,
+    "new_isolated_object_concepts": 0
+  },
+  "counting_note": "Existing equipment families, repeated scene objects, alternate views and machine states are not counted as additional unique object concepts.",
+  "images": [
+    {
+      "file": "instrument_families.png",
+      "prompt": "instrument_families.prompt.txt",
+      "purpose": "Compare twelve existing family silhouettes at inspection scale and as proposed inventory icons.",
+      "brief_phases": [
+        8,
+        12
+      ]
+    },
+    {
+      "file": "material_effect_language.png",
+      "prompt": "material_effect_language.prompt.txt",
+      "purpose": "Six physical-effect grammars with quiet aftermath insets: Fire, Conduction, Kinetic, Growth, Frost, Spatial.",
+      "brief_phases": [
+        7,
+        10
+      ]
+    },
+    {
+      "file": "first_person_casting.png",
+      "prompt": "first_person_casting.prompt.txt",
+      "revision_prompt": "first_person_growth_revision.prompt.txt",
+      "purpose": "Six illustrated held-item compositions: Spark, Multicast, Impact/Frost, Conduction, Growth, Displacement.",
+      "brief_phases": [
+        6,
+        7,
+        10,
+        12
+      ],
+      "status": "Illustrated first-person concepts, explicitly not game captures"
+    },
+    {
+      "file": "program_workshop.png",
+      "prompt": "program_workshop.prompt.txt",
+      "purpose": "Recovered cards, repair, finite energy feed, supplied material processing, reused heat and cultivation; Idle/Running/Starved emitter states.",
+      "brief_phases": [
+        8,
+        9
+      ]
+    },
+    {
+      "file": "proving_yard.png",
+      "prompt": "proving_yard.prompt.txt",
+      "revision_prompt": "proving_yard_revision.prompt.txt",
+      "purpose": "Integrated yard with sacrificial targets, wet/metal/frost racks, cultivation, processing, spatial fixtures and a warded firing bay.",
+      "brief_phases": [
+        7,
+        9,
+        10,
+        11
+      ]
+    }
+  ],
+  "equipment_families": [
+    {
+      "name": "Witchwood switch",
+      "materials": "wood, fibre, moss",
+      "silhouette": "small crooked branch",
+      "proposed_link": "vernacular repair; Artificer-derived routine socket",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Bifurcated focus",
+      "materials": "wood, dark iron",
+      "silhouette": "unequal open Y",
+      "proposed_link": "split delivery; Artificer-derived bridges",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Bone needle",
+      "materials": "bone, fibre, dark point",
+      "silhouette": "fine tapered spike",
+      "proposed_link": "biological precision; post-quench manufacture",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Runic key",
+      "materials": "iron, brass",
+      "silhouette": "square-open bow and stepped teeth",
+      "proposed_link": "mechanism service; Founders-derived contact",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Rootbound scepter",
+      "materials": "living roots, mineral organ",
+      "silhouette": "open asymmetrical grown enclosure",
+      "proposed_link": "licensed cultures; Keepers-derived practice",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Cinder rod",
+      "materials": "charred wood, ceramic",
+      "silhouette": "blunt broken narrow rod",
+      "proposed_link": "thermal work; Artificer-derived repair",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Alchemical quill",
+      "materials": "ceramic, terracotta, dark tip",
+      "silhouette": "long pointed stylus",
+      "proposed_link": "marking and deposition; Archive-derived procedure",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Forked conductor",
+      "materials": "copper, ceramic, iron",
+      "silhouette": "unequal parallel prongs",
+      "proposed_link": "electrical service; Founders/Artificer interfaces",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Shard cluster",
+      "materials": "salvaged mineral, stone, binding",
+      "silhouette": "unequal separated splinters",
+      "proposed_link": "recovered routine material; Choir-derived resonance",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Grave reliquary",
+      "materials": "iron, bone, leather",
+      "silhouette": "offset bent housing and suspended charm",
+      "proposed_link": "post-quench reuse; proposed salvage lineage",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Astral filament",
+      "materials": "blackglass, thin frame",
+      "silhouette": "open skeletal loop",
+      "proposed_link": "geometric measurement; unresolved salvage origin",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    },
+    {
+      "name": "Ancient prism",
+      "materials": "blackglass, pale retention grip",
+      "silhouette": "short blunt faceted block",
+      "proposed_link": "geometric displacement; unresolved salvage origin",
+      "existing_family_reference": "../equipment_material_study.png",
+      "status": "Expanded concept interpretation of an existing authored family; not a new family or game asset"
+    }
+  ],
+  "environment_proposals": [
+    {
+      "name": "Program workshop",
+      "era": "Present-day repair of Anchor equipment",
+      "purpose": "Study recovered routines, maintain instruments, process supplied metal and reuse heat.",
+      "evidence": "Card reader, padded recovered cards, charge gauge, separate feeds, hot cup, output tray, water route and spent substrate.",
+      "link": "Artificers/Founders repair practice, Archivists' procedures and Keepers' licensed cultivation.",
+      "gap": "Which parts of the copied procedure are essential, and which are inherited caution?"
+    },
+    {
+      "name": "Proving yard",
+      "era": "Present-day facility on inherited Anchor terraces",
+      "purpose": "Compare useful spell behavior against ordinary matter before field use.",
+      "evidence": "Charred oak, chipped stone, jointed practice devices, conduction rack, culture beds, refractory processing and marked receiving platforms.",
+      "link": "Workshop service interfaces; maintenance traditions of the Anchor offices.",
+      "gap": "How much of the recovered equipment can its maintainers safely reproduce? The art does not answer this."
+    }
+  ],
+  "sources": [
+    "source_brief.txt (byte-preserved user attachment; implementation phases used as art direction)",
+    "../../../docs/design/WORLD_LORE.md",
+    "../../../docs/design/WAND_ECOSYSTEM_20261026.md",
+    "../../../docs/Axiom_Magitech_Art_Production_Prompt_Pack_2026-10-26.md",
+    "../../../ART_DIRECTION.md",
+    "../../../docs/01_SCIENCE_INDUSTRY_AND_CHIP_DESIGN_V2.md",
+    "../../../docs/research/MOD_FEATURE_MATRIX.md",
+    "../../../docs/specs/MOD_ADDENDUM.md",
+    "../../../crates/app/src/world/adventure/wands.rs",
+    "../../../crates/app/src/world/adventure/spells.rs"
+  ],
+  "lore_constraints": [
+    "Wands are held circuits; cards are stored routines; sparks and useful work have finite inputs.",
+    "Resonant crystal is salvaged/repaired in these scenes, not manufactured from scratch.",
+    "Do not explain or depict the Surveyors, ninth office, return sender or occupants above.",
+    "Office attributions and new facilities are artistic proposals, not additions to canon."
+  ],
+  "visual_review": {
+    "inspected": true,
+    "changes": [
+      "Replaced orange lightning-like biological effects in the first-person growth panel with matte roots and fern shoots.",
+      "Replaced the same visual error in the proving-yard culture bed and clarified a localized protective-field hit response."
+    ],
+    "strengths": [
+      "Twelve deliberately different equipment silhouettes and material constructions.",
+      "Restrained shared palette and emission limited to useful active parts.",
+      "Local material consequences and separate post-effect views.",
+      "Finite feeds and supplied process stock shown in machinery concepts."
+    ],
+    "remaining": [
+      "Inventory images are concept interpretations, not hand-cleaned pixel sprites at a verified native resolution.",
+      "A static impact/frost illustration does not unambiguously prove trigger ordering; timer, recursive and conditional behavior still need animation studies and runtime verification.",
+      "The conduction scene suggests connected routes but is not a validated electrical diagram.",
+      "The protective-field bay is a layout proposal, not a safety or physics validation.",
+      "Water/freezing transitions and exact voxel sizes require implementation-specific review; no resolution-transition correctness is claimed.",
+      "No 100-appearance procedural catalog, dropped-item pass, full lighting comparison or animation pack has been authored in this batch."
+    ]
+  },
+  "production_boundary": "Original imagegen concept references. No Blender sources, production meshes, shipping textures, engine changes, tests, gameplay demonstrations, performance measurements or acceptance/parity claims.",
+  "retained_versions": [
+    "first_person_casting_v1.png",
+    "proving_yard_v1.png"
+  ],
+  "recovery_note": "Automatic saving of proving_yard_v1 returned an empty local PNG. The exact unmodified PNG bytes returned by imagegen were saved to the workspace from their base64 transport; no pixels were edited outside imagegen."
+}

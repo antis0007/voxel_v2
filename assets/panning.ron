@@ -21,11 +21,5 @@
             weight: 6,
             placer: true,
         ),
-        (
-            item: Block(GoldBlock),
-            count: 1,
-            weight: 1,
-            placer: true,
-        ),
     ],
 )

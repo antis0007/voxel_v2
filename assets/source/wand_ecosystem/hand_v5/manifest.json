@@ -1,0 +1,14 @@
+{
+  "source": "hand_v5.blend",
+  "runtime": "assets/runtime/viewmodels/hand_v5/hand.glb",
+  "blender": "5.0.1",
+  "grip_contract": "origin 0, shaft +Y, width 28-32mm, depth 24mm",
+  "changes": [
+    "Staggered curled fingers",
+    "Thenar saddle and opposing thumb",
+    "Hollow cuff and gathered sleeve",
+    "Individual finger pressure/relaxation; unchanged wrist/socket tracks"
+  ],
+  "reference": "NEW art bible; civic_salvage_user_reference.png; not copying generated pixels into the hand",
+  "status": "Native review required"
+}

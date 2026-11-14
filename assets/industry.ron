@@ -1,0 +1,35 @@
+(
+    // Game-scale mass in mg; rates multiply committed machine work.
+    species: (
+        (name: "Dust", color: (0.58,0.49,0.36), rise_m_s: -0.08, deposition_s: 0.018, decay_s: 0.0, harm_mg_m3: 100.0),
+        (name: "Soot", color: (0.20,0.22,0.24), rise_m_s: 0.20, deposition_s: 0.006, decay_s: 0.0, harm_mg_m3: 60.0),
+        (name: "Acid fumes", color: (0.65,0.68,0.37), rise_m_s: -0.04, deposition_s: 0.012, decay_s: 0.0003, harm_mg_m3: 20.0),
+        (name: "Fuel gas", color: (0.0,0.0,0.0), rise_m_s: -0.02, deposition_s: 0.0, decay_s: 0.0002, harm_mg_m3: 200.0),
+        (name: "Steam", color: (0.78,0.81,0.82), rise_m_s: 0.35, deposition_s: 0.0, decay_s: 0.08, harm_mg_m3: 0.0),
+        (name: "Oxygen", color: (0.0,0.0,0.0), rise_m_s: 0.02, deposition_s: 0.0, decay_s: 0.15, harm_mg_m3: 0.0),
+    ),
+    emissions: [
+        (kind: Generator, rates: (0,4,1,0,2,0)),
+        (kind: Crusher, rates: (24,0,0,0,0,0)),
+        (kind: CokeOven, rates: (0,8,2,12,1,0)),
+        (kind: BlastFurnace, rates: (4,12,2,0,2,0)),
+        (kind: AlloyKiln, rates: (2,0,0,0,0,0)),
+        (kind: MiningDrill, rates: (12,0,0,0,0,0)),
+        (kind: Quarry, rates: (12,0,0,0,0,0)),
+        (kind: Fabricator, rates: (0,0,2,0,0,0)),
+    ],
+    fuels: [
+        (resource: 3, rates: (0,6,2,0,2,0)),
+        (resource: 13, rates: (0,3,0,0,3,0)),
+        (resource: 19, rates: (0,2,1,0,1,0)),
+        (resource: 20, rates: (0,9,4,0,2,0)),
+        (resource: 21, rates: (0,1,0,0,4,0)),
+    ],
+    diffusion_m2_s: 0.025,
+    filter_capture_per_mille: 950,
+    scrubber_capture_per_mille: 900,
+    rain_capture_s: 0.08,
+    repair_cost: [(8,16)],
+    steam_turbine: (steam_mg_per_energy: 96, max_energy_per_tick: 16),
+    fired_boiler: (steam_mg_per_energy: 96, max_fuel_per_tick: 32),
+)

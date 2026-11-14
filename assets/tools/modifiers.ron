@@ -1,0 +1,12 @@
+[
+ (id:"haste", display_name:"Haste", resource:9, units:64, max_rank:3, min_level:0, effects:[(stat:"mining_speed",add:1.5,multiply:1.0)]),
+ (id:"reinforced", display_name:"Reinforced", resource:8, units:128, max_rank:3, min_level:0, effects:[(stat:"durability",add:0.0,multiply:1.25),(stat:"mining_speed",add:0.0,multiply:0.95)]),
+ (id:"sharp", display_name:"Sharp", resource:11, units:64, max_rank:3, min_level:0, effects:[(stat:"attack",add:2.0,multiply:1.0)]),
+ (id:"sharpened", display_name:"Sharpened", resource:15, units:128, max_rank:1, min_level:1, effects:[(stat:"mining_level",add:1.0,multiply:1.0),(stat:"durability",add:0.0,multiply:0.9)]),
+ (id:"keen", display_name:"Keen", resource:15, units:64, max_rank:1, min_level:0, effects:[(stat:"attack",add:0.0,multiply:1.08)]),
+ (id:"flux", display_name:"Flux", resource:5, units:128, max_rank:1, min_level:0, effects:[(stat:"hit_mana",add:2.0,multiply:1.0)]),
+ (id:"core", display_name:"Core", resource:8, units:64, max_rank:1, min_level:0, effects:[(stat:"finisher_stagger",add:0.25,multiply:1.0)]),
+ (id:"moss", display_name:"Moss", resource:13, units:64, max_rank:1, min_level:0, effects:[(stat:"hit_heal",add:2.0,multiply:1.0)]),
+ (id:"runed", display_name:"Runed", resource:17, units:128, max_rank:1, min_level:0, effects:[(stat:"hit_damage",add:4.0,multiply:1.0)]),
+ (id:"spiked", display_name:"Spiked", resource:8, units:96, max_rank:3, min_level:0, effects:[(stat:"thorns",add:4.0,multiply:1.0),(stat:"attack",add:1.0,multiply:1.0)]),
+]

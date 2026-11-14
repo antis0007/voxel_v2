@@ -1,0 +1,166 @@
+[
+  {
+    "lesson": "Water",
+    "xp": 20,
+    "requires": null,
+    "samples": [
+      [
+        {
+          "Resource": 5
+        },
+        4
+      ],
+      [
+        {
+          "Resource": 6
+        },
+        8
+      ]
+    ]
+  },
+  {
+    "lesson": "Wards",
+    "xp": 35,
+    "requires": null,
+    "samples": [
+      [
+        {
+          "Resource": 5
+        },
+        8
+      ],
+      [
+        {
+          "Resource": 8
+        },
+        8
+      ]
+    ]
+  },
+  {
+    "lesson": "Celestial",
+    "xp": 60,
+    "requires": null,
+    "samples": [
+      [
+        {
+          "Resource": 17
+        },
+        2
+      ],
+      [
+        {
+          "Resource": 5
+        },
+        16
+      ]
+    ]
+  },
+  {
+    "lesson": "Thresholds",
+    "xp": 20,
+    "requires": null,
+    "samples": [
+      [
+        {
+          "Resource": 4
+        },
+        8
+      ],
+      [
+        {
+          "Resource": 5
+        },
+        4
+      ]
+    ]
+  },
+  {
+    "lesson": "Horticulture",
+    "xp": 30,
+    "requires": null,
+    "samples": [
+      [
+        {
+          "Food": "Bread"
+        },
+        4
+      ],
+      [
+        {
+          "Food": "RootStew"
+        },
+        4
+      ]
+    ]
+  },
+  {
+    "lesson": "Prospecting",
+    "xp": 35,
+    "requires": null,
+    "samples": [
+      [
+        {
+          "Resource": 6
+        },
+        8
+      ],
+      [
+        {
+          "Resource": 7
+        },
+        8
+      ],
+      [
+        {
+          "Resource": 8
+        },
+        8
+      ]
+    ]
+  },
+  {
+    "lesson": "Provisioning",
+    "xp": 45,
+    "requires": "Horticulture",
+    "samples": [
+      [
+        {
+          "Food": "Bread"
+        },
+        8
+      ],
+      [
+        {
+          "Food": "CookedFish"
+        },
+        4
+      ],
+      [
+        {
+          "Food": "RootStew"
+        },
+        4
+      ]
+    ]
+  },
+  {
+    "lesson": "Wayfaring",
+    "xp": 40,
+    "requires": "Thresholds",
+    "samples": [
+      [
+        {
+          "Food": "Trailcake"
+        },
+        8
+      ],
+      [
+        {
+          "Resource": 4
+        },
+        16
+      ]
+    ]
+  }
+]

@@ -1,0 +1,8 @@
+(
+    widths: [9,5,5,5,5,5,5,3,3],
+    plaza: (-7,-3,7,3),
+    uses: [Housing,MarketHall,Housing,Workshop,Storage,Housing],
+    storeys: [1,1,2,1,1,2],
+    timber: [(-11,1,0),(-10,1,0),(-9,1,0),(-8,1,0),
+             (-11,1,1),(-10,1,1),(-9,1,1),(-8,1,1)],
+)

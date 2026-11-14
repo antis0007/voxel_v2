@@ -172,6 +172,7 @@
     (
         id: "bronze",
         display_name: "Bronze",
+        block: Some("BronzeBlock"),
         props: (
             durability: 430.0,
             mining_level: 2,
@@ -208,6 +209,7 @@
     (
         id: "steel",
         display_name: "Steel",
+        block: Some("SteelBlock"),
         props: (
             durability: 540.0,
             mining_level: 3,

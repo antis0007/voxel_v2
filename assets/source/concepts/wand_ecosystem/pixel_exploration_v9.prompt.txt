@@ -1,0 +1,18 @@
+Original Axiom ancient magitech wand silhouette exploration. Reference image is the approved PIXEL STYLE, not shapes to repeat. Make TWELVE new bold original wand sprites on a dark charcoal-blue plain background, 4 columns by 3 rows, spacious evenly separated cells, no captions. Actual chunky pixel art: each wand appears drawn in roughly 32x48 pixels and enlarged sharply, consistent large square pixels throughout, 10-14 colors, 2-3 tones per material, no antialiasing, no gradients, no smooth render interiors, no bevel sheen, no microtexture, no decorative noise. Material clusters like modded Minecraft items, Noita's uncanny magical objects, FTL/Into the Breach economical sprites. Evoke the mysterious old civilizations of Caves of Qud, Hyper Light Drifter and Rain World through original objects, not copied game assets. Quiet colors: red clay, dark wood, dull copper, ivory, charcoal, slate blue, occasional small violet or amber accent. Strong angular silhouettes, readable at inventory scale.
+Each design is a handheld CASTING IMPLEMENT, not a machine, gun, sword or modern tool. Different grips integrated into the shape, no identical handle+circular head recipes. Ancient tech through strange material assembly and one spare anomalous detail. No green circuit boards, machinery diagrams or crystals stuck on every tip.
+Row1:
+1: Broken ceramic dogleg, a short double-bent ivory zigzag with a missing floating square segment held in exact alignment across a dark gap, burgundy grip at lower end.
+2: Burial shuttle, long flat dark wood spindle with an off-center triangular eye containing one tiny red thread knot, broad ochre ceramic shoe at its pointed end.
+3: Folded shadow, one broad charcoal mineral strip bent into a squared reverse-S with a thin violet interior edge and small cream grip patch; compact, strange.
+4: Salt comb, dull red terracotta wand with just THREE unequal long ivory teeth growing sideways from its upper edge, one tooth broken short, grip continuous with the clay spine.
+Row2:
+5: Hollow seed, squat asymmetrical blue-black seedpod split along one side to reveal an amber slit, curved woody tail is the grip, sparse copper staple.
+6: Measure of absence, two uneven ivory bars offset in parallel connected only at their dark red grip, a tiny square black stone floating in the large gap, spare open silhouette.
+7: Thread fossil, angular fossilized branch with a single long copper thread hanging in a triangular loop between its upper two branches, one pale repair patch; no glowing crystal.
+8: Cinder tongue, flat rust-red paddle wand with an exaggerated hooked charcoal tongue emerging from one end, blue cloth around narrow base, one tiny ember dot at throat.
+Row3:
+9: Crooked bell, small faceted dark slate bell sideways at the end of a short crooked ivory handle, a pale rectangular clapper visibly protrudes into negative space, one copper tie.
+10: Petrified quill, thick dark violet segmented taper with a stepped missing bite on one side and an ochre root-shaped grip, ivory exposed core; not a feather illustration.
+11: Tide shard, broad lopsided ivory crescent with dark blue lower limb thick enough to grip and a rust-red notch embedded on the outer upper edge, center entirely empty.
+12: Soot ladder, irregular dark wooden wand with two tiny asymmetrical rectangular through-holes separated by dull copper inlays, blunt split top, ochre tied grip.
+Do not make all lengths, angles and head sizes identical. Prioritize charming alien simplicity and distinctive negative spaces over ornate detail. No text, hands or floating decorative particles.

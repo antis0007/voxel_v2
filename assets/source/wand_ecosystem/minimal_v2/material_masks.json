@@ -1,0 +1,15 @@
+{
+  "R": {
+    "bone": 28,
+    "iron": 56,
+    "cord": 84,
+    "brass": 112,
+    "charcoal": 140,
+    "ember": 168,
+    "leather": 196,
+    "rune": 224
+  },
+  "G": "metal eligibility",
+  "B": "emission eligibility, not permanent emission",
+  "runtime": "Not wired to the current material-name renderer"
+}

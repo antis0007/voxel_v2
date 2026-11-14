@@ -2,12 +2,26 @@
 // `district` and `room` are the plinth's save identity (`UNDERCROWN_SCHEMA.md`).
 // Items go to the pack, or drop at the plinth when the pack is full. The
 // named relics have no item of their own yet; these are their stand-ins.
+// Generator 302 adds strongboxes and reading stands at `prop` 2 and up:
+// `spell` adds a found spell (an id in spells.ron), `wand` mints a found
+// wand of that tier, seeded by the prop's id.
 [
-    (district: 0, room: 3, label: "Counterweight Ring", items: [(Block(SilverBlock), 4), (Block(CopperBlock), 6)]),
-    (district: 0, room: 8, label: "Confiscated locker", items: [(Armor(Head, Copper), 1)]),
-    (district: 1, room: 3, label: "Bellkeeper's Gloves", items: [(Armor(Feet, Steel), 1)]),
-    (district: 1, room: 8, label: "A letter and a tool", items: [(Block(Crystal), 3), (Block(Torch), 16)]),
-    (district: 2, room: 2, label: "Jeweler's balcony", items: [(Block(GoldBlock), 3), (Block(SilverBlock), 3)]),
-    (district: 2, room: 3, label: "Rimeglass Buckler", items: [(Armor(Chest, Steel), 1)]),
-    (district: 5, room: 1, label: "Archive reliquary", items: [(Armor(Chest, Lumen), 1), (Block(MithrilBlock), 2), (Block(StarGlass), 8)]),
+    (district: 0, room: 3, label: "Counterweight Ring", items: [(Block(SilverBlock), 4), (Block(CopperBlock), 6)], spell: Some(31)),
+    (district: 0, room: 8, label: "Confiscated locker", items: [(Armor(Head, Copper), 1)], spell: Some(72)),
+    (district: 1, room: 3, label: "Bellkeeper's Gloves", items: [(Armor(Feet, Steel), 1)], spell: Some(61)),
+    (district: 1, room: 8, label: "A letter and a tool", items: [(Block(Crystal), 3), (Block(Torch), 16)], spell: Some(86)),
+    (district: 2, room: 2, label: "Jeweler's balcony", items: [(Block(GoldBlock), 3), (Block(SilverBlock), 3)], wand: Some(1)),
+    (district: 2, room: 3, label: "Rimeglass Buckler", items: [(Armor(Chest, Steel), 1)], spell: Some(81)),
+    (district: 3, room: 3, label: "Seed cache", items: [(Block(GlowCap), 12), (Block(SilverBlock), 2)], spell: Some(35)),
+    (district: 5, room: 1, label: "Archive reliquary", items: [(Armor(Chest, Lumen), 1), (Block(MithrilBlock), 2), (Block(StarGlass), 8)], spell: Some(29), wand: Some(3)),
+    (district: 7, room: 2, label: "Ledge cache", items: [(Block(Crystal), 6), (Block(Torch), 24)], spell: Some(32)),
+    (district: 7, room: 4, label: "Sea cache", items: [(Block(GoldBlock), 4), (Block(StarGlass), 6)], spell: Some(83), wand: Some(2)),
+    // Generator 302, the Drowned Borough.
+    (district: 2, room: 2, prop: 2, label: "Canal lectern", spell: Some(88)),
+    (district: 2, room: 3, prop: 2, label: "Evidence chest", items: [(Block(GoldBlock), 4), (Block(Crystal), 4)], wand: Some(2)),
+    (district: 2, room: 4, prop: 2, label: "Reservoir lockbox", items: [(Block(CopperBlock), 8), (Block(Torch), 12)]),
+    (district: 2, room: 5, prop: 2, label: "Ferry strongbox", items: [(Block(SilverBlock), 4), (Block(Torch), 16)], wand: Some(1)),
+    (district: 2, room: 6, prop: 2, label: "Duct lectern", spell: Some(94)),
+    (district: 2, room: 7, prop: 2, label: "Drowned lectern", spell: Some(73)),
+    (district: 2, room: 8, prop: 2, label: "Aqueduct cache", items: [(Block(Crystal), 3), (Block(GlowCap), 8)]),
 ]

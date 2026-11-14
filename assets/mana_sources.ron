@@ -1,0 +1,27 @@
+// Mana hedrons: standing voxel crystals that leak one element's mana.
+// Read by crates/app/src/world/adventure/hedrons.rs. Positions come from the world
+// seed, so nothing here is saved; changing share moves every hedron.
+(
+    // Hedrons stand only beside surface sites (ruins, shrines, workshops), seated on a
+    // carved plinth with a glyph slab. Share of sites that hold one.
+    share: 0.6,
+    // A captured hedron feeds casters and ritual circles within this many metres.
+    reach_m: 24.0,
+    // A ritual circle working the hedron's own element draws this many times the mana.
+    matched: 2.0,
+    // A generator in hedron-tap mode draws power within this many metres of a captured hedron.
+    tap_m: 8.0,
+    // Gap between the ground and the lower tip, in hedron blocks; the plinth fills it.
+    hover: 2,
+    // Capture frame: one pylon on each cardinal side, this many hedron blocks out,
+    // each holding at least `pylon_height` cells of the essence's pylon block.
+    pylon_offset: 3,
+    pylon_height: 2,
+    essences: [
+        (element: Fire, pylon: Basalt, mana_per_second: 3.0),
+        (element: Frost, pylon: Ice, mana_per_second: 3.0),
+        (element: Shock, pylon: CopperBlock, mana_per_second: 3.0),
+        (element: Toxic, pylon: MushroomStem, mana_per_second: 3.0),
+        (element: Wet, pylon: Clay, mana_per_second: 3.0),
+    ],
+)

@@ -1,0 +1,26 @@
+// Places counted by the Places Discovered statistic: the names the location
+// readout shows (crates/app/src/world/ambience.rs). Append only. A saved world
+// stores one bit per row position, so never reorder or remove a row. Max 64.
+[
+    "Meadow",
+    "Woodland",
+    "Pine woods",
+    "Rainforest",
+    "Cloud forest",
+    "Redwood grove",
+    "Flower garden",
+    "Wetland",
+    "Fungal grove",
+    "Shore",
+    "Alpine air",
+    "Highland refuge",
+    "Flower heath",
+    "Dry grassland",
+    "Dry air",
+    "Ash air",
+    "Riverbank",
+    "Oasis",
+    "Crystal grotto",
+    "Fungal hollow",
+    "Stone cavern",
+]

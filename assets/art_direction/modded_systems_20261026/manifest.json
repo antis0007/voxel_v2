@@ -1,0 +1,405 @@
+{
+  "title": "Axiom modded-system art studies",
+  "date": "2026-10-26",
+  "status": "Original imagegen concept references; no engine implementation or mechanical certification",
+  "generated_with": "built-in imagegen",
+  "palette": "palette.json",
+  "palette_import": "anchor32.gpl",
+  "lore_source": "docs/design/WORLD_LORE.md",
+  "reference_inventory": "docs/research/MOD_FEATURE_MATRIX.md",
+  "reference_inventory_status": "planning/adoption targets, not implemented features",
+  "lore_status": "Objects and manufacturing attributions are proposed visual interpretations. Existing motifs are retained; no new world fact is established.",
+  "sheets": [
+    "keepers_garden.png",
+    "archive_logistics.png",
+    "founders_drive_train.png",
+    "rites_of_resonance.png",
+    "arrival_day_exchange.png"
+  ],
+  "branches": [
+    {
+      "sheet": "keepers_garden.png",
+      "office": "Keepers",
+      "era": "I / Ballast adapting II equipment",
+      "refs": [
+        "docs/research/mod-family-botania.md",
+        "docs/research/MOD_FEATURE_MATRIX.md: A.11 Forestry genetics and ecology"
+      ]
+    },
+    {
+      "sheet": "archive_logistics.png",
+      "office": "Archivists",
+      "era": "II / Anchor, later repair variants",
+      "refs": [
+        "docs/research/mod-family-storage-links.md",
+        "docs/research/MOD_FEATURE_MATRIX.md: A.14 Applied Energistics 2",
+        "docs/specs/MOD_ADDENDUM.md: A.15 shared VM and links"
+      ]
+    },
+    {
+      "sheet": "founders_drive_train.png",
+      "office": "Founders",
+      "era": "II / Anchor, repairable by the valley",
+      "refs": [
+        "docs/research/mod-family-create.md",
+        "docs/research/MOD_FEATURE_MATRIX.md: A.14 Immersive Engineering and GregTech",
+        "docs/specs/MOD_ADDENDUM.md: A.13 Mekanism"
+      ]
+    },
+    {
+      "sheet": "rites_of_resonance.png",
+      "office": "Orders of Resonance and Copyists",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "refs": [
+        "docs/research/mod-family-thaumcraft.md",
+        "docs/research/mod-family-ritual-magic.md",
+        "docs/specs/MOD_ADDENDUM.md: A.14 Ars Nouveau and Hexcasting"
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "fuel_bloom",
+      "name": "Fuel bloom",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Convert finite feed through a cultivated biological process",
+      "evidence": "finite feed hopper and spent-substrate tray",
+      "link": "Keepers",
+      "gap": "Which strain's feed schedule was altered?",
+      "status": "concept only"
+    },
+    {
+      "id": "irrigation_reed",
+      "name": "Irrigation reed",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Control water delivery to a growing bed",
+      "evidence": "round inlet and shutoff collar",
+      "link": "Keepers",
+      "gap": "Who reset its dry-season mark?",
+      "status": "concept only"
+    },
+    {
+      "id": "lens_pod",
+      "name": "Lens pod",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Direct a bounded field through a protected lens",
+      "evidence": "leaf cradle and adjustable iris",
+      "link": "Keepers",
+      "gap": "Which local field was the lens meant to observe?",
+      "status": "concept only"
+    },
+    {
+      "id": "mycelial_filter",
+      "name": "Mycelial filter",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Contain a recycling strain in a serviceable cassette",
+      "evidence": "sealing lip and spent-board tray",
+      "link": "Keepers",
+      "gap": "What did its last filter change keep out?",
+      "status": "concept only"
+    },
+    {
+      "id": "root_gate",
+      "name": "Root gate",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Actuate a physical fluid shutter",
+      "evidence": "root linkage and sliding gate",
+      "link": "Keepers",
+      "gap": "Who taught this strain to stop at the old travel mark?",
+      "status": "concept only"
+    },
+    {
+      "id": "seed_archive",
+      "name": "Seed archive",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Keep finite seed stocks organized",
+      "evidence": "small labelled compartments and data card",
+      "link": "Keepers",
+      "gap": "Which seed entry was copied twice?",
+      "status": "concept only"
+    },
+    {
+      "id": "culture_courier",
+      "name": "Culture courier",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Carry a sealed culture tray",
+      "evidence": "stable feet and bounded cargo basket",
+      "link": "Keepers",
+      "gap": "Why is this carrier still following the old route?",
+      "status": "concept only"
+    },
+    {
+      "id": "buffer_trough",
+      "name": "Buffer trough",
+      "sheet": "keepers_garden.png",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Hold a bounded service-fluid reserve",
+      "evidence": "contained basin and level float",
+      "link": "Keepers",
+      "gap": "Which bed was the missing outlet intended to supply?",
+      "status": "concept only"
+    },
+    {
+      "id": "stock_wall",
+      "name": "Stock wall",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Store physical stock in labelled compartments",
+      "evidence": "finite drawers with distinct material labels",
+      "link": "Archivists",
+      "gap": "Why does one tally disagree with the visible stock?",
+      "status": "concept only"
+    },
+    {
+      "id": "request_desk",
+      "name": "Request desk",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Issue recorded stock requests",
+      "evidence": "order card and narrow signal outlet",
+      "link": "Archivists",
+      "gap": "Who placed the last uncollected order?",
+      "status": "concept only"
+    },
+    {
+      "id": "pattern_press",
+      "name": "Pattern press",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Form a part from supplied material using a reusable pattern",
+      "evidence": "template holder, stock bed and output tray",
+      "link": "Archivists",
+      "gap": "Which drawing matches its worn die?",
+      "status": "concept only"
+    },
+    {
+      "id": "signal_bridge",
+      "name": "Signal bridge",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Route control information through compatible modules",
+      "evidence": "notched card modules and supported signal bar",
+      "link": "Archivists",
+      "gap": "Why was one module deliberately removed?",
+      "status": "concept only"
+    },
+    {
+      "id": "field_crate",
+      "name": "Field crate",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Carry finite organized stock and service tools",
+      "evidence": "removable compartment tray and straps",
+      "link": "Archivists",
+      "gap": "Who replaced its oldest corner fitting?",
+      "status": "concept only"
+    },
+    {
+      "id": "paired_couplers",
+      "name": "Paired couplers",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Identify a costed linked interface pair",
+      "evidence": "matching keyed identity tabs and cartridge",
+      "link": "Archivists",
+      "gap": "What did the pair belong to before it was separated?",
+      "status": "concept only"
+    },
+    {
+      "id": "archive_carrier",
+      "name": "Archive carrier",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Move physical cargo to a requested station",
+      "evidence": "visible tray and wheels",
+      "link": "Archivists",
+      "gap": "Why does its route still include a closed office?",
+      "status": "concept only"
+    },
+    {
+      "id": "logic_loom",
+      "name": "Logic loom",
+      "sheet": "archive_logistics.png",
+      "era": "II / Anchor, later repair variants",
+      "purpose": "Arrange a reusable control procedure",
+      "evidence": "removable instruction plates and routing channels",
+      "link": "Archivists",
+      "gap": "Which branch was added in a second hand?",
+      "status": "concept only"
+    },
+    {
+      "id": "right_angle_gearbox",
+      "name": "Right-angle gearbox",
+      "sheet": "founders_drive_train.png",
+      "era": "II / Anchor, repairable by the valley",
+      "purpose": "Route mechanical drive through a supported transmission",
+      "evidence": "open housing, gears and shaft bearings",
+      "link": "Founders",
+      "gap": "Which replacement changed the original routing?",
+      "status": "concept only"
+    },
+    {
+      "id": "transfer_belt",
+      "name": "Transfer belt",
+      "sheet": "founders_drive_train.png",
+      "era": "II / Anchor, repairable by the valley",
+      "purpose": "Move a bounded physical workpiece",
+      "evidence": "rollers, tensioning shoe and visible return",
+      "link": "Founders",
+      "gap": "Which load wore its return roller?",
+      "status": "concept only"
+    },
+    {
+      "id": "ram_press",
+      "name": "Ram press",
+      "sheet": "founders_drive_train.png",
+      "era": "II / Anchor, repairable by the valley",
+      "purpose": "Perform supported forming work",
+      "evidence": "guided ram and removable die bed",
+      "link": "Founders",
+      "gap": "Why was the last die left installed?",
+      "status": "concept only"
+    },
+    {
+      "id": "heated_mixer",
+      "name": "Heated mixer",
+      "sheet": "founders_drive_train.png",
+      "era": "II / Anchor, repairable by the valley",
+      "purpose": "Mix supplied stock at controlled temperature",
+      "evidence": "paddle drive, heat source, drain and exhaust",
+      "link": "Founders",
+      "gap": "Which batch stained the vessel's working edge?",
+      "status": "concept only"
+    },
+    {
+      "id": "tool_deployer",
+      "name": "Tool deployer",
+      "sheet": "founders_drive_train.png",
+      "era": "II / Anchor, repairable by the valley",
+      "purpose": "Apply a replaceable tool to a reachable workpiece",
+      "evidence": "articulated joints, stop and work tray",
+      "link": "Founders",
+      "gap": "What tool fits its empty service socket?",
+      "status": "concept only"
+    },
+    {
+      "id": "cable_transformer",
+      "name": "Cable transformer",
+      "sheet": "founders_drive_train.png",
+      "era": "II / Anchor, repairable by the valley",
+      "purpose": "Change a supplied electrical interface",
+      "evidence": "separate winding groups and ceramic bushings",
+      "link": "Founders",
+      "gap": "Who recorded the replacement winding's rating?",
+      "status": "concept only"
+    },
+    {
+      "id": "observation_lens",
+      "name": "Observation lens",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Inspect an object through an adjustable instrument",
+      "evidence": "flat lens, adjustment and folding stand",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Which observation mark survives on its frame?",
+      "status": "concept only"
+    },
+    {
+      "id": "assay_crucible",
+      "name": "Assay crucible",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Process a supplied sample and retain residue",
+      "evidence": "supported vessel, reagent ampoule and residue cup",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Why was this residue kept separately?",
+      "status": "concept only"
+    },
+    {
+      "id": "infusion_frame",
+      "name": "Infusion frame",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Position a supplied part and routine under a shared process",
+      "evidence": "supported cradle, material trays and card bridge",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Which fixture was replaced with the wrong copy?",
+      "status": "concept only"
+    },
+    {
+      "id": "resonance_cradle",
+      "name": "Resonance cradle",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Maintain an inherited ring at controlled contact points",
+      "evidence": "tuning lever, coolant return and finite-charge index",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Which step is missing from the copied procedure?",
+      "status": "concept only"
+    },
+    {
+      "id": "sky_reader",
+      "name": "Sky reader",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Observe a sky object against a physical timetable",
+      "evidence": "sighting rings and marked plate",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Why is one recorded descent absent from the timetable?",
+      "status": "concept only"
+    },
+    {
+      "id": "rite_slate",
+      "name": "Rite slate",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Preserve and arrange a routine as ordered instructions",
+      "evidence": "movable plates and a fork-shaped route",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Which copied sign began as a wiring instruction?",
+      "status": "concept only"
+    },
+    {
+      "id": "tithe_contact",
+      "name": "Tithe contact",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Provide a bounded contact and stored-charge interface",
+      "evidence": "insulated cuff, blunt contacts and release clasp",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Who added the emergency-release mark?",
+      "status": "concept only"
+    },
+    {
+      "id": "filter_reliquary",
+      "name": "Filter reliquary",
+      "sheet": "rites_of_resonance.png",
+      "era": "post-quench adaptation of II / Anchor apparatus",
+      "purpose": "Keep a replaceable clean-air filter within a preserved rite",
+      "evidence": "service doors, filter cartridge and folded cloth",
+      "link": "Orders of Resonance and Copyists",
+      "gap": "Who last understood the filter-change schedule?",
+      "status": "concept only"
+    }
+  ],
+  "environment": {
+    "file": "arrival_day_exchange.png",
+    "purpose": "Compose garden, manufacturing and Archive exchange into a legible inhabited freight settlement",
+    "era": "Now / valley on inherited Anchor works",
+    "link": "carriage-watchers and the braid timetable",
+    "gap": "Who is still sending the service return?"
+  },
+  "review_notes": [
+    "Final gearbox sheet uses a targeted bevel-gear revision; three-dimensional shaft routing and meshing remain unresolved engineering/modeling work.",
+    "Reference PNGs are not quantized to the 32-colour authoring palette.",
+    "Paired couplers and all other systems depict proposed interfaces, not working simulation.",
+    "Preserve the unsolved manufacture of resonant crystal and the unknown sender of the return."
+  ]
+}

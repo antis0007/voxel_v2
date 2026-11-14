@@ -1,0 +1,52 @@
+{
+  "ramps": {
+    "wood": [
+      "292e35",
+      "3d454d",
+      "535d65"
+    ],
+    "brass": [
+      "774831",
+      "ad7045",
+      "d59b61"
+    ],
+    "ceramic": [
+      "a29878",
+      "ccc2a0",
+      "e4dabb"
+    ],
+    "crystal": [
+      "4d4269",
+      "8f74aa",
+      "c8b3d9"
+    ]
+  },
+  "tiles": {
+    "wood": [
+      0,
+      0,
+      32,
+      128
+    ],
+    "brass": [
+      32,
+      0,
+      32,
+      128
+    ],
+    "ceramic": [
+      64,
+      0,
+      32,
+      64
+    ],
+    "crystal": [
+      96,
+      0,
+      32,
+      64
+    ]
+  },
+  "masks": "R material ID:32 wood,96 brass,160 ceramic,224 crystal; G metal; B emission eligibility",
+  "note": "Emission eligibility is not constant glow. Runtime mask support pending."
+}

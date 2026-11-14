@@ -1,0 +1,25 @@
+// Danger field: one tier (0 calm .. 3 deadly) per spawn spot, read by the
+// habitat table. Tier = distance tier from the realm spawn point plus the
+// biome's hazard, capped at 3. Higher tiers admit spawn rows that set
+// `danger:`, let hostiles rise in daylight on open ground (tier >= day_tier),
+// and raise menace (tougher bodies, better drops).
+(
+    // Metres from the realm spawn point where tiers 1, 2 and 3 begin.
+    ring_m: [350.0, 1200.0, 3000.0],
+    // Tier at which open-ground daylight no longer keeps hostiles away.
+    day_tier: 2,
+    // Extra tiers from the landscape itself, by Biome variant name.
+    biome_hazard: {
+        "VolcanicField": 2,
+        "FungalGrove": 1,
+        "KarstUpland": 1,
+        "LostPlateau": 2,
+        "Badlands": 1,
+        "Desert": 1,
+        "Rainforest": 1,
+        "OvergrownGardens": 1,
+        "CycadMarsh": 1,
+        "LastShore": 2,
+        "Alpine": 1,
+    },
+)

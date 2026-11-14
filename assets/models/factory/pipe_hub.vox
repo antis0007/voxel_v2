@@ -1,39 +1,61 @@
 size 8 8 8
-p H 6c7a84 0.0
 p M 4a565e 0.0
+p H 7d8b94 0.0
+p D 2e363c 0.0
+p S 000000 0.0
+p L 000000 0.6
+p B a8b4ba 0.0
+y 1
+........
+........
+..DDDD..
+..DDDD..
+..DDDD..
+..DDDD..
+........
+........
 y 2
 ........
-........
 ..MMMM..
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
 ..MMMM..
-..MMMM..
-..MMMM..
-........
 ........
 y 3
 ........
-........
 ..MMMM..
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
 ..MMMM..
-..MMMM..
-..MMMM..
-........
 ........
 y 4
 ........
-........
 ..MMMM..
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
 ..MMMM..
-..MMMM..
-..MMMM..
-........
 ........
 y 5
 ........
+..MMMM..
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
+.MMMMMM.
+..MMMM..
+........
+y 6
+........
 ........
 ..HHHH..
-..HHHH..
-..HHHH..
+..HLLH..
+..HLLH..
 ..HHHH..
 ........
 ........

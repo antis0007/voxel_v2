@@ -106,29 +106,31 @@ d 60606c
 ................
 end
 
-sprite 4 plant_fibre
-a 684e28
-b 9c7842
-c c6a264
-d e8d096
-e 50381e
-f 78562e
-................
-................
-....oooooooo....
-..oodcdcdcdcoo..
-.odcbcoooocbcbo.
-.ocboo....oobco.
-odco........ocbo
-ocbo........obco
-odbo........ocbo
-.ocboo....oobcao
-.obcbcoooocbcbao
-..oobcbcbcbcaoo.
-....ooaaaaoeffo.
-..........ofcbo.
-...........oooo.
-................
+sprite 4 lumen_fibre
+a 1d5458
+b 2f9890
+c 5cd8c4
+d b8fbe8
+e f4fff8
+f 8a62a8
+h 5a3c74
+g 7af0dc
+..............g.
+......oooooo....
+g...oocddcbbo...
+...odcddbcdcco..
+..oddddccccaaao.
+.oddddbcddcccbao
+ofhdcooooobbaabo
+ofhdbo...obccaao
+ofhccbo...oaaaao
+ofhbbaaoooabaao.
+ofhcbcbaaaabao..
+.ohbbbbaababo...
+..obcbaabaao...g
+...oooaaoooooo..
+......oo..ocdeo.
+..g........ooo..
 end
 
 sprite 5 crystal_shards
@@ -293,53 +295,58 @@ oooooooooooooooo
 end
 
 sprite 12 circuit_board
-a 22361e
-b 3e5c30
-c 5c7e42
-d 82a05a
-f deb660
-g 1a1a1e
-h 46464e
+a 1e4a2a
+b 2e6a3a
+c 4a8e52
+d 7ab878
+h c8803a
+i 3a3a44
+j 5e5e6a
+g f0c860
+................
 ................
 .oooooooooooooo.
-.odddddddddddco.
-.odbfffbbbfbbao.
-.ocbfbbbbbfbbao.
-.ocbfbogggobbao.
-.ocbffohggoffao.
-.ocbbbogggobfao.
-.ocbbbogggobfao.
-.ocbfffooobbfao.
-.ocbfbbbbbbbfao.
-.ocbfbbbfffffao.
-.ocaaaaaaaaaaao.
+.odccccccccccbo.
+.ocbbhbbbbbhbbo.
+.ochhhoooohbhbo.
+.ocbbhoiijobhbo.
+.ochhhoijjohhho.
+.ocbbbooooobbbo.
+.ocbhbbbhhhbbao.
+.ochhhbbhbbhbao.
+.ocbbbbbbbbbbao.
+.oaggaggaggaggo.
 .oooooooooooooo.
 ................
 ................
 end
 
 sprite 13 biomass
-a 243e1c
-b 40642a
-c 668e3c
-d 96b85a
-e 5a3c22
-f 825c34
+a 3a2234
+b 62385a
+c 8e5a7c
+d c08aa4
+e 6e3e2a
+f a8643a
+g dc9a58
+i cfc2a6
+j efe6cc
+k 8ae0b0
 ................
-................
-......ooo.......
-...oo.odco.oo...
-..odcoocbcoodco.
-..ocbbocbbocbbo.
-.oodcbbbfbbdcbo.
-.odccbbffbbccbao
-.ocbbbfebbbbbbao
-.obbdcfbbdcbbaao
-..obcbfebcbbaao.
-..oabbeabbbaao..
-...oaafeaaaoo...
-....oo.eo.oo....
-.......oo.......
+........ooooo...
+.......ogggfeo..
+...ooo.oggffeo..
+..oggfogfefefeo.
+.oggffeooojooo..
+.ofefefoooio....
+..oojoogfoio....
+...oiogefeio....
+...oidddjddoo...
+..odddddicckco..
+.odkddddcdccbao.
+odddddkccbbcbkbo
+odddddccckcbabao
+.oooooooooooooo.
 ................
 end
 
@@ -445,30 +452,27 @@ j 1e1c24
 end
 
 sprite 18 wild_essence
-a 2e4a22
-b 507234
-c 78984a
-e 4c301c
-f 7a522e
-g a07446
-h 3c5034
-i 627a4a
-j 8ca064
+a 1e4e26
+b 3a8a2e
+c 7cc84a
+d c8f07a
+e fffbd0
+f a8e070
 ................
-................
-......ooo.......
-....oofgfoo.....
-...ofooiijoofo..
-..ofohiiiijjofo.
-..ofhhiiiiijhfo.
-.ocfhhhiiiiihfo.
-.obfhfffhiiihfo.
-.obofhhhfffhhfbo
-..obofhhhhhhfcbo
-..obbooffffoocao
-...ooaaoggooaao.
-.......ofgo.....
-........oo......
+.......oo...f...
+......obbo......
+......oaao......
+..f..occbao.....
+.....oddcbo.....
+....ocecccao.f..
+...ocbebbcbao...
+...obdbeecbao...
+..obbceeeeaaao..
+..obbcceeaaaao..
+...oaccaaaaao...
+...oabcbaaaao...
+...foobbbaoo....
+......oooo......
 ................
 end
 
@@ -548,5 +552,78 @@ i d6e6ea
 ...oabbbbbaao...
 ....oooooooo....
 ................
+................
+end
+
+sprite 22 gold_concentrate
+a 764d22
+b d0902f
+c f4cf59
+d fff2ac
+................
+................
+................
+.......oo.......
+......ocao......
+....oo.oo..oo...
+...obco...odao..
+....oo..oo.oo...
+.......obco.....
+..oo....oo..oo..
+.obco......ocao.
+..oo..oo....oo..
+.....odao.......
+......oo........
+................
+................
+end
+
+sprite 23 gold_ingot
+a 926022
+b c99224
+c f0c24f
+d ffe88b
+................
+................
+................
+................
+.....oooooooo...
+....occccccco...
+...ocddddddcbo..
+..ocddddddcbbo..
+.ocddddddcbbbo..
+.obcccccbbbaao..
+.obbbbbbbbaao...
+..oaaaaaaaao....
+...oooooooo.....
+................
+................
+................
+end
+
+sprite 24 feathers
+a 8a6a48
+b b8966a
+c dcc49c
+d f6ecd4
+e fff8e6
+f a08060
+g 5e4430
+h 8a6440
+................
+.........ooooo..
+.......ooccceeo.
+......ohccheeao.
+.....ococdeebo..
+....ohccheebgo..
+....ohcdeebao...
+...occdeebggo...
+...ocdeebaao....
+...oceegoao.....
+...oeebaao......
+..ofeggoo.......
+.offooo.........
+.ofo............
+..o.............
 ................
 end

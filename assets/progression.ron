@@ -24,6 +24,30 @@
             max: 250,
         ),
         (
+            item: Tool(12),
+            max: 59,
+        ),
+        (
+            item: Tool(13),
+            max: 131,
+        ),
+        (
+            item: Tool(14),
+            max: 250,
+        ),
+        (
+            item: Tool(15),
+            max: 59,
+        ),
+        (
+            item: Tool(16),
+            max: 131,
+        ),
+        (
+            item: Tool(17),
+            max: 250,
+        ),
+        (
             item: Weapon(1),
             max: 200,
         ),
@@ -56,6 +80,10 @@
         (
             tier: Lumen,
             max: 200,
+        ),
+        (
+            tier: Kinetic,
+            max: 300,
         ),
     ],
     mined_xp: [

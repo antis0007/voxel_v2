@@ -1,0 +1,50 @@
+{
+  "status": "Concept art, inspected; not production assets or user-approved",
+  "reading": {
+    "full": [
+      "01_GAME_DESIGN_BIBLE.md",
+      "03_ART_CONTENT_AND_WORLDGEN.md",
+      "Axiom_Magitech_Art_Production_Prompt_Pack_2026-10-26(1).md",
+      "05_CODING_AGENT_STARTER_PROMPT.md"
+    ],
+    "focused": [
+      "02_ENGINE_ARCHITECTURE.md: asset materials and lighting",
+      "04_IMPLEMENTATION_AND_VERIFICATION.md: visual acceptance, ownership, status vocabulary",
+      "06_REFERENCE_CONTRACTS_AND_SCENARIOS.md: material/port examples, procedural places, scenarios",
+      "UNDERKINGDOM_COMBINED_SPEC.md: provenance and precedence; a compilation of the separate authoritative sections"
+    ]
+  },
+  "corrections": [
+    {
+      "source": "01 sections 3, 6, 8",
+      "finding": "Engineer, Chorister and Founder traditions; branching capability graph. Earlier WORLD_LORE semiconductor sequence is not universal wand progression.",
+      "action": "Six designs arranged in three cultural lineages; no shared crystal-wire assembly formula."
+    },
+    {
+      "source": "03 sections 1-3; prompt pack sections 1, 2C-D, 6",
+      "finding": "Material depth comes from intentional hue-shifted ramps and clustered features. Grain, ceramic glaze, metal facets and crystal planes differ. Cracks indicate damage.",
+      "action": "Local cleanup of crack networks while retaining depth, texture and selected wear."
+    },
+    {
+      "source": "03 section 3",
+      "finding": "Twelve families and five lineages; quiet inactive objects and distinct negative spaces. Inventory icons and held meshes are different production views.",
+      "action": "Do not treat coarse v8-v11 sheets or smooth v7 sheet as accepted style. Keep civic_salvage_user_reference.png as user-liked anchor."
+    }
+  ],
+  "assessment": {
+    "promising": [
+      "Witness: slim asymmetrical open silhouette and integrated wood/steel grip",
+      "Listening reed: distinctive open curve with spare color accent",
+      "Offset prism: coherent monolithic Founder construction"
+    ],
+    "hold": [
+      "Scribe still reads partly as a knife; shorten nib before further development",
+      "Grave reed preserves overly cracked blue shell and has a generic bell shape",
+      "Folded memory has good material contrast but risks reading as a bent crowbar"
+    ],
+    "cleanup": "Partial improvement: blackglass and amber have fewer crack networks; purple wood and blue bell still need targeted authored cleanup.",
+    "remaining": "Actual 3-6 tone palette counts, texel alignment, thumbnail readability, grip/emitters and native lighting are not validated by generated concepts."
+  },
+  "generator": "Built-in image_gen",
+  "scope": "Only versioned concept images, exact prompts and this audit; no runtime modifications."
+}

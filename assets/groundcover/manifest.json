@@ -1,0 +1,127 @@
+{
+  "blender": "5.0.1",
+  "source": "C:\\dev\\voxel_v2_backup\\assets\\groundcover\\groundcover.blend",
+  "assets": [
+    {
+      "name": "grass_0_lod0",
+      "vertices": 96,
+      "triangles": 96,
+      "two_sided": true
+    },
+    {
+      "name": "grass_0_lod1",
+      "vertices": 64,
+      "triangles": 64,
+      "two_sided": true
+    },
+    {
+      "name": "grass_1_lod0",
+      "vertices": 96,
+      "triangles": 96,
+      "two_sided": true
+    },
+    {
+      "name": "grass_1_lod1",
+      "vertices": 64,
+      "triangles": 64,
+      "two_sided": true
+    },
+    {
+      "name": "clover_0_lod0",
+      "vertices": 176,
+      "triangles": 224,
+      "two_sided": true
+    },
+    {
+      "name": "clover_0_lod1",
+      "vertices": 72,
+      "triangles": 108,
+      "two_sided": true
+    },
+    {
+      "name": "clover_1_lod0",
+      "vertices": 176,
+      "triangles": 224,
+      "two_sided": true
+    },
+    {
+      "name": "clover_1_lod1",
+      "vertices": 72,
+      "triangles": 108,
+      "two_sided": true
+    },
+    {
+      "name": "flower_0_lod0",
+      "vertices": 100,
+      "triangles": 108,
+      "two_sided": true
+    },
+    {
+      "name": "flower_0_lod1",
+      "vertices": 82,
+      "triangles": 96,
+      "two_sided": true
+    },
+    {
+      "name": "flower_1_lod0",
+      "vertices": 200,
+      "triangles": 216,
+      "two_sided": true
+    },
+    {
+      "name": "flower_1_lod1",
+      "vertices": 164,
+      "triangles": 192,
+      "two_sided": true
+    },
+    {
+      "name": "fern_0_lod0",
+      "vertices": 332,
+      "triangles": 360,
+      "two_sided": true
+    },
+    {
+      "name": "fern_0_lod1",
+      "vertices": 188,
+      "triangles": 200,
+      "two_sided": true
+    },
+    {
+      "name": "fern_1_lod0",
+      "vertices": 332,
+      "triangles": 360,
+      "two_sided": true
+    },
+    {
+      "name": "fern_1_lod1",
+      "vertices": 188,
+      "triangles": 200,
+      "two_sided": true
+    },
+    {
+      "name": "mushroom_0_lod0",
+      "vertices": 408,
+      "triangles": 216,
+      "two_sided": false
+    },
+    {
+      "name": "mushroom_0_lod1",
+      "vertices": 216,
+      "triangles": 112,
+      "two_sided": false
+    },
+    {
+      "name": "mushroom_1_lod0",
+      "vertices": 408,
+      "triangles": 216,
+      "two_sided": false
+    },
+    {
+      "name": "mushroom_1_lod1",
+      "vertices": 216,
+      "triangles": 112,
+      "two_sided": false
+    }
+  ],
+  "sha256": "2e07eac6a79db1d07814150377f55ca47086fc1e734ea313d2426e9d706cb0f1"
+}

@@ -1,0 +1,38 @@
+{
+  "generator": "built-in imagegen",
+  "concept_sheets": [
+    {
+      "file": "field_instruments.png",
+      "width": 1159,
+      "height": 1358,
+      "sha256": "A90E27F33621BFBBBDECB7BD30A5F3E0E3FB24F8E5AE720959B912075904AA64"
+    },
+    {
+      "file": "fabrication.png",
+      "width": 1159,
+      "height": 1358,
+      "sha256": "12B1A97EB144D7034BD85AB9A532BF9E25788CA06C2453B1199EA00D414C0D83"
+    },
+    {
+      "file": "maintenance_hall.png",
+      "width": 1536,
+      "height": 1024,
+      "sha256": "AA5639FE8F8F32DC6923F98A6C5D88DBCCB7608BA1B82092ABBF84FB46422174"
+    },
+    {
+      "file": "return_cargo.png",
+      "width": 1159,
+      "height": 1358,
+      "sha256": "FEC7847CF2C0B071B26541BC8FFEDB35EECC9DA8C7DCB8328D742FD5C66305CF"
+    }
+  ],
+  "palette_colors": 32,
+  "gpl_colors": 32,
+  "new_object_concepts": 24,
+  "prompts": [
+    "fabrication.prompt.txt",
+    "field_instruments.prompt.txt",
+    "maintenance_hall.prompt.txt",
+    "return_cargo.prompt.txt"
+  ]
+}

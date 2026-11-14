@@ -1,0 +1,11 @@
+{
+  "status": "Review-only correction, not final hand art or animation acceptance",
+  "source": "hand_continuity.blend",
+  "source_script": "tools/blender/refine_hand_continuity.py",
+  "runtime_scope": "Only benchmark-selected ecosystem review items; normal gameplay kit unchanged",
+  "changes": ["Palm depth increased 50 percent", "Finger cross-sections increased 12 percent", "Sleeve and cuff cross-sections increased 20 percent", "Exposed wrist weighted wholly to Wrist", "Review forearm turn and stretch distributed from cuff to elbow instead of applied as one rigid hinge"],
+  "rejected_attempt": "Whole-forearm bend/stretch clamp left cut sleeve end visible in inspection; replaced with distributed deformation",
+  "evidence": ["target/artificer-20261025/hand-continuity-inspect-v2/camera.png", "target/artificer-20261025/hand-continuity-motion-v2/"],
+  "verification": "Local release-fast build succeeded; native inspect and 25 captured motion frames produced; nine inherited clips loaded",
+  "remaining": ["Finger silhouettes still too parallel", "Long inspection sleeve remains prominent", "No newly authored dynamic casting clips", "Distributed deformation normal approximation and CPU cost need further review", "No performance or final visual acceptance claim"]
+}

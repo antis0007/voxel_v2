@@ -1,0 +1,20 @@
+(
+    roots: [(-6, 1, 7), (-2, 1, 8)],
+    saplings: 4,
+    log_target: 12,
+    residents: 12,
+    extra_beds: [
+        (at: (-11, 1, -11), crop: CarrotCrop), (at: (-9, 1, -11), crop: BeetCrop),
+        (at: (-7, 1, -11), crop: CarrotCrop), (at: (-5, 1, -11), crop: BeetCrop),
+        (at: (-3, 1, -11), crop: CarrotCrop), (at: (-1, 1, -11), crop: BeetCrop),
+        (at: (-11, 1, -9), crop: BeetCrop), (at: (-9, 1, -9), crop: CarrotCrop),
+        (at: (-7, 1, -9), crop: BeetCrop), (at: (-5, 1, -9), crop: CarrotCrop),
+        (at: (-3, 1, -9), crop: BeetCrop), (at: (-1, 1, -9), crop: CarrotCrop),
+        (at: (-11, 1, -7), crop: CarrotCrop), (at: (-9, 1, -7), crop: BeetCrop),
+        (at: (-7, 1, -7), crop: CarrotCrop), (at: (-5, 1, -7), crop: BeetCrop),
+        (at: (-3, 1, -7), crop: CarrotCrop), (at: (-1, 1, -7), crop: BeetCrop),
+        (at: (-11, 1, 3), crop: BeetCrop), (at: (-9, 1, 3), crop: CarrotCrop),
+        (at: (-7, 1, 3), crop: BeetCrop), (at: (-5, 1, 3), crop: CarrotCrop),
+        (at: (-3, 1, 3), crop: BeetCrop), (at: (-1, 1, 3), crop: CarrotCrop),
+    ],
+)

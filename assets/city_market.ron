@@ -1,0 +1,2 @@
+// One inventory unit of iron buys one log. Both sides retain physical stock.
+(goods: Block(Log), payment: Resource(8))

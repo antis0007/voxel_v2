@@ -103,6 +103,15 @@
                 ),
             ],
             modifier_slots: 3,
+            capabilities: (
+                mining: Some((
+                    class: Dig,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "hammer",
@@ -150,6 +159,15 @@
                 ),
             ],
             modifier_slots: 2,
+            capabilities: (
+                mining: Some((
+                    class: Dig,
+                    charged: true,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "axe",
@@ -187,6 +205,15 @@
                 ),
             ],
             modifier_slots: 3,
+            capabilities: (
+                mining: Some((
+                    class: Cut,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: true,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "shovel",
@@ -224,6 +251,15 @@
                 ),
             ],
             modifier_slots: 3,
+            capabilities: (
+                mining: Some((
+                    class: Scoop,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "excavator",
@@ -271,6 +307,15 @@
                 ),
             ],
             modifier_slots: 2,
+            capabilities: (
+                mining: Some((
+                    class: Scoop,
+                    charged: true,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "scythe",
@@ -318,6 +363,15 @@
                 ),
             ],
             modifier_slots: 2,
+            capabilities: (
+                mining: Some((
+                    class: Cut,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "sword",
@@ -355,6 +409,15 @@
                 ),
             ],
             modifier_slots: 3,
+            capabilities: (
+                mining: Some((
+                    class: Cut,
+                    charged: false,
+                    cuts_bamboo: true,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "dagger",
@@ -392,6 +455,15 @@
                 ),
             ],
             modifier_slots: 2,
+            capabilities: (
+                mining: Some((
+                    class: Cut,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "broadsword",
@@ -439,6 +511,15 @@
                 ),
             ],
             modifier_slots: 2,
+            capabilities: (
+                mining: Some((
+                    class: Cut,
+                    charged: false,
+                    cuts_bamboo: true,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "cleaver",
@@ -486,6 +567,15 @@
                 ),
             ],
             modifier_slots: 2,
+            capabilities: (
+                mining: Some((
+                    class: Cut,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "shortbow",
@@ -523,6 +613,15 @@
                 ),
             ],
             modifier_slots: 2,
+            capabilities: (
+                mining: Some((
+                    class: Dig,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
         ),
         (
             id: "longbow",
@@ -560,6 +659,61 @@
                 ),
             ],
             modifier_slots: 3,
+            capabilities: (
+                mining: Some((
+                    class: Dig,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: false,
+            ),
+        ),
+        (
+            id: "shield",
+            display_name: "Shield",
+            parts: [
+                (
+                    kind: "large_plate",
+                    weights: (
+                        durability: 1.5,
+                        mining_speed: 0.0,
+                        attack: 0.5,
+                        mining_level: true,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "binding",
+                    weights: (
+                        durability: 0.25,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: false,
+                    ),
+                ),
+                (
+                    kind: "handle",
+                    weights: (
+                        durability: 0.0,
+                        mining_speed: 0.0,
+                        attack: 0.0,
+                        mining_level: false,
+                        handle: true,
+                    ),
+                ),
+            ],
+            modifier_slots: 3,
+            capabilities: (
+                mining: Some((
+                    class: Dig,
+                    charged: false,
+                    cuts_bamboo: false,
+                    fells_trees: false,
+                )),
+                blocking: true,
+            ),
         ),
     ],
     progression: (

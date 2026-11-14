@@ -1,0 +1,29 @@
+// Grimoire bindings made at an Enchanting Table on a held tier III wand.
+// Read by crates/app/src/world/adventure/enchanting.rs.
+// `mode` is the wand loadout mode written into saves: never renumber a row,
+// and wands.rs::is_grimoire must list every mode used here.
+(
+    // XP and items every binding costs.
+    xp: 24,
+    crystals: 2,
+    // Resource id of the crystal item.
+    crystal_resource: 5,
+    bindings: [
+        (
+            mode: 4,
+            name: "Reservoir Binding",
+            grimoire: "Reservoir Grimoire",
+            effect: "+25% mana capacity",
+            mana_capacity: 1.25,
+            upkeep: 1.0,
+        ),
+        (
+            mode: 5,
+            name: "Focus Binding",
+            grimoire: "Focus Grimoire",
+            effect: "−25% concentration upkeep",
+            mana_capacity: 1.0,
+            upkeep: 0.75,
+        ),
+    ],
+)

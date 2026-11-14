@@ -27,4 +27,5 @@
     (cue: "Splash", text: "Splash"),
     (cue: "Mine", text: "Block Broken"),
     (cue: "Smelt", text: "Smelting"),
+    (cue: "Bleat", text: "Animal Call"),
 ]

@@ -1,9 +1,17 @@
 // Brewing stand rows. A stand next to a water block turns one `base` and one `modifier`
 // into `count` potions (inventory::FoodKind) after `seconds` of fixed steps.
-// Potion effects are the potion's row in foods.ron. `cargo test brewing_ron_round_trips` checks the format.
+// Potion effects are the potion's row in foods.ron. `found` rows stock caches the first
+// time one opens: `found_chance` of caches hold one row picked by `weight`.
+// `cargo test brewing_ron_round_trips` checks the format.
 (
     seconds: 20.0,
     recipes: [
+        (
+            base: Resource(18),
+            modifier: Block(AmberCap),
+            output: FireResistancePotion,
+            count: 3,
+        ),
         (
             base: Resource(18),
             modifier: Resource(13),
@@ -27,6 +35,73 @@
             modifier: Resource(3),
             output: FireResistancePotion,
             count: 3,
+        ),
+        (
+            base: Resource(18),
+            modifier: Resource(21),
+            output: HealingPotion,
+            count: 3,
+        ),
+        (
+            base: Resource(18),
+            modifier: Resource(11),
+            output: ResistancePotion,
+            count: 3,
+        ),
+        (
+            base: Resource(18),
+            modifier: Resource(16),
+            output: LeapingPotion,
+            count: 3,
+        ),
+        (
+            base: Resource(18),
+            modifier: Resource(9),
+            output: HastePotion,
+            count: 3,
+        ),
+    ],
+    found_chance: 0.4,
+    found: [
+        (
+            output: HealingPotion,
+            weight: 4,
+            count: 2,
+        ),
+        (
+            output: RegenerationPotion,
+            weight: 3,
+            count: 1,
+        ),
+        (
+            output: ResistancePotion,
+            weight: 2,
+            count: 1,
+        ),
+        (
+            output: FireResistancePotion,
+            weight: 2,
+            count: 1,
+        ),
+        (
+            output: SpeedPotion,
+            weight: 1,
+            count: 1,
+        ),
+        (
+            output: LeapingPotion,
+            weight: 1,
+            count: 1,
+        ),
+        (
+            output: HastePotion,
+            weight: 1,
+            count: 1,
+        ),
+        (
+            output: StrengthPotion,
+            weight: 1,
+            count: 1,
         ),
     ],
 )

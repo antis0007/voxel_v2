@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-26",
+  "status": "Native PNG prototype and articulated avatar gallery verified; multiplayer transport not verified",
+  "findings": [
+    "Old remote avatar used seven flat-colored boxes with no gait or head pitch.",
+    "Remote yaw snapped while only position interpolated.",
+    "Held wand was fixed and did not reflect selected parts or found-item seed.",
+    "Editor preview, inventory and dropped item depicted different wand designs.",
+    "Native hand proportions and cuff join require separate rig refinement."
+  ],
+  "implemented": [
+    "PNG alpha sampled onto 32x128 logical grid and extruded 24mm with closed boundaries; cached parts.",
+    "Three focus, shaft and grip families produce 27 assemblies.",
+    "Held wand, editor preview, icons and drops share source and part selection.",
+    "Wand muzzle follows selected focus.",
+    "Remote avatar has joint-local face, hair, tunic, cuffs, belt, pouch and boots.",
+    "Displayed movement drives opposing gait; shortest-arc yaw smoothing and pitch interpolation."
+  ],
+  "source": "source.png",
+  "prompt": "source.prompt.txt",
+  "image_tool": "Built-in image_gen",
+  "contract": {
+    "source_size": [
+      1536,
+      1024
+    ],
+    "shaft_axes": [
+      480,
+      780,
+      1100
+    ],
+    "source_y": [
+      20,
+      990
+    ],
+    "logical_size": [
+      32,
+      128
+    ],
+    "sections": [
+      [
+        0,
+        48
+      ],
+      [
+        48,
+        87
+      ],
+      [
+        87,
+        128
+      ]
+    ],
+    "alpha_threshold": 192,
+    "pixel_metres": 0.004,
+    "thickness_metres": 0.024
+  },
+  "evidence": [
+    "target/artificer-20261025/png-modular-r3/camera.png",
+    "target/png-wand-build-r3.log",
+    "target/png-wand-build-r4.log",
+    "target/artificer-20261025/png-modular-r4-mixed/camera.png",
+    "target/artificer-20261025/hand-v5-r4-idle/camera.png",
+    "target/artificer-20261025/hand-v5-r4-inspect/camera.png",
+    "target/artificer-20261025/hand-v5-r4-underground/camera.png",
+    "assets/source/wand_ecosystem/hand_v5/native-review.json"
+  ],
+  "limits": [
+    "Gallery exercises shared remote renderer locally; it is not a two-client session.",
+    "Multiplayer feature check encountered unrelated serialization failures in concurrently edited world state.",
+    "Source wood remains overly dark and contrast-heavy in daylight.",
+    "PNG extrusion is a shallow 2.5D item, not a fully sculpted Blender model.",
+    "Avatar uses authored color patches; customizable pixel skin textures are not implemented.",
+    "No tests run, as requested.",
+    "Final editor changes compile; atelier interaction and dropped pickup were not exercised in native UI.",
+    "Coordinated hand_v5 idle, inspection and underground stills visually reviewed: cuff opening resolved. Motion capture incomplete due to full disk; locomotion and sustained casting remain unverified."
+  ]
+}

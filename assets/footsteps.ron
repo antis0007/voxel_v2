@@ -44,6 +44,7 @@
         Fabricator: Metal,
         Cultivator: Metal,
         MiningDrill: Metal,
+        Quarry: Metal,
         WaterPump: Metal,
         FluidPipe: Metal,
         WaterTank: Metal,

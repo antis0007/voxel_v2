@@ -42,6 +42,123 @@
             ),
             uses: 4,
         ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 6,
+                ),
+            ],
+            get: (
+                item: Block(WheatCrop),
+                count: 4,
+            ),
+            uses: 6,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 6,
+                ),
+            ],
+            get: (
+                item: Block(CarrotCrop),
+                count: 3,
+            ),
+            uses: 6,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 6,
+                ),
+            ],
+            get: (
+                item: Block(BeetCrop),
+                count: 3,
+            ),
+            uses: 6,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 6,
+                ),
+            ],
+            get: (
+                item: Block(RiceCrop),
+                count: 3,
+            ),
+            uses: 4,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 8,
+                ),
+            ],
+            get: (
+                item: Block(CocoaPod),
+                count: 2,
+            ),
+            uses: 4,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 8,
+                ),
+            ],
+            get: (
+                item: Block(Grapes),
+                count: 2,
+            ),
+            uses: 4,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 10,
+                ),
+            ],
+            get: (
+                item: Block(Cherry),
+                count: 1,
+            ),
+            uses: 3,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 10,
+                ),
+            ],
+            get: (
+                item: Block(Fig),
+                count: 1,
+            ),
+            uses: 3,
+        ),
+        (
+            give: [
+                (
+                    item: Resource(13),
+                    count: 6,
+                ),
+            ],
+            get: (
+                item: Block(MangrovePropagule),
+                count: 1,
+            ),
+            uses: 3,
+        ),
     ],
     [
         (

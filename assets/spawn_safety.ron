@@ -1,0 +1,8 @@
+// Quiet ground around where a player starts. Wild hostiles that rise by night
+// or from underground (night spawns, burrowers) never stand inside radius_m of
+// the world spawn or the respawn point while the adventure clock is younger
+// than grace_s (one in-game day = 480 s). Bodies already inside are removed.
+(
+    radius_m: 64.0,
+    grace_s: 480.0,
+)

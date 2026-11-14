@@ -1,0 +1,155 @@
+// Advancement tree: `parent` names another row's `id`; children follow their parent.
+// Stat amounts use the stored unit: centimetres for distance, milliseconds for play time.
+// `cargo test advancements_ron_round_trips` checks the format. Never rename a shipped `id`.
+[
+    (
+        id: "mine_block",
+        name: "First Block",
+        parent: None,
+        trigger: Stat(Mined, 1),
+    ),
+    (
+        id: "mine_1000",
+        name: "1,000 Blocks Mined",
+        parent: Some("mine_block"),
+        trigger: Stat(Mined, 1000),
+    ),
+    (
+        id: "place_block",
+        name: "First Placement",
+        parent: Some("mine_block"),
+        trigger: Stat(Placed, 1),
+    ),
+    (
+        id: "place_1000",
+        name: "1,000 Blocks Placed",
+        parent: Some("place_block"),
+        trigger: Stat(Placed, 1000),
+    ),
+    (
+        id: "craft_item",
+        name: "First Craft",
+        parent: Some("mine_block"),
+        trigger: Stat(Crafted, 1),
+    ),
+    (
+        id: "craft_100",
+        name: "100 Items Crafted",
+        parent: Some("craft_item"),
+        trigger: Stat(Crafted, 100),
+    ),
+    (
+        id: "first_kill",
+        name: "First Kill",
+        parent: None,
+        trigger: Stat(Kills, 1),
+    ),
+    (
+        id: "kills_50",
+        name: "50 Kills",
+        parent: Some("first_kill"),
+        trigger: Stat(Kills, 50),
+    ),
+    (
+        id: "first_death",
+        name: "First Death",
+        parent: None,
+        trigger: Stat(Deaths, 1),
+    ),
+    (
+        id: "level_5",
+        name: "Level 5",
+        parent: None,
+        trigger: Level(5),
+    ),
+    (
+        id: "level_15",
+        name: "Level 15",
+        parent: Some("level_5"),
+        trigger: Level(15),
+    ),
+    (
+        id: "level_30",
+        name: "Level 30",
+        parent: Some("level_15"),
+        trigger: Level(30),
+    ),
+    (
+        id: "walk_1km",
+        name: "1 km Walked",
+        parent: None,
+        trigger: Stat(Walked, 100000),
+    ),
+    (
+        id: "walk_10km",
+        name: "10 km Walked",
+        parent: Some("walk_1km"),
+        trigger: Stat(Walked, 1000000),
+    ),
+    (
+        id: "places_3",
+        name: "3 Places Discovered",
+        parent: Some("walk_1km"),
+        trigger: Stat(Places, 3),
+    ),
+    (
+        id: "places_8",
+        name: "8 Places Discovered",
+        parent: Some("places_3"),
+        trigger: Stat(Places, 8),
+    ),
+    (
+        id: "places_15",
+        name: "15 Places Discovered",
+        parent: Some("places_8"),
+        trigger: Stat(Places, 15),
+    ),
+    (
+        id: "swim_100m",
+        name: "100 m Swum",
+        parent: Some("walk_1km"),
+        trigger: Stat(Swum, 10000),
+    ),
+    (
+        id: "fly_1km",
+        name: "1 km Flown",
+        parent: Some("walk_1km"),
+        trigger: Stat(Flown, 100000),
+    ),
+    (
+        id: "play_1h",
+        name: "1 h Played",
+        parent: None,
+        trigger: Stat(PlayTime, 3600000),
+    ),
+    (
+        id: "first_study",
+        name: "First Study",
+        parent: None,
+        trigger: Stat(Studies, 1),
+    ),
+    (
+        id: "cross_discipline",
+        name: "Cross-Discipline Scholar",
+        parent: Some("first_study"),
+        trigger: Stat(Studies, 4),
+    ),
+    (
+        id: "field_scholar",
+        name: "Field Scholar",
+        parent: Some("cross_discipline"),
+        trigger: Stat(Studies, 8),
+    ),
+    (
+        id: "first_research",
+        name: "Applied Research",
+        parent: Some("first_study"),
+        trigger: Stat(Research, 1),
+    ),
+    (
+        id: "research_25",
+        name: "Research Workshop",
+        parent: Some("first_research"),
+        trigger: Stat(Research, 25),
+    ),
+]

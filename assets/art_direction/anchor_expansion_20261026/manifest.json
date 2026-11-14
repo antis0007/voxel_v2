@@ -1,0 +1,290 @@
+{
+  "title": "Axiom Anchor art expansion",
+  "date": "2026-10-26",
+  "status": "Concept art and authoring palette; no gameplay or engine implementation claimed",
+  "generated_with": "Built-in imagegen",
+  "palette": "palette.json",
+  "palette_import": "anchor32.gpl",
+  "lore_source": "docs/design/WORLD_LORE.md",
+  "lore_scope": "All object designs and manufacturing attributions are proposed visual interpretations. Existing lore motifs are preserved; no new world fact is established.",
+  "sheets": [
+    "field_instruments.png",
+    "fabrication.png",
+    "maintenance_hall.png",
+    "return_cargo.png"
+  ],
+  "production_constraints": [
+    "Use shared material ramps and connected clusters",
+    "Preserve readable function and silhouette before fine detail",
+    "Power, signal, fluid and card interfaces differ in shape",
+    "Show heat paths, service access and real support",
+    "Emission is sparse and tied to actual state after implementation",
+    "Do not reveal the ninth office, Surveyors or sender of the return"
+  ],
+  "objects": [
+    {
+      "id": "card_reader",
+      "name": "Card reader",
+      "era": "II / Anchor",
+      "purpose": "Read crystal routine cards",
+      "link": "Artificers",
+      "evidence": "notched card socket",
+      "gap": "Which card formats can this socket still read?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "field_meter",
+      "name": "Field meter",
+      "era": "II / Anchor",
+      "purpose": "Measure an electrical field connection",
+      "link": "Watch",
+      "evidence": "paired probes and scale",
+      "gap": "Who last recalibrated its scale?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "crystal_receiver",
+      "name": "Crystal receiver",
+      "era": "Now / valley",
+      "purpose": "Recover basic radio reception",
+      "link": "Watch",
+      "evidence": "cat's-whisker contact",
+      "gap": "Which timetable is it listening for?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "braid_gauge",
+      "name": "Braid gauge",
+      "era": "II / Anchor",
+      "purpose": "Measure a tether strand's tension",
+      "link": "Choir",
+      "evidence": "taut filament and sliding shoe",
+      "gap": "Which strand failed its last tolerance check?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "fab_stylus",
+      "name": "Fab stylus",
+      "era": "II / Anchor",
+      "purpose": "Place or inspect a small fabrication feature",
+      "link": "Artificers",
+      "evidence": "ceramic optical nose",
+      "gap": "Which process was this tip made to service?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "quench_clamp",
+      "name": "Quench clamp",
+      "era": "II / Anchor",
+      "purpose": "Isolate a hot or charged component",
+      "link": "Founders",
+      "evidence": "insulated opposing jaws",
+      "gap": "Which emergency procedure wore the handles?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "survey_level",
+      "name": "Survey level",
+      "era": "II / Anchor",
+      "purpose": "Check a working surface's alignment",
+      "link": "Founders",
+      "evidence": "reference bar and folding feet",
+      "gap": "Why does an inherited floor exceed its measuring range?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "feedstock_ampoules",
+      "name": "Feedstock ampoules",
+      "era": "II / Anchor",
+      "purpose": "Carry separated process feedstocks",
+      "link": "Sluice",
+      "evidence": "two sealed keyed vessels",
+      "gap": "Which seal was replaced after the filter recall?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "tally_recorder",
+      "name": "Tally recorder",
+      "era": "II / Anchor",
+      "purpose": "Record measured work and charge",
+      "link": "Archivists",
+      "evidence": "register and clipped paper card",
+      "gap": "Who added the second handwritten count?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "lift_grapple",
+      "name": "Lift grapple",
+      "era": "II / Anchor",
+      "purpose": "Rig a freight load",
+      "link": "Founders",
+      "evidence": "reel and two opposing jaws",
+      "gap": "Which load damaged the repaired release?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "ward_peg",
+      "name": "Ward peg",
+      "era": "II / Anchor",
+      "purpose": "Anchor a field routine at a fixed point",
+      "link": "Artificers",
+      "evidence": "ground stake with card slot",
+      "gap": "Which civil routine was loaded before it became a ward?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "salvage_carrier",
+      "name": "Salvage carrier",
+      "era": "I / Ballast",
+      "purpose": "Carry repaired tools and a rescued wafer",
+      "link": "Artificers",
+      "evidence": "cloth roll and hard ceramic cap",
+      "gap": "Why was this wafer kept when its neighbours were discarded?",
+      "sheet": "field_instruments.png",
+      "status": "concept only"
+    },
+    {
+      "id": "crystal_puller",
+      "name": "Crystal puller",
+      "era": "II / Anchor",
+      "purpose": "Grow a controlled crystal from feedstock",
+      "link": "Founders",
+      "evidence": "seed suspension and hot vessel",
+      "gap": "Which purity grade did its last log accept?",
+      "sheet": "fabrication.png",
+      "status": "concept only"
+    },
+    {
+      "id": "optical_stepper",
+      "name": "Optical stepper",
+      "era": "II / Anchor",
+      "purpose": "Pattern a wafer through a reticle",
+      "link": "Artificers",
+      "evidence": "wafer stage and offset optical head",
+      "gap": "Why is the last reticle still mounted?",
+      "sheet": "fabrication.png",
+      "status": "concept only"
+    },
+    {
+      "id": "induction_furnace",
+      "name": "Induction furnace",
+      "era": "II / Anchor",
+      "purpose": "Heat a compatible process vessel",
+      "link": "Founders",
+      "evidence": "coil, crucible and cooling manifold",
+      "gap": "Who signed the replacement coil?",
+      "sheet": "fabrication.png",
+      "status": "concept only"
+    },
+    {
+      "id": "quench_buffer",
+      "name": "Quench buffer",
+      "era": "II / Anchor",
+      "purpose": "Contain a stored-charge quench and remove heat",
+      "link": "Founders",
+      "evidence": "split ring and relief duct",
+      "gap": "Which load exceeded its logged heat budget?",
+      "sheet": "fabrication.png",
+      "status": "concept only"
+    },
+    {
+      "id": "spell_relay",
+      "name": "Spell relay",
+      "era": "II / Anchor",
+      "purpose": "Route a crystal-card routine to connected apparatus",
+      "link": "Artificers",
+      "evidence": "card drawer and separated sockets",
+      "gap": "What did this cabinet control before it was moved?",
+      "sheet": "fabrication.png",
+      "status": "concept only"
+    },
+    {
+      "id": "quarantine_cultivator",
+      "name": "Quarantine cultivator",
+      "era": "I / Ballast adapting II equipment",
+      "purpose": "Study a contained culture and spent circuitry",
+      "link": "Keepers",
+      "evidence": "filtered sealed chamber",
+      "gap": "Was this culture licensed or salvaged?",
+      "sheet": "fabrication.png",
+      "status": "concept only"
+    },
+    {
+      "id": "photonic_card_stack",
+      "name": "Photonic card stack",
+      "era": "Above / return cargo; origin unconfirmed",
+      "purpose": "Hold several optical routine substrates",
+      "link": "the return",
+      "evidence": "staggered thin cards",
+      "gap": "Which office issued its compatibility code?",
+      "sheet": "return_cargo.png",
+      "status": "concept only"
+    },
+    {
+      "id": "vacuum_print_head",
+      "name": "Vacuum print head",
+      "era": "Above / return cargo; origin unconfirmed",
+      "purpose": "Pattern a substrate in controlled conditions",
+      "link": "Loom",
+      "evidence": "folded mirrors and keyed mating faces",
+      "gap": "Which conditions are missing from its service label?",
+      "sheet": "return_cargo.png",
+      "status": "concept only"
+    },
+    {
+      "id": "repair_ribbon",
+      "name": "Repair ribbon",
+      "era": "Above / return cargo; origin unconfirmed",
+      "purpose": "Supply a structured conductive repair material",
+      "link": "Loom",
+      "evidence": "spool and unfolding lattice",
+      "gap": "Why was this quantity included in the return?",
+      "sheet": "return_cargo.png",
+      "status": "concept only"
+    },
+    {
+      "id": "tether_repair_shoe",
+      "name": "Tether repair shoe",
+      "era": "Above / return cargo; origin unconfirmed",
+      "purpose": "Support access to a damaged braid strand",
+      "link": "the braid",
+      "evidence": "split jaws and stabilizer fins",
+      "gap": "Which strand geometry is the clamp matched to?",
+      "sheet": "return_cargo.png",
+      "status": "concept only"
+    },
+    {
+      "id": "return_register",
+      "name": "Return register",
+      "era": "Above / return cargo; origin unconfirmed",
+      "purpose": "Record a load at a return interface",
+      "link": "the ledger",
+      "evidence": "paired load contacts and tally tag",
+      "gap": "Who is the count addressed to?",
+      "sheet": "return_cargo.png",
+      "status": "concept only"
+    },
+    {
+      "id": "prism_router",
+      "name": "Prism router",
+      "era": "Above / return cargo; origin unconfirmed",
+      "purpose": "Route signals through replaceable optical blades",
+      "link": "the return",
+      "evidence": "open ceramic frame and three contacts",
+      "gap": "Which route does its absent blade belong to?",
+      "sheet": "return_cargo.png",
+      "status": "concept only"
+    }
+  ]
+}

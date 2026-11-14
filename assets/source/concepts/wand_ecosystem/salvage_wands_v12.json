@@ -1,0 +1,13 @@
+{
+  "status": "New concepts, awaiting user assessment",
+  "styleReference": "civic_salvage_user_reference.png",
+  "userCorrection": "User prefers original richer art style over simplified v8-v11. Do not treat those simplified sheets as the accepted style target.",
+  "selectedForFurtherConsideration": [
+    "Amber sliver fan: distinct material and uneven silhouette",
+    "Listening loop: spare form with repaired exposed spine",
+    "Hollow ceramic seed: clear dark opening and mineral tongue"
+  ],
+  "weak": "Folded stone center-bottom reads as a stone hammer; set aside. Split twig and shell reed are supporting common-wand ideas, not strongest unusual concepts.",
+  "renderingNotes": "Material depth restored. Some cracks are denser than original reference. Any future adjustment should be local; do not flatten or coarsen the whole sheet again.",
+  "generator": "Built-in image_gen"
+}

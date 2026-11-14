@@ -1,0 +1,73 @@
+{
+  "source": "source.png",
+  "prompt": "source.prompt.txt",
+  "references": [
+    "assets/source/concepts/wand_ecosystem/civic_salvage_user_reference.png",
+    "assets/source/concepts/wand_ecosystem/salvage_wands_v12.png",
+    "assets/source/concepts/wand_ecosystem/workshop_tier1_v13.png"
+  ],
+  "runtime": "crates/app/src/mesh/models/reference_sprites.rs",
+  "sampling": {
+    "rows": 144,
+    "source_y": 20,
+    "source_step": 6.666667,
+    "alpha_cutoff": 224,
+    "pixel_metres": [
+      0.0024,
+      0.004
+    ],
+    "depth_metres": 0.024,
+    "source_x_bounds": [
+      [
+        180,
+        470
+      ],
+      [
+        600,
+        990
+      ],
+      [
+        1100,
+        1420
+      ]
+    ],
+    "sword_blade_pixel_x_metres": 0.0032,
+    "vertex_colour": "sRGB; world vertex shader decodes to linear"
+  },
+  "items": [
+    {
+      "width": 48,
+      "index": 0,
+      "grip_source": [
+        300,
+        780
+      ],
+      "name": "salvage sword"
+    },
+    {
+      "width": 88,
+      "index": 1,
+      "head": 6,
+      "grip_source": [
+        700,
+        744
+      ],
+      "name": "ivory key"
+    },
+    {
+      "width": 72,
+      "index": 2,
+      "head": 7,
+      "grip_source": [
+        1265,
+        710
+      ],
+      "name": "root scepter"
+    }
+  ],
+  "limitations": [
+    "Reference families preserve their source palette; shaft/grip recolouring and embedded charge glow are not implemented for these two families.",
+    "Found-wand seed mapping remains six original families. Reference families are atelier selections.",
+    "Native captures do not establish multiplayer synchronization or combat feel."
+  ]
+}

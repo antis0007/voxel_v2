@@ -1,0 +1,41 @@
+// Machine processes: what one machine turns into what, per recipe id.
+// Recipe ids are saved in placed machines. Append rows; never renumber.
+// Resource numbers index the factory resource table. Quantities use 64 units
+// per item. One tick is 0.25 s, and power is in kW; 0 means heat-driven.
+// `block` names a block material taken from the machine's block buffer, one
+// cubic metre per batch. `byproduct` is a second product of the same batch; a
+// full byproduct buffer stalls the machine. Kiln recipe 0 (bronze) comes from reactions.ron and
+// Fabricator recipes from fabrication.ron.
+[
+    // Washing also recovers the trace gold that crushing loses to the tailings.
+    (machine: Washer, recipe: 0, inputs: [(0, 64)], output: (9, 192), byproduct: Some((22, 16)), ticks: 24, power: 12),
+    (machine: Washer, recipe: 1, inputs: [(1, 64)], output: (10, 192), ticks: 24, power: 12),
+    (machine: Washer, recipe: 2, inputs: [(2, 64)], output: (11, 192), ticks: 24, power: 12),
+    (machine: Washer, recipe: 3, inputs: [], block: Some("GoldQuartz"), output: (22, 1536), ticks: 24, power: 12),
+    (machine: Crusher, recipe: 0, inputs: [(0, 64)], output: (9, 128), ticks: 16, power: 8),
+    (machine: Crusher, recipe: 1, inputs: [(1, 64)], output: (10, 128), ticks: 16, power: 8),
+    (machine: Crusher, recipe: 2, inputs: [(2, 64)], output: (11, 128), ticks: 16, power: 8),
+    (machine: Crusher, recipe: 3, inputs: [], block: Some("GoldQuartz"), output: (22, 1024), ticks: 16, power: 8),
+    // Raw ore straight into the furnace: no yield bonus, and slower.
+    (machine: Furnace, recipe: 0, inputs: [(0, 64)], output: (6, 64), ticks: 20, power: 6),
+    (machine: Furnace, recipe: 1, inputs: [(1, 64)], output: (7, 64), ticks: 20, power: 6),
+    (machine: Furnace, recipe: 2, inputs: [(2, 64)], output: (8, 64), ticks: 20, power: 6),
+    (machine: Furnace, recipe: 9, inputs: [(9, 64)], output: (6, 64), ticks: 12, power: 6),
+    (machine: Furnace, recipe: 10, inputs: [(10, 64)], output: (7, 64), ticks: 12, power: 6),
+    (machine: Furnace, recipe: 11, inputs: [(11, 64)], output: (8, 64), ticks: 12, power: 6),
+    (machine: Furnace, recipe: 22, inputs: [(22, 1024)], output: (23, 64), ticks: 12, power: 6),
+    // Arc mode (3): electricity in place of the crusher. Raw ore gives one and a
+    // half ingots at a high draw; iron with a quarter coke becomes steel.
+    (machine: Furnace, recipe: 12, inputs: [(0, 64)], output: (6, 96), ticks: 16, power: 32),
+    (machine: Furnace, recipe: 13, inputs: [(1, 64)], output: (7, 96), ticks: 16, power: 32),
+    (machine: Furnace, recipe: 14, inputs: [(2, 64)], output: (8, 96), ticks: 16, power: 32),
+    (machine: Furnace, recipe: 15, inputs: [(8, 64), (19, 16)], output: (15, 64), ticks: 24, power: 32),
+    (machine: AlloyKiln, recipe: 1, inputs: [(8, 128), (3, 64)], output: (15, 128), ticks: 32, power: 12),
+    (machine: Cultivator, recipe: 0, inputs: [(13, 64), (4, 16)], output: (13, 128), ticks: 32, power: 8),
+    (machine: Cultivator, recipe: 1, inputs: [(13, 128)], output: (4, 64), ticks: 32, power: 8),
+    (machine: Cultivator, recipe: 2, inputs: [(13, 128), (4, 16)], output: (21, 64), ticks: 40, power: 6),
+    // Creosote is a quarter item per coal coked.
+    (machine: CokeOven, recipe: 0, inputs: [(3, 64)], output: (19, 64), byproduct: Some((20, 16)), ticks: 40, power: 0),
+    (machine: BlastFurnace, recipe: 0, inputs: [(2, 128), (19, 32)], output: (8, 192), ticks: 64, power: 0),
+    (machine: BlastFurnace, recipe: 1, inputs: [(8, 128), (19, 32)], output: (15, 128), ticks: 48, power: 0),
+]

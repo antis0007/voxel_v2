@@ -1,0 +1,12 @@
+(
+ fuel: 3, fuel_units: 64, fuel_ticks: 2400,
+ temperature_c: 1750.0, heat_per_tick: 120.0,
+ metals: [
+  (solid: CopperBlock, liquid: MoltenCopper, resource: 6, feeds: [0,6,9]),
+  (solid: TinBlock, liquid: MoltenTin, resource: 7, feeds: [1,7,10]),
+  (solid: IronBlock, liquid: MoltenIron, resource: 8, feeds: [2,8,11]),
+  (solid: BronzeBlock, liquid: MoltenBronze, resource: 14, feeds: [14]),
+  (solid: SteelBlock, liquid: MoltenSteel, resource: 15, feeds: [15]),
+  (solid: GoldBlock, liquid: MoltenGold, resource: 23, feeds: [23,22]),
+ ],
+)
