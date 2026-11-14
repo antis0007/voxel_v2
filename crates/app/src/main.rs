@@ -1588,6 +1588,7 @@ fn start_world(
     }
     // A fresh adventure starts with only the starter spells found.
     new_world.adventure.begin_journey();
+    world::workshop_fit::fit(&mut new_world);
     *player = Player::new();
     day_night.reset(DEFAULT_START_TIME_OF_DAY);
     day_night.set_day_length_seconds(DEFAULT_DAY_LENGTH_SECONDS);
@@ -5447,7 +5448,7 @@ fn main() -> Result<()> {
                                                     let feet = (cell.as_vec3() + Vec3::new(0.5, 0.0, 0.5)) * world.voxel_scale.meters();
                                                     let local = planet::local_time(world.world_type, feet.as_dvec3(), &day_night);
                                                     let slept = world::bed::sleep(&mut day_night, &mut world.adventure.respawn_point, feet, local);
-                                                    if slept.is_ok() { world.goals.note(world::goals::Event::Slept); }
+                                                    if slept.is_ok() { world.goals.placed(world::BlockId::Bed); world.goals.note(world::goals::Event::Slept); }
                                                     world.expedition.say(match slept {
                                                         Ok(true) => "Slept through the night. Morning came the next day.",
                                                         Ok(false) => "Slept until dawn.",

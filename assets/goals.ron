@@ -12,8 +12,8 @@
     (
         id: "enter_workshop",
         tier: Home,
-        title: "Enter Your Workshop",
-        action: "Follow the compass to the workshop and step inside. It is yours: bench, chest and bed are all here.",
+        title: "Enter Workshop",
+        action: "Follow the compass to the workshop and step inside.",
         condition: Event(WorkshopEntered),
     ),
     (
@@ -76,7 +76,7 @@
         id: "bed",
         tier: Base,
         title: "Bed",
-        action: "Place a bed. Sleeping sets your respawn point.",
+        action: "Place a bed, or use the one in the workshop. Sleeping sets the respawn point.",
         condition: Placed(Bed),
     ),
     (
@@ -146,7 +146,7 @@
         id: "cast_spell",
         tier: Magic,
         title: "Cast a Spell",
-        action: "Your first wand is in the hotbar. Select it and hold the cast key.",
+        action: "The first wand sits in the hotbar. Select it and hold the cast key.",
         condition: Event(SpellCast),
     ),
     (

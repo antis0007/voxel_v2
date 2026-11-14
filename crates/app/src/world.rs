@@ -19,6 +19,7 @@ pub mod blueprint;
 pub mod edit_history;
 pub mod expedition;
 pub mod workshop;
+pub mod workshop_fit;
 pub mod environment;
 pub(crate) mod effects;
 pub mod factory;

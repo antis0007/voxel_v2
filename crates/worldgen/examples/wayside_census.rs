@@ -8,6 +8,10 @@ use glam::{IVec3, Vec2};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("bench") {
+        bench(&args[1..]);
+        return;
+    }
     let num = |i: usize, d: f32| args.get(i).and_then(|s| s.parse().ok()).unwrap_or(d);
     let generator = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(wayside::WAYSIDE_GENERATOR);
     let voxel_scale = match args.get(4).map(String::as_str) {
@@ -57,4 +61,28 @@ fn main() {
             println!("  {row}");
         }
     }
+}
+
+/// Above-ground band sampling cost at one spot, two generators interleaved.
+fn bench(args: &[String]) {
+    let x0: i32 = args.first().and_then(|s| s.parse().ok()).unwrap_or(3689);
+    let z0: i32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3202);
+    let cfgs: Vec<WorldSampleConfig> = [309u32, wayside::WAYSIDE_GENERATOR].iter().map(|&g| WorldSampleConfig {
+        planet: None, seed: 2_738_958_700, generator_version: g, world_type: WorldType::Planet,
+        voxel_scale: VoxelScalePreset::OneMeter }).collect();
+    let floor = engine_worldgen::sample_column(&cfgs[0], x0, z0).height;
+    let mut best = [f64::MAX; 2];
+    for pass in 0..7 {
+        for (i, cfg) in cfgs.iter().enumerate() {
+            let t = std::time::Instant::now();
+            let mut n = 0u32;
+            for z in z0 - 32..z0 + 32 { for x in x0 - 32..x0 + 32 { for y in floor - 2..floor + 6 {
+                if sample_block(cfg, IVec3::new(x, y, z)) != BlockId::Air { n += 1; }
+            }}}
+            let ms = t.elapsed().as_secs_f64() * 1e3;
+            if pass > 0 { best[i] = best[i].min(ms); }
+            std::hint::black_box(n);
+        }
+    }
+    println!("band 64x64x8 at ({x0},{z0}): gen309 best {:.1} ms, gen320 best {:.1} ms (+{:.1}%)", best[0], best[1], (best[1] / best[0] - 1.0) * 100.0);
 }

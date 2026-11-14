@@ -1,0 +1,25 @@
+// Fittings added to the starter workshop when a new Hills or Ridged world begins.
+// `letter` is the lectern text: at most 12 lines of 24 characters.
+// `chest` is the starter chest: (item, count) pairs, same item syntax as goals.ron.
+// `torch_over` names blocks that get a torch on their top face, so the bench is lit.
+(
+    letter: [
+        "Workshop",
+        "",
+        "This workshop is yours.",
+        "Bench, chest and bed",
+        "are inside.",
+        "",
+        "Craft at the bench.",
+        "Sleep in the bed at",
+        "night to set a",
+        "respawn point.",
+        "",
+        "Goals: see the tracker.",
+    ],
+    chest: [
+        (Block(Torch), 8),
+        (Food(FungalRation), 2),
+    ],
+    torch_over: [Workbench, Smelter],
+)
