@@ -1,4 +1,4 @@
-//! Conduits from 8-per-metre voxel assets (`assets/models/factory`): a thin arm
+//! Conduits from voxel assets (cables 16 per metre, pipes 8) (`assets/models/factory`): a thin arm
 //! per connection, a junction block where the run bends or branches, framed
 //! sockets on faces with no arm, and a flange where an arm enters a machine.
 use super::Model;
@@ -83,8 +83,12 @@ pub(super) fn draw(mesh: &mut Model, world: &World, p: IVec3, n: &Node, o: Vec3,
     let c = o + Vec3::splat(0.5);
 
     if !near {
-        // Matches the near tube: four 1/8 m voxels across.
-        let half = if n.kind == Kind::Pipe { 0.25 } else { 0.125 };
+        // Matches the near tube: pipes 0.5 m, fluid 0.25 m, cables a 1/8 m core.
+        let half = match n.kind {
+            Kind::Pipe => 0.25,
+            Kind::Cable => 0.0625,
+            _ => 0.125,
+        };
         for &s in &arms {
             let dir = DIRS[s].as_vec3();
             let size = dir.abs() * 0.5 + (Vec3::ONE - dir.abs()) * (half * 2.0);
@@ -126,7 +130,9 @@ pub(super) fn draw(mesh: &mut Model, world: &World, p: IVec3, n: &Node, o: Vec3,
             let travel = (world.adventure.time * 1.8).fract() * 0.4 + 0.05;
             let dir = DIRS[s].as_vec3();
             let bead = if n.kind == Kind::Cable { [0.2, 0.9, 1.0] } else { [0.55, 0.85, 1.0] };
-            mesh.cuboid(c + dir * travel, Vec3::splat(0.125), Quat::IDENTITY, bead, n.activity * 1.8);
+            // The cable pulse sits just proud of its 1/8 m core.
+            let size = if n.kind == Kind::Cable { 0.14 } else { 0.125 };
+            mesh.cuboid(c + dir * travel, Vec3::splat(size), Quat::IDENTITY, bead, n.activity * 1.8);
         }
     }
 }

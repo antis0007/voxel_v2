@@ -621,6 +621,8 @@ impl Group {
                 | B::Bed
                 | B::Ladder
                 | B::Lever
+                | B::MechanicalButton
+                | B::PressurePlate
                 | B::OakDoor
                 | B::OakTrapdoor
                 | B::SignPost

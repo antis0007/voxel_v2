@@ -2,6 +2,7 @@
 //! simulation runs once per region and its surviving plans are sampled on demand.
 mod fabric;
 mod routes;
+pub mod regional;
 pub mod chronicle;
 
 use crate::{BlockId as B, WorldSampleConfig, planetary};
@@ -119,8 +120,8 @@ thread_local! {
     static PLANS: RefCell<Plans> = RefCell::new((None, HashMap::new()));
 }
 
-fn enabled(cfg: &WorldSampleConfig) -> bool {
-    cfg.civilization_enabled() && cfg.generator_version >= VERSION && planetary::active(cfg)
+pub fn enabled(cfg: &WorldSampleConfig) -> bool {
+    cfg.civilization_enabled() && cfg.generator_version >= VERSION && crate::features::enabled(cfg, crate::features::Feature::Civilization)
 }
 
 fn key_at(p: Vec2) -> IVec2 {
@@ -238,7 +239,7 @@ fn build_plan(cfg: &WorldSampleConfig, key: IVec2) -> Plan {
 fn survey(cfg: &WorldSampleConfig, key: IVec2, slot: usize) -> Option<Site> {
     let origin = anchor(key, slot);
     let (_, local) = atlas::split(DVec3::new(origin.x.into(), 0.0, origin.y.into()));
-    if local.x.abs().max(local.z.abs()) > atlas::HALF_M - 100.0 {
+    if planetary::active(cfg) && local.x.abs().max(local.z.abs()) > atlas::HALF_M - 100.0 {
         return None;
     }
     let freight = crate::planet_freight::site(cfg);
@@ -249,7 +250,7 @@ fn survey(cfg: &WorldSampleConfig, key: IVec2, slot: usize) -> Option<Site> {
             if freight.is_some_and(|site| (site.origin.xz() - p).length() < 110.0) {
                 continue;
             }
-            let g = planetary::ground(cfg, p.x, p.y, 1.0);
+            let g = crate::geo::ground(cfg, p.x, p.y, 1.0);
             if g.top_m < crate::WATER_LEVEL_METERS + 2.0
                 || g.slope > 0.17
                 || g.water_m.is_some()
@@ -265,7 +266,7 @@ fn survey(cfg: &WorldSampleConfig, key: IVec2, slot: usize) -> Option<Site> {
             for z in [-FOOTPRINT.y, 0.0, FOOTPRINT.y] {
                 for x in [-FOOTPRINT.x, 0.0, FOOTPRINT.x] {
                     let q = p + Vec2::new(x, z);
-                    let edge = planetary::ground(cfg, q.x, q.y, 1.0);
+                    let edge = crate::geo::ground(cfg, q.x, q.y, 1.0);
                     low = low.min(edge.top_m);
                     high = high.max(edge.top_m);
                     safe &= edge.water_m.is_none()
@@ -336,7 +337,11 @@ fn rock_at(cfg: &WorldSampleConfig, p: Vec2, y: f32) -> B {
     let voxel = (Vec3::new(p.x, y, p.y) / cfg.voxel_meters())
         .floor()
         .as_ivec3();
-    planetary::rock_at(cfg, voxel)
+    if planetary::active(cfg) {
+        return planetary::rock_at(cfg, voxel);
+    }
+    let height = crate::terrain_height(cfg, voxel.x, voxel.z);
+    crate::landscape::geological_stratum(cfg, voxel, height, height - voxel.y)
 }
 
 fn route_passable(cfg: &WorldSampleConfig, start: Vec2, end: Vec2) -> bool {
@@ -345,7 +350,7 @@ fn route_passable(cfg: &WorldSampleConfig, start: Vec2, end: Vec2) -> bool {
     let mut previous = None;
     for i in 0..=steps {
         let p = start.lerp(end, i as f32 / steps as f32);
-        let ground = planetary::ground(cfg, p.x, p.y, 1.0);
+        let ground = crate::geo::ground(cfg, p.x, p.y, 1.0);
         if ground.top_m < crate::WATER_LEVEL_METERS {
             return false;
         }
@@ -581,6 +586,19 @@ pub fn settlements_near(cfg: &WorldSampleConfig, point: Vec3, radius: f32) -> Ve
         .collect()
 }
 
+/// World-space polylines for the surveyed roads built by the settlement plan.
+pub fn roads_near(cfg: &WorldSampleConfig, point: Vec3, radius: f32) -> Vec<Vec<Vec2>> {
+    if !enabled(cfg) || !planetary::landscape_cycles(cfg.generator_version) {
+        return Vec::new();
+    }
+    keys_near(point.xz(), radius)
+        .filter_map(|key| {
+            let region = plan(cfg, key);
+            (!region.route.is_empty()).then(|| region.route.clone())
+        })
+        .collect()
+}
+
 pub fn settlement_by_id(cfg: &WorldSampleConfig, id: u32) -> Option<Settlement> {
     if !enabled(cfg) || !(BASE..MAX_RESIDENT_ID).contains(&id) || id & 7 != 0 {
         return None;
@@ -647,7 +665,7 @@ pub fn extension_plot(cfg: &WorldSampleConfig, site: Settlement, lot: u8) -> Opt
     for z in [-3.0, 0.0, 3.0] {
         for x in [-3.0, 0.0, 3.0] {
             let q = p + Vec2::new(x, z);
-            let g = planetary::ground(cfg, q.x, q.y, 1.0);
+            let g = crate::geo::ground(cfg, q.x, q.y, 1.0);
             if g.water_m.is_some()
                 || g.top_m < crate::WATER_LEVEL_METERS + 1.0
                 || crate::ruins::reserves(cfg, q.x, q.y, 8.0)

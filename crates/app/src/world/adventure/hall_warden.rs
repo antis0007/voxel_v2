@@ -106,6 +106,7 @@ pub(super) fn tick(
 }
 
 pub(super) fn model(e: &Enemy, m: &mut Model, _time: f32) {
+    let mark = m.mark();
     let furnace = e.kind == FURNACE;
     let yaw = Quat::from_rotation_y(e.yaw);
     let energy = if e.tell > 0.0 { 1.4 } else { 0.25 };
@@ -113,4 +114,5 @@ pub(super) fn model(e: &Enemy, m: &mut Model, _time: f32) {
     m.material_box(e.pos + Vec3::Y * 1.05, Vec3::new(0.72, 1.55, 0.42), yaw, body, 39.0, if furnace { energy } else { 0.0 });
     let head = if furnace { [0.95, 0.46, 0.16] } else { [0.55, 0.72, 0.95] };
     m.material_box(e.pos + Vec3::Y * 1.95, Vec3::new(0.38, 0.38, 0.38), yaw, head, 39.0, if furnace { energy } else { 0.8 });
+    super::enemy_presentation::motion::pose_body(e, m, mark);
 }

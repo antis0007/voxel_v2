@@ -72,6 +72,7 @@ pub fn step(w:&mut World,p:&mut Player,c:&Controls,tools:&actions::Tools,creativ
         let harm=p.take_pending_harm();
         if let Some((amount,cause))=harm {w.adventure.environment_damage(amount,cause);}
     }
+    world::fittings::step(w, p, blocks, chunks);
     crate::manyfold::undercroft::tick(w,p,dt);
     w.expedition.tick(dt);w.adventure.hand_slot=slot;
     let held=w.inventory.hotbar[slot].map(|s|s.item);

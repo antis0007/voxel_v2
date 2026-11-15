@@ -18,6 +18,7 @@ pub(super) fn file(kind: RealmKind) -> &'static str {
         RealmKind::Lightless => FILE,
         RealmKind::Gilded => "gilded-chart.ron",
         RealmKind::Highfold => "highfold-chart.ron",
+        RealmKind::Gloaming => "gloaming-chart.ron",
     }
 }
 
@@ -26,6 +27,8 @@ pub fn gate_realm(block: BlockId) -> Option<RealmKind> {
     match block {
         BlockId::LightlessShaft => Some(RealmKind::Lightless),
         BlockId::GildedGate => Some(RealmKind::Gilded),
+        BlockId::HighfoldGate => Some(RealmKind::Highfold),
+        BlockId::GloamingGate => Some(RealmKind::Gloaming),
         _ => None,
     }
 }
@@ -33,7 +36,18 @@ pub fn gate_realm(block: BlockId) -> Option<RealmKind> {
 /// The realm of the gate block under the player's feet.
 pub fn realm_under(w: &World, player: &Player) -> Option<RealmKind> {
     let below = (player.pos - player.up_dir() * 0.1 / w.voxel_scale.meters()).floor().as_ivec3();
-    gate_realm(w.get(below))
+    let block = w.get(below);
+    // Earlier Highfold checkpoints can contain the original generated shaft.
+    if w.world_type.realm() == Some(RealmKind::Highfold)
+        && block == BlockId::LightlessShaft
+        && engine_worldgen::highfold::shaft_at(
+            w.seed,
+            (below.as_vec3() + Vec3::splat(0.5)) * w.voxel_scale.meters(),
+        )
+    {
+        return Some(RealmKind::Highfold);
+    }
+    gate_realm(block)
 }
 /// Rock that must lie over the head before a shaft opens.
 pub const DEPTH_M: f32 = 24.0;
@@ -75,10 +89,56 @@ pub fn buried(w: &World, player: &Player) -> bool {
     solid as f32 >= steps as f32 * COVER
 }
 
+/// Air over the head for a Highfold gate.
+pub const SKY_M: f32 = 48.0;
+/// Logs within reach of a Gloaming gate.
+pub const WOODS_LOGS: usize = 12;
+const WOODS_M: f32 = 6.0;
+
+/// Open air straight up for `SKY_M`.
+pub fn open_sky(w: &World, player: &Player) -> bool {
+    let scale = w.voxel_scale.meters();
+    let up = player.up_dir();
+    let head = player.pos + up * (2.2 / scale);
+    (0..(SKY_M / scale).ceil() as i32).all(|i| !w.get((head + up * i as f32).floor().as_ivec3()).is_solid())
+}
+
+/// Logs of any kind around the feet; sampled on a 1 m lattice so the cost
+/// does not grow at fine voxel scales.
+pub fn woods(w: &World, player: &Player) -> usize {
+    let scale = w.voxel_scale.meters();
+    let feet = player.pos * scale;
+    let r = WOODS_M as i32;
+    let mut n = 0;
+    for dz in -r..=r {
+        for dy in -1..=8 {
+            for dx in -r..=r {
+                let m = feet + Vec3::new(dx as f32, dy as f32, dz as f32);
+                if matches!(w.get((m / scale).floor().as_ivec3()), BlockId::Log | BlockId::GloamingLog) {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
+/// Why a placed gate will not open here, as a state line; None when it will.
+pub fn entry_block(kind: RealmKind, w: &World, player: &Player) -> Option<&'static str> {
+    match kind {
+        RealmKind::Lightless if !buried(w, player) => Some("Too Shallow: 24 m Rock Required"),
+        RealmKind::Highfold if !open_sky(w, player) => Some("Sky Blocked: 48 m Open Air Required"),
+        RealmKind::Gloaming if woods(w, player) < WOODS_LOGS => Some("Too Open: 12 Logs Within 6 m Required"),
+        _ => None,
+    }
+}
+
 pub fn usable(w: &World, player: &Player) -> bool {
+    let Some(kind) = realm_under(w, player) else { return false };
     match standing(w, player) {
-        Some(Shaft::Descend) => (realm_under(w, player) != Some(RealmKind::Lightless) || buried(w, player))
-            && w.adventure.health > 0.0,
+        Some(Shaft::Descend) => entry_block(kind, w, player).is_none()
+            && w.adventure.health > 0.0
+            && super::hall_gate::clear_stand(w, player, player.pos * w.voxel_scale.meters()).is_ok(),
         Some(Shaft::Ascend) => w.adventure.health > 0.0,
         None => false,
     }
@@ -86,20 +146,23 @@ pub fn usable(w: &World, player: &Player) -> bool {
 
 pub fn prompt(w: &World, player: &Player, network: bool) -> Option<super::interaction::Prompt> {
     let shaft = standing(w, player)?;
-    let lightless = realm_under(w, player) == Some(RealmKind::Lightless);
+    let kind = realm_under(w, player)?;
+    let lightless = kind == RealmKind::Lightless;
     let action = if network {
         "Realm crossing requires local play"
     } else {
         match shaft {
-            Shaft::Descend if lightless && !buried(w, player) => "Too Shallow: 24 m Rock Required",
-            Shaft::Descend if lightless => "F  Descend",
+            Shaft::Descend => match entry_block(kind, w, player) {
+                Some(reason) => reason,
+                None if lightless => "F  Descend",
+                None => "F  Enter",
+            },
             Shaft::Ascend if lightless => "F  Ascend",
-            Shaft::Descend => "F  Enter",
             Shaft::Ascend => "F  Return",
         }
     };
-    let title = if lightless { "Lightless Shaft" } else { "Gilded Gate" };
-    Some(super::interaction::Prompt { title, action })
+    let below = (player.pos - player.up_dir() * 0.1 / w.voxel_scale.meters()).floor().as_ivec3();
+    Some(super::interaction::Prompt { title: w.get(below).display_name(), action })
 }
 
 fn id_ok(s: &str) -> bool {
@@ -179,6 +242,7 @@ pub(super) fn arrival(source: &World, link: &Link, shaft: Shaft, kind: RealmKind
                 RealmKind::Lightless => engine_worldgen::lightless::spawn(&cfg),
                 RealmKind::Gilded => engine_worldgen::gilded::spawn(&cfg),
                 RealmKind::Highfold => engine_worldgen::highfold::spawn(&cfg),
+                RealmKind::Gloaming => engine_worldgen::gloaming::spawn(&cfg),
             }
         }
         Shaft::Ascend => Vec3::from_array(link.ret),

@@ -200,6 +200,12 @@ pub struct LightingState {
     pub mana_ambience: [f32; 4],
     /// Local atmospheric colour multiplier and grade amount.
     pub location_mood: [f32; 4],
+    /// Realm lighting overrides written by `portals::realm`; zero elsewhere.
+    /// [0] on, cavern and grotto weights; [1] fill rgb; [2] air rgb, air range m;
+    /// [3..9] three glow pools as [cx, cz, hx, hz], [surface y, strength,
+    /// palette, round]; [9] shaft [cx, cz, radius, strength], [10] [bottom y,
+    /// top y, -, -]; [11].x enables the Gloaming's tinted forest haze.
+    pub realm: [[f32; 4]; 12],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -583,6 +589,7 @@ impl LightingState {
             biome_ambience: [0.0; 4],
             mana_ambience: [0.0; 4],
             location_mood: [1.0, 1.0, 1.0, 0.0],
+            realm: [[0.0; 4]; 12],
             grass_tint: [1.0; 3],
             foliage_tint: [1.0; 3],
             ambience: [0.0; 4],
@@ -1274,6 +1281,7 @@ pub fn suggested_spawn(cfg: &WorldSampleConfig) -> Option<Vec3> {
     if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Lightless) { return Some(engine_worldgen::lightless::spawn(cfg)); }
     if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Gilded) { return Some(engine_worldgen::gilded::spawn(cfg)); }
     if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Highfold) { return Some(engine_worldgen::highfold::spawn(cfg)); }
+    if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Gloaming) { return Some(engine_worldgen::gloaming::spawn(cfg)); }
     if cfg.world_type == WorldType::Manyfold { return Some(engine_worldgen::manyfold::spawn(cfg)); }
     if cfg.world_type == WorldType::Planet { return Some(crate::planet::spawn(cfg)); }
     if cfg.generator_version >= 3 && cfg.world_type != WorldType::Superflat {
@@ -1484,13 +1492,17 @@ impl World {
         Self::with_regions(world_type, voxel_scale, seed, regions::RegionStream::new_in(directory))
     }
 
-    fn with_regions(world_type: WorldType, voxel_scale: VoxelScalePreset, seed: u32, regions: regions::RegionStream) -> Self {
-        let generator_version = match world_type {
+    pub(crate) fn default_generator(world_type: WorldType) -> u32 {
+        match world_type {
             WorldType::Planet => engine_voxel::PLANET_GENERATOR_VERSION,
             WorldType::Manyfold => engine_worldgen::manyfold::maze::TWISTED,
-            WorldType::Hills => CURRENT_GENERATOR_VERSION,
+            WorldType::Hills | WorldType::Ridged => CURRENT_GENERATOR_VERSION,
             _ => engine_voxel::WATERSHED_LOD_GENERATOR,
-        };
+        }
+    }
+
+    fn with_regions(world_type: WorldType, voxel_scale: VoxelScalePreset, seed: u32, regions: regions::RegionStream) -> Self {
+        let generator_version = Self::default_generator(world_type);
         let region_view = regions.view.clone();
         let mut world = Self {
             #[cfg(feature="multiplayer")]

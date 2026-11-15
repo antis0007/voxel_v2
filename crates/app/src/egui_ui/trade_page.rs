@@ -236,6 +236,14 @@ pub fn draw(ctx: &egui::Context, open: &mut Option<u32>, world: &mut World, eye:
                 if let Some(stock) = crate::world::farming::jobs::communities::stock_summary(world, villager) {
                     ui.label(stock);
                 }
+                if let Some(item) = crate::world::farming::jobs::communities::supply_request(world, villager) {
+                    ui.strong("Settlement Supply Request");
+                    stack(ui, trades::Stack { item, count: 1 }, Some(world.inventory.count_item(item)));
+                    let delivery = ui.add_enabled(world.inventory.count_item(item) > 0, egui::Button::new("Deliver to Stockpile"));
+                    if delivery.on_hover_text("Stand beside the stockpile to deliver supplies.").clicked() {
+                        donation = Some(item);
+                    }
+                }
             }
             if let Some(history) = history {
                 ui.separator();

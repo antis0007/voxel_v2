@@ -59,6 +59,26 @@ pub fn exposure(world: &mut World, state: &State, dt: f32) {
     }
 }
 
+fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Positional hash of a gas cell and puff index; cosmetic, never simulated.
+fn hash4(k: (i32, i32, i32, i32), j: u32) -> u32 {
+    let mut h = 0x9e37_79b9u32 ^ j.wrapping_mul(0x85eb_ca6b);
+    for v in [k.0, k.1, k.2, k.3] {
+        h = (h ^ v as u32).wrapping_mul(0xc2b2_ae35);
+        h ^= h >> 15;
+    }
+    h
+}
+
+/// 0..1 from the low 8 bits of a hash.
+fn unit(h: u32) -> f32 {
+    (h & 0xff) as f32 / 255.0
+}
+
 pub fn draw(mesh: &mut Model, world: &World, viewer: Vec3) {
     let scale = world.voxel_scale.meters();
     let mut cells: Vec<_> = world
@@ -72,7 +92,16 @@ pub fn draw(mesh: &mut Model, world: &World, viewer: Vec3) {
         })
         .collect();
     cells.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    for (_, k, m, p) in cells.into_iter().take(384) {
+    // Industry gas is drawn as the engine's own smoke and steam: voxel-grid
+    // cubes in shader kinds 43/44 (billowed, dithered rims, top-lit). Each puff
+    // hops up the grid in whole voxels, like the cellular gas it stands for, and
+    // enters and leaves through the ordered screen dither of `fade_since`.
+    let mut puffs_left = 900usize;
+    let previous_kind = mesh.set_surface_kind(0.0);
+    for (_, k, m, _) in cells.into_iter().take(192) {
+        if puffs_left == 0 {
+            break;
+        }
         let volume = (k.3 as f32 * scale).powi(3);
         let visible = [0, 1, 2, 4]
             .into_iter()
@@ -81,25 +110,57 @@ pub fn draw(mesh: &mut Model, world: &World, viewer: Vec3) {
         let Some(i) = visible else {
             continue;
         };
-        let opacity = (m[i] as f32 / volume / 600.0).clamp(0.0, 0.55);
-        if opacity < 0.015 {
+        let density = m[i] as f32 / volume / 600.0;
+        // Fractional puff counts fade the last puff in, so thin gas never pops.
+        let wanted = smoothstep(0.002, 0.05, density) * (1.0 + density.min(0.55) * 14.0);
+        if wanted < 0.05 {
             continue;
         }
-        let color = CONFIG.species[i].color;
-        let radius = k.3 as f32 * scale * 0.40;
-        for j in 0..3 {
-            let t = world.adventure.time * 0.35 + j as f32 * 2.1;
-            let offset = Vec3::new(t.sin(), (t * 0.7).cos(), (t * 1.3).sin()) * radius * 0.32;
-            mesh.glow_voxel(
-                p + offset,
-                Vec3::splat(radius * (0.65 + j as f32 * 0.09)),
-                Quat::from_rotation_y(t * 0.13),
-                color,
-                0.0,
-                opacity * 0.6,
+        let species = &CONFIG.species[i];
+        mesh.set_surface_kind(if i == STEAM { 44.0 } else { 43.0 });
+        // Steam is brief; soot and dust hang about.
+        let life = if i == STEAM { 3.2 } else { 6.5 };
+        // Visual climb speed (voxels per second); heavy species sink slowly.
+        let speed = {
+            let v = species.rise_m_s * 4.0;
+            (if v.abs() < 0.4 { 0.4f32.copysign(v) } else { v }) / scale
+        };
+        let origin = pos(k);
+        let span = k.3.max(1);
+        for j in 0..(wanted.ceil() as usize).min(puffs_left) {
+            puffs_left -= 1;
+            let h = hash4(k, j as u32);
+            let phase = (world.adventure.time / life + unit(h)).fract();
+            let age = phase * life;
+            // Whole-voxel hops keep every puff on the grid the gas shader samples.
+            let climb = (age * speed).floor() as i32;
+            let drift = (age * 0.45).floor() as i32;
+            let wind = IVec3::new(
+                (unit(h >> 8) * 3.0) as i32 - 1,
+                0,
+                (unit(h >> 12) * 3.0) as i32 - 1,
             );
+            let cell = origin
+                + IVec3::new(
+                    (unit(h >> 4) * span as f32) as i32,
+                    (unit(h >> 16) * span as f32) as i32,
+                    (unit(h >> 20) * span as f32) as i32,
+                )
+                + IVec3::Y * climb
+                + wind * drift;
+            let center = (cell.as_vec3() + Vec3::splat(0.5)) * scale;
+            let coverage = (wanted - j as f32).clamp(0.0, 1.0)
+                * smoothstep(0.0, 0.18, phase)
+                * (1.0 - smoothstep(0.55, 1.0, phase));
+            if coverage < 0.04 {
+                continue;
+            }
+            let mark = mesh.mark();
+            mesh.cuboid(center, Vec3::splat(scale), Quat::IDENTITY, species.color, 0.0);
+            mesh.fade_since(mark, coverage);
         }
     }
+    mesh.set_surface_kind(previous_kind);
     for (&p, m) in world
         .industry
         .deposits
@@ -181,15 +242,19 @@ pub fn machine(
             }
         }
         Kind::GasTank => {
-            mesh.cuboid(c, Vec3::new(0.78, 0.90, 0.78), Quat::IDENTITY, metal, 0.0);
-            for y in [0.2, 0.8] {
-                mesh.cuboid(
-                    o + Vec3::new(0.5, y, 0.5),
-                    Vec3::new(0.84, 0.08, 0.84),
-                    Quat::IDENTITY,
-                    dark,
-                    0.0,
-                );
+            // Framed pressure vessel on the 10-voxel-per-metre grid: plinth,
+            // cap and corner posts around the body, banded in its tier colour.
+            let tier = [[0.42, 0.44, 0.46], [0.60, 0.17, 0.13], [0.15, 0.50, 0.54]]
+                [n.upgrade.min(2) as usize];
+            mesh.cuboid(c, Vec3::splat(0.8), Quat::IDENTITY, metal, 0.0);
+            for y in [0.05, 0.95] {
+                mesh.cuboid(o + Vec3::new(0.5, y, 0.5), Vec3::new(1.0, 0.1, 1.0), Quat::IDENTITY, dark, 0.0);
+            }
+            for (x, z) in [(0.05, 0.05), (0.95, 0.05), (0.05, 0.95), (0.95, 0.95)] {
+                mesh.cuboid(o + Vec3::new(x, 0.5, z), Vec3::new(0.1, 0.8, 0.1), Quat::IDENTITY, dark, 0.0);
+            }
+            for y in [0.25, 0.75] {
+                mesh.cuboid(o + Vec3::new(0.5, y, 0.5), Vec3::new(0.9, 0.1, 0.9), Quat::IDENTITY, tier, 0.0);
             }
         }
         _ => {
@@ -208,7 +273,7 @@ pub fn machine(
     }
     if !matches!(n.kind, Kind::ExhaustDuct | Kind::Chimney) {
         let fill = n.exhaust.iter().sum::<u32>() as f32
-            / super::super::factory::industry::GAS_CAPACITY as f32;
+            / super::super::factory::industry::gas_capacity(n) as f32;
         let rotation = Quat::from_rotation_arc(Vec3::NEG_Z, n.facing.as_vec3());
         let depth = if n.kind == Kind::GasTank { 0.40 } else { 0.481 };
         mesh.cuboid(

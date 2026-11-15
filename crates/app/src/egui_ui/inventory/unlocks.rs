@@ -36,26 +36,44 @@ impl Unlocks {
         }
     }
 
-    /// The Projects hub has nothing to show until one of its branches opens.
-    pub fn projects_open(self) -> bool {
-        self.magic || self.forge || self.factory || self.quests
+}
+
+/// Magic is revealed once the player draws a wand or shows magic progress.
+/// Every new world hands out a starter wand, so owning one says nothing: the
+/// signal is holding it (kept for this world in the session), a found sigil, rare spell or
+/// rank, or reaching the Magic goal. Older saves that progressed reopen at once.
+pub(in crate::egui_ui) fn magic_open(ctx: &egui::Context, view: &adventure::View) -> bool {
+    let key = egui::Id::new("progressive_magic_seen");
+    let scope = super::super::goals_hud::world_scope(ctx);
+    let progressed = view.active_wand.is_some()
+        || view.rank > 0
+        || view.sigils != 0
+        || view.rare_spells != 0
+        || view.discoveries != 0
+        || view.heart_restored
+        || reached(ctx, Tier::Magic);
+    if progressed {
+        ctx.data_mut(|d| d.insert_temp(key, scope));
+        return true;
     }
+    // Keep only the most recently progressed world, not a process-wide flag.
+    // An absent scope is used by isolated UI fixtures before a world is published.
+    ctx.data(|d| d.get_temp::<Option<std::sync::Arc<std::path::PathBuf>>>(key)) == Some(scope)
 }
 
-/// True once the player owns or has ever owned a wand.
-pub(in crate::egui_ui) fn has_wand(view: &adventure::View) -> bool {
-    view.wand > 0 || view.active_wand.is_some() || !view.wand_bank.is_empty()
-}
-
-/// Whether the Wild Essence pickup toast may show: it means nothing to a
-/// player without a wand.
-pub(in crate::egui_ui) fn pickup_toast_open(item: Item, view: &adventure::View, survival: bool) -> bool {
-    !survival || has_wand(view) || item != Item::Resource(WILD_ESSENCE)
+/// Whether the Wild Essence pickup toast may show: it means nothing before magic opens.
+pub(in crate::egui_ui) fn pickup_toast_open(
+    ctx: &egui::Context,
+    item: Item,
+    view: &adventure::View,
+    survival: bool,
+) -> bool {
+    !survival || item != Item::Resource(WILD_ESSENCE) || magic_open(ctx, view)
 }
 
 /// The mana regeneration and affinity line. Poisoning is a hazard and always shows.
-pub(in crate::egui_ui) fn mana_line_open(view: &adventure::View, poisoned: bool) -> bool {
-    view.creative || poisoned || has_wand(view)
+pub(in crate::egui_ui) fn mana_line_open(ctx: &egui::Context, view: &adventure::View, poisoned: bool) -> bool {
+    view.creative || poisoned || magic_open(ctx, view)
 }
 
 fn owns(survival: &SurvivalInventory, f: impl Fn(Item) -> bool) -> bool {
@@ -82,7 +100,6 @@ pub(in crate::egui_ui) fn derive(
     survival: &SurvivalInventory,
     machines: &Machines,
     equipment: &adventure::View,
-    expedition: bool,
 ) -> Unlocks {
     if creative_catalogue {
         return Unlocks::ALL;
@@ -93,12 +110,10 @@ pub(in crate::egui_ui) fn derive(
     let forge = factory
         || !equipment.tool_bank.is_empty()
         || owns(survival, |item| matches!(item, Item::Assembled { .. }));
-    let magic = has_wand(equipment)
-        || owns(survival, |item| matches!(item, Item::Wand { .. }))
-        || reached(ctx, Tier::Magic);
+    let magic = magic_open(ctx, equipment);
     let space = machines.meridian_terminal.is_some()
         || machines.orbital_cell
         || reached(ctx, Tier::Orbit);
-    let quests = expedition || equipment.quest.is_some() || reached(ctx, Tier::Guardian);
+    let quests = machines.workshop.is_some() || reached(ctx, Tier::Guardian);
     Unlocks { magic, forge, factory, space, quests }
 }

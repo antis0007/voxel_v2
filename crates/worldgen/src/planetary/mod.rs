@@ -144,7 +144,8 @@ pub fn fractal_coasts(generator: u32) -> bool {
 }
 /// Generator 290 keeps the 288 coasts and cleans river, pond and shore cover.
 pub fn clean_riverbeds(generator: u32) -> bool {
-    generator == CLEAN_RIVERBED_GENERATOR || ground_breaks(generator) || living_surface(generator)
+    generator >= engine_voxel::SHARED_SURFACE_GENERATOR
+        || generator == CLEAN_RIVERBED_GENERATOR || ground_breaks(generator) || living_surface(generator)
         || lowland_rivers(generator)
 }
 /// Generator 295 keeps the 290 terrain and adds fine relief, shore forms and climate plants.

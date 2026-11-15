@@ -32,10 +32,15 @@
     (machine: Furnace, recipe: 15, inputs: [(8, 64), (19, 16)], output: (15, 64), ticks: 24, power: 32),
     (machine: AlloyKiln, recipe: 1, inputs: [(8, 128), (3, 64)], output: (15, 128), ticks: 32, power: 12),
     (machine: Cultivator, recipe: 0, inputs: [(13, 64), (4, 16)], output: (13, 128), ticks: 32, power: 8),
-    (machine: Cultivator, recipe: 1, inputs: [(13, 128)], output: (4, 64), ticks: 32, power: 8),
+    // Lumen mode returns less fibre than biomass mode spends (parity C-MC1: no profitable loop).
+    (machine: Cultivator, recipe: 1, inputs: [(13, 128)], output: (4, 12), ticks: 32, power: 8),
     (machine: Cultivator, recipe: 2, inputs: [(13, 128), (4, 16)], output: (21, 64), ticks: 40, power: 6),
     // Creosote is a quarter item per coal coked.
     (machine: CokeOven, recipe: 0, inputs: [(3, 64)], output: (19, 64), byproduct: Some((20, 16)), ticks: 40, power: 0),
     (machine: BlastFurnace, recipe: 0, inputs: [(2, 128), (19, 32)], output: (8, 192), ticks: 64, power: 0),
     (machine: BlastFurnace, recipe: 1, inputs: [(8, 128), (19, 32)], output: (15, 128), ticks: 48, power: 0),
+    // Pulverizing: an ingot grinds back to one dust, so scrap recycles through the dust furnace at no profit (parity L029, C-MC1).
+    (machine: Crusher, recipe: 4, inputs: [(6, 64)], output: (9, 64), ticks: 12, power: 8),
+    (machine: Crusher, recipe: 5, inputs: [(7, 64)], output: (10, 64), ticks: 12, power: 8),
+    (machine: Crusher, recipe: 6, inputs: [(8, 64)], output: (11, 64), ticks: 12, power: 8),
 ]

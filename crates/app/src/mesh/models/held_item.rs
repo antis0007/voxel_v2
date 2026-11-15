@@ -10,9 +10,11 @@ use glam::{Mat3, Quat, Vec3};
 
 mod geometry;
 mod review;
+mod solid;
 #[cfg(test)]
 mod tests;
 
+use super::fingers::Grip;
 use geometry::{Out, cube, pan, sprite, torch};
 use review::REVIEW;
 pub(crate) use review::{pinned, review_bank};
@@ -39,10 +41,6 @@ const REST: Vec3 = Vec3::new(0.34, -0.22, 0.62);
 const BARE_SEAT: Vec3 = Vec3::new(0.06, -0.14, 0.0);
 const BARE_PITCH: f32 = -0.4;
 const BARE_ROLL: f32 = 0.5;
-/// Multiple of the rig's "open" finger turn applied to the empty hand.
-pub(super) const BARE_RELAX: f32 = 2.0;
-/// Slight finger opening for the torch shaft.
-pub(super) const TORCH_RELAX: f32 = 0.25;
 /// Camera-space nudge that seats the torch shaft in the rig's closed fist (captured 2026-10-30).
 const TORCH_SEAT: Vec3 = Vec3::new(0.03, 0.012, 0.0);
 /// Shift the shaft across the fist without moving the hand's grip socket.
@@ -105,6 +103,7 @@ pub(crate) fn sway_rate(item: Option<Item>) -> f32 {
     let Some(item) = item else { return 16.0 };
     // Not `is_blade`: that reads the render-side tool bank, which the fixed-step tick must not depend on.
     if matches!(item, Item::Weapon(_)) { return 18.0 }
+    if solid_texels(item).is_some() { return 16.0; }
     match held_art::art(item) {
         Art::Block(_) => 10.0,
         Art::Icon(crate::egui_ui::icons::Icon::Torch) => 12.0,
@@ -114,7 +113,27 @@ pub(crate) fn sway_rate(item: Option<Item>) -> f32 {
 
 /// Torch tilt in the grip frame, shared by the drawn torch and its light.
 fn torch_tilt() -> Quat {
-    Quat::from_rotation_y(-0.55) * Quat::from_rotation_z(0.12)
+    let [pitch, yaw, roll] = review::TORCH_TILT.unwrap_or(TORCH_TURN);
+    Quat::from_rotation_x(pitch) * Quat::from_rotation_y(yaw) * Quat::from_rotation_z(roll)
+}
+
+/// Torch turn in the grip frame (pitch, yaw, roll in radians).
+const TORCH_TURN: [f32; 3] = [0.0, -0.55, 0.12];
+
+/// Produce and food wrist turn (pitch, yaw, roll), texel size in metres and how far
+/// below the sprite's centroid the fingers close, in texels.
+const SOLID_GRIP: [f32; 5] = [0.25, -0.6, -0.1, 0.0115, 3.0];
+/// How much of the full ball depth a held solid keeps.
+const SOLID_FLATTEN: f32 = 0.85;
+
+/// Sprite texels when `item` is held as a rounded solid: plant and produce blocks
+/// with a sheet sprite, and food.
+fn solid_texels(item: Item) -> Option<(usize, usize, Vec<Option<(u8, [u8; 3])>>)> {
+    match held_art::art(item) {
+        Art::Block(block) => crate::egui_ui::icons::sprites16::block_texels(block),
+        Art::Icon(icon @ Icon::Food(_)) => Some(held_art::icon_texels(icon)),
+        _ => None,
+    }
 }
 
 fn torch_frame(v: &View) -> (Vec3, Quat) {
@@ -152,7 +171,11 @@ fn frame(v: &View) -> (Vec3, Quat) {
 }
 
 /// A ready blade leans its tip forward, away from the eye.
-fn blade_rest() -> Quat { Quat::from_rotation_x(-0.5) * Quat::from_rotation_y(-0.2) * Quat::from_rotation_z(0.25) }
+/// Turn and camera-space seat come from `grips.ron` (`VOXEL_REVIEW_BLADE` overrides them in captures).
+fn blade_rest() -> (Quat, Vec3) {
+    let ([pitch, yaw, roll], seat) = super::fingers::blade_stance();
+    (Quat::from_rotation_x(pitch) * Quat::from_rotation_y(yaw) * Quat::from_rotation_z(roll), Vec3::from_array(seat))
+}
 
 struct SpriteGrip {
     /// Hand socket relative to sprite centre, in texels with positive Y up.
@@ -167,28 +190,34 @@ struct SpriteGrip {
     texel: f32,
 }
 
+/// Turn of a long tool's blade plane about the wrist's up axis, in radians.
+const LONG_TOOL_YAW: f32 = -0.9;
+
 fn long_tool_grip(icon: Icon) -> Option<SpriteGrip> {
+    // Head tipped toward the eye and the blade plane turned off the view axis, so the
+    // extruded sprite reads as a solid with depth rather than a flat card (captured 2026-11-14).
     let (pitch, roll, half_depth, texel) = match icon {
-        Icon::Pickaxe(6..=8) => (-0.34, -0.55, 0.58, 0.0185),
-        Icon::Axe(_) => (-0.33, -0.53, 0.62, 0.018),
-        Icon::Shovel(_) => (-0.39, -0.57, 0.48, 0.019),
-        Icon::Hoe => (-0.39, -0.57, 0.48, 0.0185),
+        Icon::Pickaxe(6..=8) => (0.30, -0.15, 0.58, 0.0185),
+        Icon::Axe(_) => (0.31, -0.13, 0.62, 0.018),
+        Icon::Shovel(_) => (0.25, -0.17, 0.48, 0.019),
+        Icon::Hoe => (0.25, -0.17, 0.48, 0.0185),
         Icon::BuiltTool(schema, ..) => {
             match engine_tools::PARTS.schemas.get(schema as usize)?.id.as_str() {
-                "pickaxe" => (-0.34, -0.55, 0.58, 0.0185),
-                "axe" => (-0.33, -0.53, 0.62, 0.018),
-                "shovel" | "excavator" => (-0.39, -0.57, 0.56, 0.019),
-                "hammer" => (-0.32, -0.49, 0.75, 0.0185),
-                "scythe" => (-0.41, -0.53, 0.48, 0.0195),
+                "pickaxe" => (0.30, -0.15, 0.58, 0.0185),
+                "axe" => (0.31, -0.13, 0.62, 0.018),
+                "shovel" | "excavator" => (0.25, -0.17, 0.56, 0.019),
+                "hammer" => (0.32, -0.09, 0.75, 0.0185),
+                "scythe" => (0.23, -0.13, 0.48, 0.0195),
                 _ => return None,
             }
         }
         _ => return None,
     };
+    let [pitch, yaw, roll] = review::TOOL_GRIP.unwrap_or([pitch, LONG_TOOL_YAW, roll]);
     Some(SpriteGrip {
         socket: Vec3::new(-3.5, -3.5, 0.0),
         align: std::f32::consts::FRAC_PI_4,
-        pitch, yaw: -0.26, roll, half_depth,
+        pitch, yaw, roll, half_depth,
         shaft: true, texel,
     })
 }
@@ -216,7 +245,14 @@ fn sprite_grip(icon: Icon) -> SpriteGrip {
         Icon::Map | Icon::Clock => (2.5, -2.5, 0.0, -0.32, -0.22, 0.12, 0.4),
         _ => (0.0, -2.5, 0.0, -0.12, -0.38, -0.16, 0.5),
     };
-    let texel = if matches!(icon, Icon::Shears) { 0.0135 } else { SPRITE_TEXEL };
+    // Pocket-sized things: a 16-texel watch or folded map at the default texel is 26 cm.
+    let texel = match icon {
+        Icon::Shears => 0.0135,
+        Icon::Clock => 0.0105,
+        Icon::Map => 0.0125,
+        _ => SPRITE_TEXEL,
+    };
+    let [pitch, yaw, roll] = review::SPRITE_GRIP.unwrap_or([pitch, yaw, roll]);
     SpriteGrip { socket: Vec3::new(x, y, 0.0), align, pitch, yaw, roll, half_depth, shaft: false, texel }
 }
 
@@ -231,11 +267,26 @@ fn pan_placement(centre: Vec3, camera: Quat) -> (Vec3, Quat) {
 }
 
 /// What the hand shows on a melee swing: the held blade, else an owned legacy blade, else the held item.
-pub(super) fn swung(world: &World, held: Option<Item>) -> Option<Item> {
+pub(crate) fn swung(world: &World, held: Option<Item>) -> Option<Item> {
     if held.is_some_and(is_blade) { return held; }
     let tier = world.adventure.weapon;
     (1..=5).contains(&tier).then_some(Item::Weapon(tier as u8))
         .or(held.filter(|&item| !matches!(held_art::art(item), Art::Wand(_))))
+}
+
+/// How the hand holds `item` (`None` is the empty hand); presets live in `grips.ron`.
+pub(crate) fn grip(item: Option<Item>) -> Grip {
+    let Some(item) = item else { return Grip::Bare };
+    if item.placeable_block().is_some_and(|b| b.is_torch()) { return Grip::Torch; }
+    if is_blade(item) { return Grip::Blade; }
+    if solid_texels(item).is_some() { return Grip::Sprite; }
+    match held_art::art(item) {
+        Art::Block(_) => Grip::Block,
+        Art::Wand(_) => Grip::Shaft,
+        Art::Icon(Icon::Pan | Icon::Bucket(_)) => Grip::Handle,
+        Art::Icon(icon) if long_tool_grip(icon).is_some() || matches!(icon, Icon::Rod | Icon::ClaimStake) => Grip::Shaft,
+        Art::Icon(_) => Grip::Sprite,
+    }
 }
 
 pub(super) fn bare_placement(v: &View) -> (Vec3, Quat) {
@@ -270,8 +321,16 @@ pub(super) fn draw_blade(m: &mut Model, item: Item, frame: glam::Mat4) {
 pub(super) fn draw(m: &mut Model, item: Item, v: &View) -> (Vec3, Quat) {
     let (centre, camera) = frame(v);
     if is_blade(item) {
-        let rotation = camera * blade_rest();
+        let (turn, seat) = blade_rest();
+        let rotation = camera * turn;
+        let centre = centre + camera * seat;
         draw_blade(m, item, glam::Mat4::from_rotation_translation(rotation, centre));
+        return (centre, rotation);
+    }
+    if let Some(texels) = solid_texels(item) {
+        let [pitch, yaw, roll, texel, socket] = review::SOLID_GRIP.unwrap_or(SOLID_GRIP);
+        let rotation = camera * Quat::from_rotation_x(pitch) * Quat::from_rotation_y(yaw) * Quat::from_rotation_z(roll);
+        solid::solid(&mut Out { m, centre, rotation }, texels, texel, glam::Vec2::new(0.0, -socket), SOLID_FLATTEN);
         return (centre, rotation);
     }
     match held_art::art(item) {

@@ -1,6 +1,6 @@
 //! Generator 75: bounded limestone collapse chambers and perched cave gardens.
 //! One deterministic site per 160 m cell; no neighbouring chunks are loaded.
-use crate::{BlockId as B, WorldSampleConfig, WorldType, hash2, sample_column};
+use crate::{BlockId as B, WorldSampleConfig, hash2, sample_column};
 use glam::{IVec3, Vec3};
 use std::{cell::RefCell, collections::HashMap};
 
@@ -37,7 +37,7 @@ fn site(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<Site> {
 }
 
 pub fn block(cfg: &WorldSampleConfig, p: IVec3, surface: i32) -> Option<B> {
-    if cfg.generator_version < VERSION || !matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged) { return None; }
+    if cfg.generator_version < VERSION || !crate::features::enabled(cfg, crate::features::Feature::Karst) { return None; }
     let v = cfg.voxel_meters();
     let m = (p.as_vec3()+Vec3::splat(0.5))*v;
     let s = site(cfg, (m.x/CELL).floor() as i32, (m.z/CELL).floor() as i32)?;
@@ -96,7 +96,7 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, surface: i32) -> Option<B> {
 
 /// Metre-space centre of a perched garden; shared by wildlife and review cameras.
 pub fn garden(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<Vec3> {
-    if cfg.generator_version < VERSION || !matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged) { return None; }
+    if cfg.generator_version < VERSION || !crate::features::enabled(cfg, crate::features::Feature::Karst) { return None; }
     let s = site(cfg, ix, iz)?;
     Some(Vec3::new(s.x, s.floor, s.z))
 }
@@ -111,7 +111,7 @@ pub fn entrance(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Option<Vec3> {
 
 /// Only the guaranteed inner throat needs an overhead scan for skylighting.
 pub fn skylight(cfg: &WorldSampleConfig, x: i32, z: i32) -> bool {
-    if cfg.generator_version < VERSION || !matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged) { return false; }
+    if cfg.generator_version < VERSION || !crate::features::enabled(cfg, crate::features::Feature::Karst) { return false; }
     let mx = (x as f32+0.5)*cfg.voxel_meters();
     let mz = (z as f32+0.5)*cfg.voxel_meters();
     let Some(s) = site(cfg, (mx/CELL).floor() as i32, (mz/CELL).floor() as i32) else { return false; };

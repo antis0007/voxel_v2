@@ -86,7 +86,7 @@ impl Layout {
                 }
             }
         }
-        if self.version >= super::wilds::VERSION
+        if crate::features::legacy_preview(self.version, super::wilds::VERSION)
             && let Owner::Space(si) = owner
             && let Some(b) = super::wilds::natural(&self.spaces[si], m)
         {
@@ -194,7 +194,7 @@ impl Layout {
         let d = (m.x - cx).hypot(m.z - cz);
         let fy = m.y - floor;
         let [wall, alt, ..] = palette(s.style);
-        let lit = matches!(s.style, Style::Ice | Style::Fungal) || (self.version >= super::wilds::VERSION && s.style == Style::Sea);
+        let lit = matches!(s.style, Style::Ice | Style::Fungal) || (crate::features::legacy_preview(self.version, super::wilds::VERSION) && s.style == Style::Sea);
         let glow = lit && hash2(gx, gz, 4809) > 0.8;
         let body = |n: f32| match s.style {
             Style::Ice => B::Ice,

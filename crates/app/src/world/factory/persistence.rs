@@ -379,7 +379,7 @@ impl Factory {
                 );
                 ensure!(
                     n.exhaust.iter().map(|&v| u64::from(v)).sum::<u64>()
-                        <= industry::GAS_CAPACITY as u64
+                        <= industry::gas_capacity(&n) as u64
                         && n.residue.iter().map(|&v| u64::from(v)).sum::<u64>()
                             <= industry::WASTE_CAPACITY as u64
                         && n.filter_credit <= industry::FILTER_CAPACITY,

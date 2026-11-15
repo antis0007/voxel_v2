@@ -55,16 +55,42 @@ fn cell_of(x: f32, z: f32) -> (i32, i32) {
     ((x / CELL_M).floor() as i32, (z / CELL_M).floor() as i32)
 }
 
+/// Conservative vertical range of island geometry overlapping a chunk column.
+pub fn island_bounds(cfg: &WorldSampleConfig, lo: (i32, i32), hi: (i32, i32)) -> Option<(i32, i32)> {
+    let scale = cfg.voxel_meters();
+    let min = Vec2::new(lo.0 as f32, lo.1 as f32) * scale;
+    let max = (Vec2::new(hi.0 as f32, hi.1 as f32) + Vec2::ONE) * scale;
+    let first = cell_of(min.x, min.y);
+    let last = cell_of(max.x, max.y);
+    let mut bottom = i32::MAX;
+    let mut top = i32::MIN;
+    for z in first.1 - 1..=last.1 + 1 {
+        for x in first.0 - 1..=last.0 + 1 {
+            let Some(isle) = island(cfg.seed, (x, z)) else { continue };
+            if isle.centre.distance(isle.centre.clamp(min, max)) > 1.22 * isle.radius {
+                continue;
+            }
+            bottom = bottom.min(((isle.top - 1.25 * isle.keel - 14.0) / scale).floor() as i32);
+            top = top.max(((isle.top + 18.0) / scale).ceil() as i32);
+        }
+    }
+    (bottom <= top).then_some((bottom, top))
+}
+
 /// Height of the grass top at `x, z`, with `d` the warped radial distance.
 fn surface(seed: u32, isle: &Island, x: f32, z: f32, d: f32) -> f32 {
     isle.top + (1.0 - d * d) * 3.5 + (value_noise2(x / 9.0, z / 9.0, seed ^ ISLE) - 0.5) * 2.0
 }
 
+fn surface_distance(seed: u32, isle: &Island, x: f32, z: f32) -> f32 {
+    let warp = 0.78 + 0.44 * value_noise2(x / 17.0, z / 17.0, seed ^ ISLE.rotate_left(3));
+    (Vec2::new(x, z) - isle.centre).length() / (isle.radius * warp)
+}
+
 /// Top of the arrival island over the origin metre.
 fn home_top(seed: u32) -> f32 {
     let Some(isle) = island(seed, (0, 0)) else { return HOME_TOP_M };
-    let warp = 0.78 + 0.44 * value_noise2(0.5 / 17.0, 0.5 / 17.0, seed ^ ISLE.rotate_left(3));
-    let d = Vec2::new(0.5, 0.5).length() / (isle.radius * warp);
+    let d = surface_distance(seed, &isle, 0.5, 0.5);
     surface(seed, &isle, 0.5, 0.5, d)
 }
 
@@ -72,9 +98,7 @@ fn home_top(seed: u32) -> f32 {
 /// distance to the island centre over its radius, warped by noise so no
 /// island is a disc.
 fn island_block(seed: u32, isle: &Island, m: Vec3) -> Option<BlockId> {
-    let flat = Vec2::new(m.x, m.z) - isle.centre;
-    let warp = 0.78 + 0.44 * value_noise2(m.x / 17.0, m.z / 17.0, seed ^ ISLE.rotate_left(3));
-    let d = flat.length() / (isle.radius * warp);
+    let d = surface_distance(seed, isle, m.x, m.z);
     if d >= 1.0 {
         return None;
     }
@@ -142,9 +166,18 @@ fn growth(seed: u32, isle: &Island, m: Vec3, vm: f32) -> Option<BlockId> {
 pub fn column(cfg: &WorldSampleConfig, x: i32, z: i32) -> ColumnSample {
     let vm = cfg.voxel_meters();
     let (mx, mz) = ((x as f32 + 0.5) * vm, (z as f32 + 0.5) * vm);
-    let top = island(cfg.seed, cell_of(mx, mz))
-        .filter(|i| (Vec2::new(mx, mz) - i.centre).length() < i.radius)
-        .map_or(SEA_M, |i| i.top + 4.0);
+    let (cx, cz) = cell_of(mx, mz);
+    let mut top = SEA_M;
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            if let Some(isle) = island(cfg.seed, (cx + dx, cz + dz)) {
+                let distance = surface_distance(cfg.seed, &isle, mx, mz);
+                if distance < 1.0 {
+                    top = top.max(surface(cfg.seed, &isle, mx, mz, distance));
+                }
+            }
+        }
+    }
     ColumnSample {
         deposit_m: 0.0,
         deposit_bed_surface: BlockId::Sand,
@@ -166,7 +199,7 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3) -> BlockId {
         return BlockId::Water;
     }
     if shaft_at(cfg.seed, m) {
-        return BlockId::LightlessShaft;
+        return BlockId::HighfoldGate;
     }
     // An island may overhang into a neighbouring cell; check the 3x3 block.
     let (cx, cz) = cell_of(m.x, m.z);
@@ -195,11 +228,13 @@ pub fn shaft_at(seed: u32, m: Vec3) -> bool {
 pub fn spawn(cfg: &WorldSampleConfig) -> Vec3 {
     let vm = cfg.voxel_meters();
     let at = Vec3::new(3.5, 0.0, 0.5);
-    let top = (0..80)
-        .map(|i| HOME_TOP_M + 8.0 - i as f32 * 0.25)
-        .find(|&y| block(cfg, (Vec3::new(at.x, y - 0.5 * vm, at.z) / vm).floor().as_ivec3()).is_solid())
-        .unwrap_or(HOME_TOP_M + 3.5);
-    Vec3::new(at.x, top + 0.02, at.z) / vm
+    let cell = (at / vm).floor().as_ivec3();
+    let low = ((HOME_TOP_M - 12.0) / vm).floor() as i32;
+    let high = ((HOME_TOP_M + 8.0) / vm).ceil() as i32;
+    let support = (low..=high).rev()
+        .find(|&y| block(cfg, IVec3::new(cell.x, y, cell.z)).is_solid())
+        .unwrap_or((HOME_TOP_M / vm) as i32);
+    Vec3::new(at.x / vm, (support + 1) as f32 + 0.02 / vm, at.z / vm)
 }
 
 #[cfg(test)]
@@ -228,7 +263,7 @@ mod tests {
             }
             assert!(block(&c, cell - IVec3::Y).is_solid(), "footing at {scale:?}");
             let shaft = (Vec3::new(0.5, home_top(c.seed) - 0.5, 0.5) / c.voxel_meters()).floor().as_ivec3();
-            assert_eq!(block(&c, shaft), BlockId::LightlessShaft);
+            assert_eq!(block(&c, shaft), BlockId::HighfoldGate);
         }
     }
 

@@ -23,6 +23,9 @@ static FITTINGS: std::sync::LazyLock<Option<Fittings>> = std::sync::LazyLock::ne
 /// Half extents of the hall footprint around its bench, in metres.
 const HALL_X: i32 = 9;
 const HALL_Z: i32 = 8;
+/// Cells kept clear around the bench, and the spacing between fitted pieces, in metres.
+const BENCH_CLEARANCE: i32 = 3;
+const PIECE_SPACING: i32 = 4;
 /// Floor-to-ceiling search height above a candidate cell.
 const CEILING_RISE: i32 = 7;
 
@@ -50,14 +53,16 @@ pub fn fit(world: &mut World) -> usize {
     for dz in -HALL_Z..=HALL_Z {
         for dx in -HALL_X..=HALL_X {
             let at = bench + IVec3::new(dx, 0, dz);
-            if free_against_wall(world, at) { cells.push(at); }
+            // Not on the bench pedestal: the bench keeps its own bay.
+            if dx.abs().max(dz.abs()) >= BENCH_CLEARANCE && free_against_wall(world, at) { cells.push(at); }
         }
     }
     cells.sort_by_key(|c| (c.x - bench.x).pow(2) + (c.z - bench.z).pow(2));
     let mut taken: Vec<IVec3> = Vec::new();
     for block in [BlockId::Chest, BlockId::Lectern, BlockId::Bed] {
-        let Some(&at) = cells.iter().find(|c| taken.iter().all(|t| (t.x - c.x).abs() + (t.z - c.z).abs() > 1)) else { continue };
+        let Some(&at) = cells.iter().find(|c| taken.iter().all(|t| (t.x - c.x).abs() + (t.z - c.z).abs() >= PIECE_SPACING)) else { continue };
         world.set(at, block);
+        println!("[workshop] fitted {block:?} at {} {} {}", at.x, at.y, at.z);
         taken.push(at);
         placed += 1;
         match block {

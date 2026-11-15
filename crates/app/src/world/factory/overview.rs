@@ -43,6 +43,7 @@ pub fn workshop_iron(world: &crate::world::World, player: glam::Vec3) -> &'stati
     if !n.enabled {
         return "Furnace Paused";
     }
+    let size = step(world);
     if n.output[IRON] == 0 {
         if matches!(n.status, "Held by controller" | "Exhaust blocked") {
             return n.status;
@@ -50,11 +51,17 @@ pub fn workshop_iron(world: &crate::world::World, player: glam::Vec3) -> &'stati
         if n.process().is_some_and(|p| p.output.0 != IRON) {
             return "Furnace Processing Another Material";
         }
-        if n.mode == 1 && n.input[2] < 64 {
-            return "Furnace: Add Iron Ore";
+        // Follow the same mode/order candidates and input admission as processing.
+        // Arc takes raw ore; Gold has no iron recipe. Neither is concentrate mode.
+        let mut iron_recipes = n.recipe_candidates()
+            .filter_map(|id| super::recipes::process(n.kind, id))
+            .filter(|recipe| recipe.output.0 == IRON)
+            .peekable();
+        if iron_recipes.peek().is_none() {
+            return "Furnace: Select an Iron Recipe";
         }
-        if n.mode != 1 && n.input[11] < 64 {
-            return "Furnace: Add Iron Concentrate or Switch to Raw Ore";
+        if !iron_recipes.any(|recipe| recipe.ready(n, size)) {
+            return "Furnace: Add Iron Recipe Inputs";
         }
         if n.status == "Needs cable / power" {
             let Some(net) = f.power_net.get(&pos) else {
@@ -76,7 +83,6 @@ pub fn workshop_iron(world: &crate::world::World, player: glam::Vec3) -> &'stati
             return "Furnace: Insufficient Power";
         }
     }
-    let size = step(world);
     let mut attached = false;
     let mut output = false;
     let mut storage = false;

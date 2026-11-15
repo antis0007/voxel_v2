@@ -21,6 +21,9 @@ const RADIUS_M: f32 = 48.0;
 const SCAN_UP_M: f32 = 24.0;
 const SCAN_DOWN_M: f32 = 32.0;
 pub(crate) const SNOW_BELOW_C: f32 = 0.0;
+/// Snow settles only where the day's mean air is this cold: a frosty night
+/// over a mild meadow does not leave white slabs on the grass.
+const SNOW_MEAN_BELOW_C: f32 = 1.0;
 const MELT_ABOVE_C: f32 = 0.0;
 const FREEZE_BELOW_C: f32 = -4.0;
 const THAW_ABOVE_C: f32 = 0.0;
@@ -245,6 +248,7 @@ fn cover_change(world: &World, top: IVec3, block: B, rain: f32, roll: u32) -> Op
         b if (roll as f32) < SETTLE_PER_MILLE * rain && holds_snow(b) =>
             (torch_light(world, above) < TORCH_MELT
             && air_temperature() < SNOW_BELOW_C
+            && world.sandbox.climate.mean_c(above) <= SNOW_MEAN_BELOW_C
             && world.sandbox.cell_for(top, b).temperature <= SNOW_BELOW_C)
             .then_some((above, B::Air, B::SnowLayer)),
         _ => None,

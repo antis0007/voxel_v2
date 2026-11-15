@@ -49,7 +49,7 @@ impl Builder {
         let pos = self.v(x, y, z);
         let prop = Prop { id, kind, label, pos, yaw: 0.0 };
         self.props.push(prop);
-        if self.version >= super::props::VERSION {
+        if crate::features::legacy_preview(self.version, super::props::VERSION) {
             let (lo, hi) = super::props::model_box(kind, pos);
             self.features.push(Feature::new(lo, hi, F::Prop { kind, style, floor: super::props::floor_point(pos) }));
         } else {
@@ -201,15 +201,15 @@ pub(super) fn build(cfg: &WorldSampleConfig, ax: f32, az: f32, s: f32, ground: f
     super::layout_dress::chasm(&mut b, c);
     super::layout_dress::borough(&mut b, bo);
     super::layout_dress::foundry(&mut b, c);
-    if cfg.generator_version >= super::wilds::VERSION {
+    if crate::features::legacy_preview(cfg.generator_version, super::wilds::VERSION) {
         super::wilds::author(&mut b, cfg.seed, l, c, bo);
     }
-    if cfg.generator_version >= super::life::VERSION {
+    if crate::features::legacy_preview(cfg.generator_version, super::life::VERSION) {
         super::life::author(&mut b, bo);
     }
 
     let Builder { rooms, props, spaces, tunnels, mut features, version, .. } = b;
-    if version >= super::props::VERSION {
+    if crate::features::legacy_preview(version, super::props::VERSION) {
         // A prop model is what the player aims at; nothing may paint over it.
         features.sort_by_key(|f| !matches!(f.kind, F::Prop { .. }));
     }

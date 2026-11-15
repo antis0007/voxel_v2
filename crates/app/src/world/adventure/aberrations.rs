@@ -11,9 +11,15 @@ pub(super) const CHOKER: u32 = 29;
 pub(super) const STALACTITE: u32 = 30;
 /// Roper rig standing on the floor, identical to a roper's body.
 pub(super) const STALAGMITE: u32 = 31;
-pub(super) fn is_kind(kind: u32) -> bool { (SPECTATOR..=STALAGMITE).contains(&kind) }
-/// Ropers and both spires: rooted, tendril-casting, one weak-point rule.
-pub(super) fn roper_like(kind: u32) -> bool { matches!(kind, ROPER | STALACTITE | STALAGMITE) }
+/// Roper rig grown as a pine on the surface; roots are its tendrils.
+pub(super) const PINE_ROPER: u32 = 66;
+/// Roper rig grown as a palm on the surface.
+pub(super) const PALM_ROPER: u32 = 67;
+pub(super) fn is_kind(kind: u32) -> bool { (SPECTATOR..=STALAGMITE).contains(&kind) || tree_roper(kind) }
+/// Ropers, both spires and both trees: rooted, tendril-casting, one weak-point rule.
+pub(super) fn roper_like(kind: u32) -> bool { matches!(kind, ROPER | STALACTITE | STALAGMITE) || tree_roper(kind) }
+/// Tree ropers keep the disguise whole until they act: no eye, no gape.
+pub(super) fn tree_roper(kind: u32) -> bool { matches!(kind, PINE_ROPER | PALM_ROPER) }
 fn tendrils(kind: u32) -> bool { roper_like(kind) || kind == CHOKER }
 /// Crown height above a stalactite's floor anchor; spawns need rock here.
 const HANG_M: f32 = 2.7;
@@ -222,6 +228,8 @@ pub(super) fn body(e: &Enemy, m: &mut Model, time: f32, wind: f32) {
             eye(m, tip, r * 0.15, if casting { ray_color(e) } else { [0.49, 0.61, 0.30] },
                 false, if casting { 0.45 + wind * 0.65 } else { 0.20 });
         }
+    } else if tree_roper(e.kind) {
+        tree_body(e, m, time, wind);
     } else if roper_like(e.kind) {
         // A stalactite is the same stack hung from rock: root up, spire down.
         let hanging = e.kind == STALACTITE;
@@ -261,6 +269,92 @@ pub(super) fn body(e: &Enemy, m: &mut Model, time: f32, wind: f32) {
             m.material_beam(elbow, hand, 0.038, skin, 70.0);
             for j in 0..3 { m.material_beam(hand + Vec3::X * (j as f32 - 1.0) * 0.045, hand + Vec3::new((j as f32 - 1.0) * 0.06, -0.12, -0.12), 0.018, skin, 70.0); }
         }
+    }
+}
+
+/// Shared reveal state for the face and the target HUD.
+pub(super) fn tree_roused(e: &Enemy) -> bool {
+    e.tell > 0.0 || e.recovery > 0.0 || e.encounter.exposed > 0.0
+        || e.health < e.max_health() - 0.1
+}
+
+fn tree_body(e: &Enemy, m: &mut Model, time: f32, wind: f32) {
+    let palm = e.kind == PALM_ROPER;
+    let bark = if palm { [0.46, 0.37, 0.25] } else { [0.31, 0.22, 0.15] };
+    let dark = if palm { [0.34, 0.27, 0.18] } else { [0.22, 0.15, 0.10] };
+    let (leaf, tips) = if palm {
+        ([0.27, 0.47, 0.19], [0.34, 0.52, 0.22])
+    } else {
+        ([0.13, 0.27, 0.16], [0.19, 0.34, 0.20])
+    };
+    let height = if palm { 4.4 } else { 3.6 };
+    let segments = if palm { 10 } else { 7 };
+    // Breathing: the trunk swells a little while it holds someone.
+    let swell = 1.0 + wind * 0.08;
+    let bow = |t: f32| if palm { Vec3::X * (t * std::f32::consts::PI * 0.8).sin() * 0.3 } else { Vec3::ZERO };
+    for i in 0..segments {
+        let t = (i as f32 + 0.5) / segments as f32;
+        let width = (if palm { 0.42 } else { 0.55 }) * (1.0 - t * if palm { 0.2 } else { 0.4 }) * swell;
+        let p = e.pos + Vec3::Y * (t * height) + bow(t);
+        block(m, p, Vec3::new(width, height / segments as f32 + 0.02, width), bark);
+        if palm { block(m, p + Vec3::Y * (height / segments as f32 * 0.5), Vec3::new(width + 0.06, 0.06, width + 0.06), dark); }
+    }
+    let top = e.pos + Vec3::Y * height + bow(1.0);
+    if palm {
+        for i in 0..7 {
+            let a = i as f32 * std::f32::consts::TAU / 7.0 + e.slot as f32;
+            let out = Vec3::new(a.cos(), 0.0, a.sin());
+            // Fronds twitch upward when it strikes.
+            let lift = wind * 0.6 + (time * 0.8 + a).sin() * 0.05;
+            let span = 0.9 + 0.16 * (a * 3.0).sin();
+            let elbow = top + out * span + Vec3::Y * (0.15 + lift * 0.4);
+            let tip = elbow + out * span + Vec3::Y * (-0.75 + lift);
+            m.material_beam(top, elbow, 0.17, leaf, 70.0);
+            m.material_beam(elbow, tip, 0.1, tips, 70.0);
+            let side = out.cross(Vec3::Y);
+            for side_sign in [-1.0, 1.0] {
+                let outer = elbow + side * (side_sign * 0.24) + out * 0.26 - Vec3::Y * 0.19;
+                m.material_beam(top.lerp(elbow, 0.65), outer, 0.09, leaf, 70.0);
+            }
+        }
+        for i in 0..3 {
+            let a = i as f32 * 2.1 + e.slot as f32;
+            block(m, top + Vec3::new(a.cos() * 0.17, -0.2, a.sin() * 0.17), Vec3::splat(0.16), [0.36, 0.25, 0.13]);
+        }
+    } else {
+        for i in 0..6 {
+            let k = i as f32;
+            let width = (2.3 - k * 0.34) * (1.0 + wind * 0.1);
+            let y = 1.5 + k * 0.48;
+            let tier = e.pos + Vec3::Y * y;
+            let stagger = k * 0.65 + (e.slot % 31) as f32 + (time * 0.6 + k).sin() * 0.02;
+            for branch in 0..5 {
+                let a = stagger + branch as f32 * std::f32::consts::TAU / 5.0;
+                let out = Vec3::new(a.cos(), 0.0, a.sin());
+                let elbow = tier + out * (width * 0.26) - Vec3::Y * 0.09;
+                let tip = tier + out * (width * 0.48) - Vec3::Y * 0.24;
+                m.material_beam(tier, elbow, width * 0.23, leaf, 70.0);
+                m.material_beam(elbow, tip, width * 0.14, tips, 70.0);
+            }
+        }
+        block(m, e.pos + Vec3::Y * 4.08, Vec3::new(0.18, 0.38, 0.18), tips);
+    }
+    // Knot that is an eye; split that is a mouth.
+    let face = e.pos + Vec3::Y * 1.3 + bow(1.3 / height);
+    if tree_roused(e) {
+        eye(m, face + Vec3::new(0.0, 0.0, -0.26 * swell), 0.14, [0.78, 0.55, 0.18], false, 0.55);
+        block(m, face + Vec3::new(0.0, -0.5, -0.25 * swell), Vec3::new(0.34, 0.08 + wind * 0.22, 0.06), [0.07, 0.05, 0.04]);
+    } else {
+        block(m, face + Vec3::new(0.0, 0.0, -0.25), Vec3::new(0.16, 0.12, 0.05), dark);
+    }
+    // Roots: lying flat round the foot, they arch up and reach when it casts.
+    for i in 0..6 {
+        let a = i as f32 * std::f32::consts::TAU / 6.0;
+        let root = e.pos + Vec3::new(a.cos() * 0.22, 0.25, a.sin() * 0.22);
+        let end = tendril_end(e, wind, i);
+        let knee = root.lerp(end, 0.5) + Vec3::Y * (0.05 + wind * 0.5 + (time + a).sin() * 0.03 * wind);
+        m.material_beam(root, knee, 0.07, bark, 70.0);
+        m.material_beam(knee, end, 0.04, bark, 70.0);
     }
 }
 

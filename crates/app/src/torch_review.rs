@@ -521,7 +521,8 @@ pub fn apply_survival_phase(
         0 => {
             // Phase 0: HUD gameplay - full health & hunger, aimed at StoneBricks block (HWYLA top pill + hotbar + hearts + haunches)
             creative.show_palette = false;
-            creative.selected_slot = 0;
+            // A fresh kit holds the torch (slot 3), as a new player does.
+            creative.selected_slot = if std::env::var_os("VOXEL_REVIEW_FRESH").is_some() { 2 } else { 0 };
             world.adventure.health = 100.0;
             world.adventure.hunger = 100.0;
             world.inventory.eat_timer = 0.0;

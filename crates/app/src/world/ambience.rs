@@ -283,7 +283,24 @@ impl Presentation {
         let state = &world.adventure.location;
         let tuning = tuning();
         let sample = state.reading();
-        let mut p = sample.map_or_else(Place::default, |s| s.place);
+        let realm_air = match world.world_type.realm() {
+            Some(engine_voxel::RealmKind::Highfold) => Some(Place {
+                name: "Highfold",
+                motes: [0.0, 0.25, 0.32, 0.0],
+                drift: [0.45, 0.0, 0.12, 0.0],
+                mist: 0.12,
+                ..Place::default()
+            }),
+            Some(engine_voxel::RealmKind::Gloaming) => Some(Place {
+                name: "Gloaming",
+                motes: [0.85, 0.0, 0.0, 0.0],
+                drift: [0.0, 0.77, 0.0, 0.0],
+                mist: 0.4,
+                ..Place::default()
+            }),
+            _ => None,
+        };
+        let mut p = realm_air.unwrap_or_else(|| sample.map_or_else(Place::default, |s| s.place));
         let day = lighting.daylight;
         let night = 1.0 - day;
         let winter = ((lighting.foliage_tint[2] - lighting.foliage_tint[0] - 0.10) / 0.20).clamp(0.0, 1.0);
@@ -305,7 +322,7 @@ impl Presentation {
         } else if density >= affinity::POISON_AT {
             mana[2] = (0.4 + density - affinity::POISON_AT).min(1.0);
         }
-        let suppressed = underwater || state.shielded || sample.is_none();
+        let suppressed = underwater || state.shielded || (sample.is_none() && realm_air.is_none());
         for weight in p.motes.iter_mut().chain(p.drift.iter_mut()) { *weight *= tuning.particles; }
         for weight in &mut mana[..3] { *weight *= tuning.particles; }
         if !tuning.sparkles { mana[0] = 0.0; p.motes[2] = 0.0; self.mana[0] = 0.0; self.motes[2] = 0.0; }

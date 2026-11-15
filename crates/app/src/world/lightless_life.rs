@@ -5,6 +5,9 @@
 //! shared day clock when the realm next loads, so a lone torch left behind is
 //! often dark on return.
 //!
+//! In every realm, living blocks the generator made (glowcaps, foxfire,
+//! hanging roots) are logged when harvested and grow back on the day clock.
+//!
 //! Every choice is a positional hash of the realm seed and a step counter; no
 //! wall clock. State lives in `lightless-life.ron` beside the checkpoint.
 use super::{BlockId, World, chunk_coord_from_world_block as chunk_of, inventory::{DroppedStack, Item, ItemStack}};
@@ -33,7 +36,7 @@ const WANDER_SPEED: f32 = 1.4;
 const STALK_SPEED: f32 = 3.0;
 const HUNT_SPEED: f32 = 5.2;
 /// Unlit seconds before the Hush close in.
-const NOTICE_S: f32 = 2.5;
+pub(super) const NOTICE_S: f32 = 2.5;
 const NOTICE_M: f32 = 42.0;
 /// They hold at this distance from a lit body.
 pub const LIGHT_EDGE_M: f32 = 8.0;
@@ -66,6 +69,32 @@ pub struct Hush {
     hunting: bool,
 }
 
+/// A harvested living block that grows back on the day clock.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Sprout {
+    cell: [i32; 3],
+    block: u32,
+    /// Absolute day it is due.
+    due: f64,
+}
+
+const MAX_SPROUTS: usize = 4096;
+
+/// Game days a harvested generated block takes to grow back, by realm.
+/// Only living matter the realm made regrows; rock and placed blocks do not.
+pub fn regrow_days(kind: engine_voxel::RealmKind, block: BlockId) -> Option<f64> {
+    use engine_voxel::RealmKind as K;
+    match (kind, block) {
+        (K::Lightless, BlockId::FoxfireMoss) => Some(3.0),
+        (K::Gloaming, BlockId::AmberCap) => Some(2.0),
+        (K::Gloaming, BlockId::GloamingLeaves) => Some(4.0),
+        (K::Highfold, BlockId::Vines) => Some(1.0),
+        (K::Highfold, BlockId::Leaves) => Some(3.0),
+        (K::Highfold, BlockId::Crystal) => Some(8.0),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Life {
     version: u32,
@@ -82,6 +111,9 @@ pub struct Life {
     pub snuffed: u32,
     /// Last player position, metres; the replay centres here.
     focus: [f32; 3],
+    /// Harvested living blocks waiting to grow back, in every realm.
+    #[serde(default)]
+    sprouts: Vec<Sprout>,
     #[serde(skip)]
     accum: f32,
     #[serde(skip)]
@@ -332,14 +364,61 @@ fn extinguish(world: &mut World, cell: IVec3) {
     }
 }
 
-/// Fixed-step entry. Replays away time on the first tick after a load.
+/// Logs living blocks harvested this step and grows back the due ones whose
+/// cells are resident and still empty. Away time needs no replay: due days
+/// are absolute, so a forest picked bare regrows while the player is gone.
+fn regrowth(life: &mut Life, world: &mut World, kind: engine_voxel::RealmKind, days: f64) {
+    if world.changed_cells.is_empty() && life.sprouts.is_empty() {
+        return;
+    }
+    let cfg = world.sample_config();
+    for &p in &world.changed_cells {
+        if life.sprouts.len() >= MAX_SPROUTS {
+            break;
+        }
+        if !world.get(p).is_empty() {
+            continue;
+        }
+        let made = engine_worldgen::sample_block(&cfg, p);
+        if let Some(wait) = regrow_days(kind, made)
+            && !life.sprouts.iter().any(|s| s.cell == p.to_array())
+        {
+            // Seeded spread so a harvested patch does not refill in one instant.
+            let jitter = f64::from(unit(hash_u32(world.seed ^ hash_u32(p.x as u32) ^ (p.z as u32).rotate_left(13) ^ p.y as u32)));
+            life.sprouts.push(Sprout { cell: p.to_array(), block: made.as_u32(), due: days + wait * (0.75 + 0.5 * jitter) });
+        }
+    }
+    life.sprouts.retain(|sprout| {
+        let cell = IVec3::from_array(sprout.cell);
+        if sprout.due > days {
+            return true;
+        }
+        let Some(current) = world.resident_block(cell) else {
+            return true;
+        };
+        let block = BlockId::from_u32(sprout.block);
+        if current.is_empty() && regrow_days(kind, block).is_some() {
+            world.set(cell, block);
+        }
+        false
+    });
+}
+
+/// Fixed-step entry. Replays Lightless colony activity after an absence.
 pub fn tick(world: &mut World, player: &Player, day: &super::DayNightCycle, dt: f32) {
-    if world.world_type.realm() != Some(engine_voxel::RealmKind::Lightless) || world.ca_view.is_some() {
+    let Some(kind) = world.world_type.realm() else { return };
+    if world.ca_view.is_some() {
         return;
     }
     let mut life = std::mem::take(&mut world.lightless);
     life.version = VERSION;
     let days = super::synoptic::days(day);
+    regrowth(&mut life, world, kind, days);
+    if kind != engine_voxel::RealmKind::Lightless {
+        life.clock = Some(days);
+        world.lightless = life;
+        return;
+    }
     let scale = world.voxel_scale.meters();
     let body = player.pos * scale;
     if let Some(clock) = life.clock {
@@ -382,6 +461,7 @@ fn decode(bytes: &[u8]) -> Result<Life> {
     ensure!(bytes.len() <= 262_144, "Lightless life file exceeds size limit");
     let life: Life = ron::from_str(std::str::from_utf8(bytes)?).context("Unreadable Lightless life file")?;
     ensure!(life.version == VERSION, "Unsupported Lightless life version");
+    ensure!(life.sprouts.len() <= MAX_SPROUTS && life.sprouts.iter().all(|s| s.due.is_finite()), "Realm regrowth exceeds limits");
     ensure!(life.hush.len() <= MAX_HUSH && life.torches.len() <= MAX_TORCHES
         && life.pending.len() <= MAX_TORCHES && life.regions.len() <= MAX_REGIONS, "Lightless life exceeds limits");
     let finite = |v: &[f32; 3]| v.iter().all(|x| x.is_finite() && x.abs() < 4.0e6);
@@ -468,6 +548,32 @@ mod tests {
         for d in [IVec3::ZERO, IVec3::X, IVec3::Z] {
             assert!(life.torches.contains(&(camp + d).to_array()), "camp torch kept");
         }
+    }
+
+    /// A glowcap picked in the Gloaming is logged and grows back once due,
+    /// whether or not anyone watched.
+    #[test]
+    fn harvested_glowcaps_grow_back_on_the_day_clock() {
+        let mut w = World::with_seed(WorldType::Realm(RealmKind::Gloaming), VoxelScalePreset::OneMeter, 7);
+        let cfg = w.sample_config();
+        let cap = (20..120)
+            .flat_map(|x| (20..120).map(move |z| (x, z)))
+            .find_map(|(x, z)| {
+                let top = engine_worldgen::gloaming::ground(cfg.seed, x as f32 + 0.5, z as f32 + 0.5).floor() as i32;
+                (top..top + 2).map(|y| IVec3::new(x, y, z)).find(|&p| engine_worldgen::sample_block(&cfg, p) == BlockId::AmberCap)
+            })
+            .expect("a glowcap patch near the clearing");
+        assert!(w.admit_edit_chunk(chunk_of(cap)));
+        assert_eq!(w.get(cap), BlockId::AmberCap);
+        let mut life = Life::default();
+        w.set(cap, BlockId::Air);
+        regrowth(&mut life, &mut w, RealmKind::Gloaming, 10.0);
+        assert_eq!(life.sprouts.len(), 1, "the harvest is logged");
+        regrowth(&mut life, &mut w, RealmKind::Gloaming, 10.5);
+        assert_eq!(w.get(cap), BlockId::Air, "not yet due");
+        regrowth(&mut life, &mut w, RealmKind::Gloaming, 13.0);
+        assert_eq!(w.get(cap), BlockId::AmberCap, "grown back");
+        assert!(life.sprouts.is_empty());
     }
 
     /// Drifting Hush stay in open rock.

@@ -38,6 +38,9 @@ struct Globe {
 // Euler rotation (radians) that carried its crust from the older frame.
 @group(0) @binding(6) var plate_ids: texture_2d_array<u32>;
 @group(0) @binding(7) var<uniform> plate_axes: array<vec4<f32>, 64>;
+// Newer history frame: margin colour (rgb) and strength (a) on both sides of
+// each plate boundary, for the screen-resolution seam line.
+@group(0) @binding(8) var seam_tint: texture_2d_array<f32>;
 
 // Per-pixel plate carry, set once in fs_main by globe_carry: lookups into
 // the newer map turn by carry_now, into the older map by carry_before.
@@ -154,6 +157,45 @@ fn globe_carry(d: vec3<f32>) {
     let axis = plate_axes[plate].xyz;
     carry_now = axis * (1.0 - b);
     carry_before = axis * -b;
+}
+
+// Plate seam of the newer frame, carried with the crust, as a line of fixed
+// screen width: rgb = margin colour scaled by strength, zero off the line.
+// The four plate ids around the carried point give a 0/1 "same plate" field;
+// its bilinear 0.5 contour is the boundary, and the field's gradient turns
+// the distance to it into texels, then pixels, with no derivatives (this runs
+// in non-uniform control flow).
+fn globe_seam_line(d: vec3<f32>, texel_px: f32) -> vec3<f32> {
+    if g.view_y.w < 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let f = globe_face(globe_rotate(d, carry_now));
+    let n = max(g.maps.x, 2.0);
+    let q = (f.yz + 1.0) * 0.5 * (n - 1.0);
+    let hi = vec2<i32>(i32(n) - 1);
+    let i0 = clamp(vec2<i32>(floor(q)), vec2<i32>(0), hi);
+    let i1 = min(i0 + vec2<i32>(1), hi);
+    let fr = clamp(q - vec2<f32>(i0), vec2<f32>(0.0), vec2<f32>(1.0));
+    let layer = i32(f.x);
+    let p00 = textureLoad(plate_ids, i0, layer, 0).r;
+    let p10 = textureLoad(plate_ids, vec2<i32>(i1.x, i0.y), layer, 0).r;
+    let p01 = textureLoad(plate_ids, vec2<i32>(i0.x, i1.y), layer, 0).r;
+    let p11 = textureLoad(plate_ids, i1, layer, 0).r;
+    if p00 == p10 && p00 == p01 && p00 == p11 {
+        return vec3<f32>(0.0);
+    }
+    // Own plate: the nearest corner's.
+    let own = select(select(p00, p10, fr.x >= 0.5), select(p01, p11, fr.x >= 0.5), fr.y >= 0.5);
+    let c = vec4<f32>(select(0.0, 1.0, p00 == own), select(0.0, 1.0, p10 == own),
+        select(0.0, 1.0, p01 == own), select(0.0, 1.0, p11 == own));
+    let s = mix(mix(c.x, c.y, fr.x), mix(c.z, c.w, fr.x), fr.y);
+    let grad = vec2<f32>(mix(c.y - c.x, c.w - c.z, fr.y), mix(c.z - c.x, c.w - c.y, fr.x));
+    let dist_px = abs(s - 0.5) / max(length(grad), 0.25) * texel_px;
+    // About 1.6 px across, never wider than a third of a texel.
+    let half_px = min(0.8, texel_px * 0.17);
+    let line = 1.0 - smoothstep(half_px * 0.5, half_px + 0.6, dist_px);
+    let t = textureSampleLevel(seam_tint, linear_clamp, globe_uv(f.yz, n), layer, 0.0);
+    return t.rgb * t.a * line;
 }
 
 // Albedo and height at a planet direction, crossfading two published maps.
@@ -444,7 +486,13 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         let rough = (0.3 + clamp(length(vec2<f32>(gx, gy)) * 5.0, 0.0, 1.0)) * detail;
         let bump = (t1 * grain.x + t2 * grain.y) * 0.45 * rough;
         let n_land = normalize(globe_view(normalize(d - (t1 * gx + t2 * gy) * k - bump)));
-        let albedo = raw_albedo * (1.0 + grain.z * 0.22 * detail * step(0.0, h));
+        // Carried history frames draw plate seams here at screen resolution;
+        // other maps have them baked into the albedo and emission.
+        let seam_line = globe_seam_line(ds, texel_px);
+        let seam_line_peak = max(seam_line.r, max(seam_line.g, seam_line.b));
+        let seam_albedo = seam_line / max(seam_line_peak, 1e-3) * 0.8;
+        let albedo = mix(raw_albedo * (1.0 + grain.z * 0.22 * detail * step(0.0, h)), seam_albedo,
+            0.45 * min(seam_line_peak * 1.4, 1.0));
 
         // Sea-level crossing filtered at screen resolution: the signed height
         // change across one pixel, from the same taps (foreshortened toward
@@ -490,7 +538,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         // The bilinear tail of a one-texel line is cut back so the seam stays thin.
         let seam = globe_glow(ds);
         let seam_peak = max(seam.r, max(seam.g, seam.b));
-        surface += seam * smoothstep(0.1, 0.45, seam_peak) * GLOW_E * (0.25 + 0.75 * night);
+        surface += (seam * smoothstep(0.1, 0.45, seam_peak) + seam_line) * GLOW_E * (0.25 + 0.75 * night);
 
         // Cloud shell: lit tops over a soft cast shadow offset toward the sun.
         let cover = globe_clouds(d);

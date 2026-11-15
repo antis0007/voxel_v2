@@ -180,7 +180,7 @@ pub fn report(label: &str) -> WorldLoadReport {
     };
     let face_km = (engine_worldgen::geo::face_edge_m(&hills()) / 1000.0) as f32;
     let spawn = (!planet).then_some(glam::Vec3::X);
-    let report = WorldLoadReport { world_key: 0xF1C7_0000 | u64::from(streaming), seed: SEED, stages, map, drift: Vec::new(), planet: false, face_km, spawn, pose, ready: false };
+    let report = WorldLoadReport { world_key: 0xF1C7_0000 | u64::from(streaming), seed: SEED, stages, map, drift: Vec::new(), planet: false, face_km, spawn, pose, regional: None, ready: false };
     report.prime();
     report
 }

@@ -184,7 +184,7 @@ pub fn resident_action(world: &mut World, villager: u32, eye: Vec3, action: Resi
         }),
         ResidentAction::Donate(item) => {
             if villager != super::farming::freight::SELLER {
-                Err("Donation Unavailable")
+                super::farming::jobs::communities::deliver_supply(world, villager, eye, item)
             } else {
                 super::farming::pantry::donate(world, item)
             }

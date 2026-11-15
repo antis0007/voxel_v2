@@ -75,6 +75,9 @@ fn hash(b: &[u8]) -> u64 {
 pub const UI_SCALE_MIN: f32 = 0.75;
 pub const UI_SCALE_MAX: f32 = 2.5;
 pub const UI_SCALE_DEFAULT: f32 = 1.5;
+/// Hotbar slots at 1.25 floor to 32 pt (2x the 16 px sprites at 1:1, 3x at 150%).
+/// At 1.0 they were 26 pt, smaller than vanilla at GUI scale 3, and counts were hard to read.
+pub const HOTBAR_SCALE_DEFAULT: f32 = 1.25;
 /// Smallest logical screen, in egui points, the fixed-width panels are laid out for.
 pub const UI_MIN_POINTS: [f32; 2] = [800.0, 450.0];
 
@@ -181,7 +184,7 @@ impl Default for Preferences {
             auto_quality: true,
             render_scale: 100,
             ui_scale: UI_SCALE_DEFAULT,
-            hotbar_scale: 1.0,
+            hotbar_scale: HOTBAR_SCALE_DEFAULT,
             offhand_right: false,
             camera_motion: 100,
             fov_effects: 100,
@@ -199,12 +202,11 @@ impl Preferences {
     pub fn kind(self) -> WorldType {
         match self.world {
             0 => WorldType::Superflat,
-            2 => WorldType::Ridged,
-        3 => WorldType::Nether,
-        4 => WorldType::Planet,
-        5 => WorldType::Manyfold,
-        6 => WorldType::Hall,
-            _ => WorldType::Hills,
+            3 => WorldType::Nether,
+            5 => WorldType::Manyfold,
+            6 => WorldType::Hall,
+            // Older preferences can still contain the Hills and Ridged codes.
+            _ => WorldType::Planet,
         }
     }
     pub fn voxel_scale(self) -> VoxelScalePreset {

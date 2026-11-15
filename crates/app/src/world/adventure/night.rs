@@ -146,7 +146,8 @@ pub(super) fn tick(adv: &mut Adventure, world: &World, feet: Vec3, budget: Budge
         let mut ctx = habitat::Context::at(world, probe, night, covered);
         // Without a recorded spawn point the land counts as home ground.
         let from_spawn = adv.realm_spawn().point.map_or(0.0, |p| flat(column - p).length());
-        ctx.danger = habitat::danger(from_spawn, ctx.biome);
+        let depth = if ctx.realm == habitat::Realm::Underground { habitat::depth_m(world, probe) } else { 0.0 };
+        ctx.danger = habitat::danger_below(from_spawn, ctx.biome, depth);
         trace.mark("night-habitat");
         let Some(kind) = habitat::pick(&ctx, hash_u32(h ^ 0x5bd1_e995), hostile_kind) else { continue };
         let candidate = ground(world, column, feet.y, kind);

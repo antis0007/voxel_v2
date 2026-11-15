@@ -92,6 +92,9 @@ enum Request {
     Capture { name: String },
     /// Rolling frame-time percentiles from the live session.
     Perf,
+    /// Realm layout editor (Gilded Cave): `action` describe, set, reset, reroll, save, export, view.
+    Layout { #[serde(default = "describe_action")] action: String, #[serde(default)] values: BTreeMap<String, Value>,
+        #[serde(default)] seed: Option<u32>, #[serde(default)] view: Option<String> },
     Spells { #[serde(default = "default_tier")] tier: u32 },
     Wand { build: super::wand_lab::Build, #[serde(default)] equip: bool },
     /// Any solo chat command, e.g. `/give`, `/time`, `/gamemode`, `/summon`.
@@ -429,6 +432,12 @@ impl Engine {
                 world::ambience::refresh(w, player);
                 inspect(w, player, clock, &["player".into(),"location".into()])
             }
+            Request::Layout { action, values, seed, view } => {
+                if values.len() > 256 { return Err("Layout: at most 256 fields per request".into()); }
+                let result = super::gilded_layout::handle(w, player, &action, &values, seed, view.as_deref());
+                if action == "view" { world::ambience::refresh(w, player); }
+                result
+            }
             Request::Time { fraction } => {
                 bounded(fraction, 0.0, 1.0, "day fraction")?;
                 clock.set_time_of_day(fraction);
@@ -571,6 +580,8 @@ fn bounded(value: f32, lo: f32, hi: f32, name: &str) -> Result<(), String> {
     if value.is_finite() && (lo..=hi).contains(&value) { Ok(()) } else { Err(format!("{name}: expected {lo}..{hi}")) }
 }
 
+fn describe_action() -> String { "describe".into() }
+
 fn describe(system: Option<&str>) -> Result<Value, String> {
     let controls = [
         ("natural_density_max","Mana density ceiling",1.05,1.95,"x",0.05),
@@ -587,12 +598,15 @@ fn describe(system: Option<&str>) -> Result<Value, String> {
         "materials":{"mode":"live","scope":"session","source":"crates/app/src/material_studio.rs","families":material_studio::families(),
             "tint_range":[0.0,2.0],"roughness_range":[0.08,1.0],"reflectance_range":[0.0,1.0]},
         "models":{"mode":"live","scope":"session","source":"crates/app/src/mesh/models/voxel_asset.rs",
-            "format":"size 8 8 8 text voxels","max_bytes":16384,"loaded_assets":voxel_asset::loaded_assets(),
+            "format":"size 8 8 8 or size 16 16 16 text voxels","max_bytes":16384,"loaded_assets":voxel_asset::loaded_assets(),
             "limits":"Factory voxel assets loaded in the scene; rigged GLB, collision and new block IDs require rebuild"},
         "engine":{"protocol":1,"build_version":env!("CARGO_PKG_VERSION"),"undo_limit":16,
             "sections":["world","player","location","look","machine","tuning","models","objectives"],
             "operations":["describe","inspect","survey","tune","material","model","undo","reset","vitals","camera","time","capture","spells","wand","perf",
-                "command","systems","fill","probe","hedrons","enemies","spawn_enemy","clear_enemies","machine_kinds","machine","machines","place_machine","place_shell","set_machine","step_factory","machine_test"],
+                "command","systems","fill","probe","hedrons","enemies","spawn_enemy","clear_enemies","machine_kinds","machine","machines","place_machine","place_shell","set_machine","step_factory","machine_test","layout"],
+            "layout":{"actions":["describe","set","reset","reroll","save","export","view"],"world":"gilded",
+                "set":"values {field: number | bool | \"#rrggbb\"}; resident chunks regenerate","reroll":"seed: shapes from another seed, light kept",
+                "save":"writes the world sidecar gilded_layout.ron","view":"view: review camera name (creative or spectator)"},
             "machines":{"machine_test":"position, kind? (places), facing?, set {mode,target,enabled,recipe,filter (-1 clears),energy,upgrade,water,input {resource:count},clear_output}, ticks, probe? -> end state + changed fields",
                 "max_ticks":machine::MAX_STEPS,"step_s":crate::simulation::STEP_SECONDS,"report":"defaults omitted; off=disabled",
                 "resources":engine_content::factory_resources::NAMES},
@@ -608,8 +622,8 @@ fn describe(system: Option<&str>) -> Result<Value, String> {
 fn inspect(w: &mut World, player: &Player, clock: &DayNightCycle, sections: &[String]) -> Result<Value, String> {
     let defaults = ["player".into(),"location".into()];
     let sections = if sections.is_empty() { &defaults[..] } else { sections };
-    if sections.len() > 8 || sections.iter().any(|s| !["world","player","location","look","machine","tuning","models","objectives"].contains(&s.as_str())) {
-        return Err("Choose up to six sections from describe engine".into());
+    if sections.len() > 9 || sections.iter().any(|s| !["world","player","location","look","machine","tuning","models","objectives","civilization"].contains(&s.as_str())) {
+        return Err("Choose up to nine sections from describe engine".into());
     }
     world::ambience::refresh(w, player);
     let a = &w.adventure;
@@ -640,6 +654,10 @@ fn inspect(w: &mut World, player: &Player, clock: &DayNightCycle, sections: &[St
                 .map_or(Value::Null, |(p,_)| json!({"cell":p.to_array(),"block":w.get(p).display_name(),"solid":w.get(p).is_solid()})),
             "tuning" => serde_json::to_value(world::ambience::tuning()).unwrap(),
             "models" => json!({"loaded":voxel_asset::loaded_assets(),"overridden":voxel_asset::previews().keys().collect::<Vec<_>>()}),
+            "civilization" => json!({
+                "generated": engine_worldgen::civilization::enabled(&w.sample_config()),
+                "community": world::farming::jobs::communities::report(w),
+            }),
             "objectives" => {
                 let view = w.goals.view();
                 json!({"current":view.current.as_ref().map(|r| json!({"title":r.title,"action":r.action})),

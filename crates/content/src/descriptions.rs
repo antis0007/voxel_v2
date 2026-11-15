@@ -60,13 +60,46 @@ pub struct Catalog {
 const SOURCE: &str = include_str!("../../../assets/descriptions.ron");
 const SHARED_KEYWORDS: [&str; 4] = ["Burning", "Wet", "Charged", "Sealed"];
 static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
-    parse(SOURCE).unwrap_or_else(|errors| {
-        // Editorial copy is optional presentation, never gameplay authority.
-        // Keep authoring validation strict without taking down a live session.
-        eprintln!("[descriptions] Copy omitted: {}", errors.join("; "));
-        Catalog::default()
-    })
+    // Editorial copy is optional presentation, never gameplay authority.
+    // Authoring validation (`parse`) stays strict, but a live session keeps
+    // every valid line: one flawed entry must not blank the whole catalog.
+    let catalog: Catalog = match ron::from_str(SOURCE) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            eprintln!("[descriptions] Copy omitted: {error}");
+            return Catalog::default();
+        }
+    };
+    let errors = validate(&catalog);
+    if !errors.is_empty() {
+        eprintln!("[descriptions] Skipped flawed lines only: {}", errors.join("; "));
+    }
+    usable(catalog)
 });
+
+/// The catalog minus every entry, keyword and flavour that fails its own
+/// checks; the first of any duplicate key wins.
+pub fn usable(catalog: Catalog) -> Catalog {
+    let mut keys = HashSet::new();
+    let entries = catalog.entries.into_iter().filter(|entry| {
+        let mut errors = Vec::new();
+        check_entry(entry, &mut errors);
+        errors.is_empty() && !entry.key.is_empty() && keys.insert(entry.key.clone())
+    }).collect();
+    let mut names = HashSet::new();
+    let keywords = catalog.keywords.into_iter().filter(|keyword| {
+        let mut errors = Vec::new();
+        check_keyword(keyword, &mut errors);
+        errors.is_empty() && names.insert(keyword.name.clone())
+    }).collect();
+    let mut lines = HashSet::new();
+    let flavours = catalog.flavours.into_iter().filter(|flavour| {
+        let mut errors = Vec::new();
+        check_flavour(flavour, &mut errors);
+        errors.is_empty() && !flavour.name.is_empty() && lines.insert(flavour.name.clone())
+    }).collect();
+    Catalog { entries, keywords, flavours, hints: catalog.hints }
+}
 
 /// Shared entry point for runtime loading and the author-facing lint command.
 pub fn parse(source: &str) -> Result<Catalog, Vec<String>> {
@@ -119,82 +152,30 @@ pub fn validate(catalog: &Catalog) -> Vec<String> {
     let mut keys = HashSet::new();
     let mut keyword_names = HashSet::new();
     for keyword in &catalog.keywords {
-        if !SHARED_KEYWORDS.contains(&keyword.name.as_str()) {
-            errors.push(format!("keyword {}: unknown shared keyword", keyword.name));
-        }
         if !keyword_names.insert(keyword.name.as_str()) {
             errors.push(format!("keyword {}: duplicate definition", keyword.name));
         }
-        if keyword.definition.trim().is_empty() || words(&keyword.definition).count() > 50 {
-            errors.push(format!("keyword {}: definition must contain 1..50 words", keyword.name));
-        }
-        check_copy(&keyword.name, &keyword.definition, false, &mut errors);
+        check_keyword(keyword, &mut errors);
     }
     for shared in SHARED_KEYWORDS {
         if !keyword_names.contains(shared) {
             errors.push(format!("keyword {shared}: missing shared definition"));
         }
     }
-    for keyword in &catalog.keywords {
-        check_keywords(&keyword.name, &keyword.definition, &mut errors);
-    }
     for entry in &catalog.entries {
         let key = entry.key.as_str();
         if key.is_empty() || !keys.insert(key) {
             errors.push(format!("{key}: empty or duplicate entry key"));
         }
-        let limit = match entry.tier {
-            Tier::Standard => 0,
-            Tier::Behavior => 8,
-            Tier::Mechanic => 14,
-        };
-        if entry.tier == Tier::Standard && (!entry.text.is_empty() || !entry.codex.is_empty()) {
-            errors.push(format!("{key}: Standard items must not contain prose"));
-        } else if words(&entry.text).count() > limit {
-            errors.push(format!("{key}: {:?} description exceeds {limit} words", entry.tier));
-        }
-        if words(&entry.codex).count() > 50 {
-            errors.push(format!("{key}: codex exceeds 50 words"));
-        }
-        if entry.text.contains(['\n', '\r', ';'])
-            || entry.text.trim_end().strip_suffix('.').unwrap_or(entry.text.trim_end())
-                .contains(['.', '!', '?'])
-        {
-            errors.push(format!("{key}: description must be a single clause or sentence"));
-        }
-        if !entry.text.is_empty() && entry.text.trim() != entry.text {
-            errors.push(format!("{key}: remove surrounding description whitespace"));
-        }
-        if entry.tier == Tier::Mechanic && !entry.text.is_empty() && !entry.text.ends_with('.') {
-            errors.push(format!("{key}: Mechanic description must be a sentence"));
-        }
-        check_copy(key, &entry.text, true, &mut errors);
-        check_copy(key, &entry.codex, false, &mut errors);
-        check_keywords(key, &entry.text, &mut errors);
-        check_keywords(key, &entry.codex, &mut errors);
+        check_entry(entry, &mut errors);
     }
-    // Flavour is never mechanical: no numbers (check_copy), no sentence
-    // punctuation, under ten words, and none of the banned mood words.
     let mut names = HashSet::new();
     for flavour in &catalog.flavours {
         let name = flavour.name.as_str();
         if name.is_empty() || !names.insert(name) {
             errors.push(format!("flavour {name}: empty or duplicate name"));
         }
-        let count = words(&flavour.line).count();
-        if count == 0 || count > 9 {
-            errors.push(format!("flavour {name}: line must contain 1..9 words"));
-        }
-        if flavour.line.contains(['.', '?', ';', '\n', '\r']) || flavour.line.trim() != flavour.line {
-            errors.push(format!("flavour {name}: one unpunctuated line"));
-        }
-        if words(&flavour.line).any(|word| matches!(word.to_ascii_lowercase().as_str(),
-            "amazing" | "powerful" | "ultimate" | "epic" | "seamless" | "unleash" | "journey"
-            | "adventure" | "immersive" | "explore" | "harness" | "mysterious" | "ancient"
-            | "forgotten" | "echo" | "essence" | "resonance" | "mighty" | "legendary")) {
-            errors.push(format!("flavour {name}: remove mood words"));
-        }
-        check_copy(name, &flavour.line, false, &mut errors);
+        check_flavour(flavour, &mut errors);
     }
     // Hints explain a name in plain words: one short clause, no numbers (check_copy).
     let mut hint_names = HashSet::new();
@@ -205,6 +186,70 @@ pub fn validate(catalog: &Catalog) -> Vec<String> {
         check_hint(hint, &mut errors);
     }
     errors
+}
+
+fn check_keyword(keyword: &Keyword, errors: &mut Vec<String>) {
+    if !SHARED_KEYWORDS.contains(&keyword.name.as_str()) {
+        errors.push(format!("keyword {}: unknown shared keyword", keyword.name));
+    }
+    if keyword.definition.trim().is_empty() || words(&keyword.definition).count() > 50 {
+        errors.push(format!("keyword {}: definition must contain 1..50 words", keyword.name));
+    }
+    check_copy(&keyword.name, &keyword.definition, false, errors);
+    check_keywords(&keyword.name, &keyword.definition, errors);
+}
+
+fn check_entry(entry: &Description, errors: &mut Vec<String>) {
+    let key = entry.key.as_str();
+    let limit = match entry.tier {
+        Tier::Standard => 0,
+        Tier::Behavior => 8,
+        Tier::Mechanic => 14,
+    };
+    if entry.tier == Tier::Standard && (!entry.text.is_empty() || !entry.codex.is_empty()) {
+        errors.push(format!("{key}: Standard items must not contain prose"));
+    } else if words(&entry.text).count() > limit {
+        errors.push(format!("{key}: {:?} description exceeds {limit} words", entry.tier));
+    }
+    if words(&entry.codex).count() > 50 {
+        errors.push(format!("{key}: codex exceeds 50 words"));
+    }
+    if entry.text.contains(['\n', '\r', ';'])
+        || entry.text.trim_end().strip_suffix('.').unwrap_or(entry.text.trim_end())
+            .contains(['.', '!', '?'])
+    {
+        errors.push(format!("{key}: description must be a single clause or sentence"));
+    }
+    if !entry.text.is_empty() && entry.text.trim() != entry.text {
+        errors.push(format!("{key}: remove surrounding description whitespace"));
+    }
+    if entry.tier == Tier::Mechanic && !entry.text.is_empty() && !entry.text.ends_with('.') {
+        errors.push(format!("{key}: Mechanic description must be a sentence"));
+    }
+    check_copy(key, &entry.text, true, errors);
+    check_copy(key, &entry.codex, false, errors);
+    check_keywords(key, &entry.text, errors);
+    check_keywords(key, &entry.codex, errors);
+}
+
+/// Flavour is never mechanical: no numbers (check_copy), no sentence
+/// punctuation, under ten words, and none of the banned mood words.
+fn check_flavour(flavour: &Flavour, errors: &mut Vec<String>) {
+    let name = flavour.name.as_str();
+    let count = words(&flavour.line).count();
+    if count == 0 || count > 9 {
+        errors.push(format!("flavour {name}: line must contain 1..9 words"));
+    }
+    if flavour.line.contains(['.', '?', ';', '\n', '\r']) || flavour.line.trim() != flavour.line {
+        errors.push(format!("flavour {name}: one unpunctuated line"));
+    }
+    if words(&flavour.line).any(|word| matches!(word.to_ascii_lowercase().as_str(),
+        "amazing" | "powerful" | "ultimate" | "epic" | "seamless" | "unleash" | "journey"
+        | "adventure" | "immersive" | "explore" | "harness" | "mysterious" | "ancient"
+        | "forgotten" | "echo" | "essence" | "resonance" | "mighty" | "legendary")) {
+        errors.push(format!("flavour {name}: remove mood words"));
+    }
+    check_copy(name, &flavour.line, false, errors);
 }
 
 fn check_hint(hint: &Hint, errors: &mut Vec<String>) {

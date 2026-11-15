@@ -111,8 +111,8 @@ export function startModelPreview(asset, text) {
       !existsSync(path.join(root, "assets", "models", "factory", asset + ".vox"))) {
     throw new Error("Choose an existing factory model slot");
   }
-  if (typeof text !== "string" || Buffer.byteLength(text) > 16_384 || text.split(/\r?\n/, 1)[0] !== "size 8 8 8") {
-    throw new Error("Expected a native 8³ factory model");
+  if (typeof text !== "string" || Buffer.byteLength(text) > 16_384 || !["size 8 8 8", "size 16 16 16"].includes(text.split(/\r?\n/, 1)[0])) {
+    throw new Error("Expected a native 8³ or 16³ factory model");
   }
   const model = parseVoxel(text);
   if (!model.cells.size) throw new Error("The model is empty");
@@ -157,7 +157,7 @@ export function start(existing, recipeText, spark, preview) {
   const args = existing ? [] : ["--axiom-dev-stdin"];
   if (preview?.session) {
     const { world, seed, scale, generator, scene = "exploration", view } = preview.session;
-    if (existing || !["superflat","hills","planet","nether","manyfold"].includes(world)
+    if (existing || !["superflat","hills","ridged","planet","nether","manyfold","gilded"].includes(world)
       || !Number.isInteger(seed) || seed < 0 || seed > 0xffffffff || ![1,0.5,0.25].includes(scale)
       || !["exploration","factory"].includes(scene)
       || (view !== undefined && (!Number.isInteger(view) || view < 4 || view > 64))

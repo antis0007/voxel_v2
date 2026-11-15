@@ -1,0 +1,8 @@
+{ "id": "cultivator-loop",
+  "note": "C-MC1: biomass mode keeps its seed (16 fibre -> +128 biomass); lumen mode must return fewer than 16 fibre for 128 biomass, so the round trip loses fibre.",
+  "steps": [
+  { "op": "machine_test", "position": [0, 40, 0], "kind": "Cultivator", "set": { "energy": 9000, "mode": 0, "input": { "Fungal biomass": 64, "Lumen fibre": 16 } }, "ticks": 1000,
+    "expect": { "end.out.Fungal biomass": 128, "end.in.Fungal biomass": 64, "end.in.Lumen fibre": 0 } },
+  { "op": "machine_test", "position": [4, 40, 0], "kind": "Cultivator", "set": { "energy": 9000, "mode": 1, "input": { "Fungal biomass": 128 } }, "ticks": 1000,
+    "expect": { "end.out.Lumen fibre": { "gt": 0, "lt": 16 }, "end.in.Fungal biomass": 0 } }
+] }

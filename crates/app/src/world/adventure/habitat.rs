@@ -50,6 +50,9 @@ struct DangerTable {
     day_tier: u8,
     #[serde(default)]
     biome_hazard: std::collections::HashMap<String, u8>,
+    /// Metres below the surface where each extra underground tier begins.
+    #[serde(default)]
+    depth_m: Vec<f32>,
 }
 
 const DANGER_RON: &str = include_str!("../../../../../assets/danger.ron");
@@ -71,6 +74,21 @@ pub fn danger(from_spawn_m: f32, biome: Option<Biome>) -> u8 {
         .and_then(|b| table.biome_hazard.iter().find(|(name, _)| Biome::from_name(name) == Some(b)).map(|(_, &h)| h))
         .unwrap_or(0);
     (ring + hazard).min(3)
+}
+
+/// [`danger`] plus one tier per `depth_m` threshold the spot lies below the surface.
+pub fn danger_below(from_spawn_m: f32, biome: Option<Biome>, depth_m: f32) -> u8 {
+    let deep = DANGER.depth_m.iter().filter(|&&m| depth_m >= m).count() as u8;
+    (danger(from_spawn_m, biome) + deep).min(3)
+}
+
+/// Metres of ground over `cell` in a surface world; zero in shells and realms,
+/// whose terrain height says nothing about depth.
+pub fn depth_m(world: &World, cell: IVec3) -> f32 {
+    match world.world_type {
+        WorldType::Nether | WorldType::Manyfold | WorldType::Hall | WorldType::Realm(_) => 0.0,
+        _ => ((world.terrain_height_at(cell.x, cell.z) - cell.y) as f32 * world.voxel_scale.meters()).max(0.0),
+    }
 }
 
 /// A cell under more than this much ground counts as underground.

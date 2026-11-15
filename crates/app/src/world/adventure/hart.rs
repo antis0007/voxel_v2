@@ -128,6 +128,7 @@ pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
         m.cuboid(q, Vec3::new(0.06, 0.16, 0.06), Quat::from_rotation_y(a) * Quat::from_rotation_z(0.5), c, 1.2 + wind * 2.0);
     }
     m.scale_since(mark, e.pos, Vec3::splat(boss_look::scale(e)));
+    crate::world::adventure::enemy_presentation::motion::pose_body(e, m, mark);
 }
 
 fn plan(e: &Enemy, distance: f32) -> Attack {

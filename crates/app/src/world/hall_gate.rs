@@ -333,7 +333,7 @@ impl Travel {
 }
 
 /// The body fits at `feet` (metres) with solid footing and no liquid.
-fn clear_stand(target: &World, player: &Player, feet: Vec3) -> Result<()> {
+pub(super) fn clear_stand(target: &World, player: &Player, feet: Vec3) -> Result<()> {
     let scale = target.voxel_scale.meters();
     let radius = (0.45 * player.scale).max(0.45);
     let height = (2.0 * player.scale).max(2.0);
@@ -342,7 +342,8 @@ fn clear_stand(target: &World, player: &Player, feet: Vec3) -> Result<()> {
     ensure!((hi - lo).max_element() <= 64, "Body exceeds arch clearance");
     for z in lo.z..=hi.z { for y in lo.y..=hi.y { for x in lo.x..=hi.x {
         let b = target.get(glam::IVec3::new(x, y, z));
-        ensure!(!b.is_solid() && b != super::BlockId::Lava && b != super::BlockId::Water, "Chart destination obstructed");
+        ensure!(!b.is_solid() && b != super::BlockId::Lava && b != super::BlockId::Water,
+            "Chart destination obstructed by {b:?} at ({x}, {y}, {z})");
     } } }
     let support = ((feet - Vec3::Y * 0.1) / scale).floor().as_ivec3();
     ensure!(target.get(support).is_solid(), "Chart destination has no footing");

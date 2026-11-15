@@ -17,6 +17,28 @@ pub const WATER_UNIT_MG: u32 = crate::world::effects::WATER_UNIT_UL as u32;
 pub const FUEL_CELL_MG: u32 = 512;
 pub(crate) const PROCESS_MG: u32 = 1152;
 pub(crate) const PROCESS_POWER: u32 = 24;
+/// Chemical tank tiers; each step holds four times the gas and moves it four
+/// times faster per face. The upgrade is applied in place and keeps the stock.
+pub const TANK_TIERS: [&str; 3] = ["Basic", "Advanced", "Elite"];
+pub(crate) const PORT_FLOW_MG: u32 = 4096;
+
+fn tank_scale(n: &Node) -> u32 {
+    if n.kind == Kind::GasTank { 4u32.pow(n.upgrade.min(2)) } else { 1 }
+}
+
+/// Gas a node can hold; only chemical tanks grow with their tier.
+pub fn gas_capacity(n: &Node) -> u32 {
+    GAS_CAPACITY * tank_scale(n)
+}
+
+/// Largest mass one face of this node pushes per gas step.
+pub fn port_flow(n: &Node) -> u32 {
+    PORT_FLOW_MG * tank_scale(n)
+}
+
+pub fn tank_tier_name(tier: u32) -> &'static str {
+    TANK_TIERS[tier.min(2) as usize]
+}
 
 pub fn processor(n: &Node) -> bool {
     n.kind == Kind::WetScrubber && n.mode != 0
@@ -105,7 +127,7 @@ pub fn port(kind: Kind) -> bool {
     component(kind) || CONFIG.emissions.iter().any(|d| d.kind == kind)
 }
 pub fn blocked(n: &Node) -> bool {
-    !turbine::active(n) && !boiler::active(n) && n.exhaust.iter().copied().sum::<u32>() > GAS_CAPACITY - 16_384
+    !turbine::active(n) && !boiler::active(n) && n.exhaust.iter().copied().sum::<u32>() > gas_capacity(n) - 16_384
 }
 pub fn default_fuel() -> u32 {
     3

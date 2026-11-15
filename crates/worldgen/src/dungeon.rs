@@ -1799,7 +1799,7 @@ pub fn cosmos_at(cfg: &WorldSampleConfig, p: Vec3) -> f32 {
 
 /// Name and anchor of the complex at a position, for the HUD and encounters.
 pub fn record_near(cfg: &WorldSampleConfig, p: Vec3) -> Option<Vec3> {
-    if cfg.generator_version < v2::sprawl::VERSION || cfg.world_type != WorldType::Hills { return None; }
+    if cfg.generator_version < v2::sprawl::VERSION || !crate::features::enabled(cfg, crate::features::Feature::DungeonSprawl) { return None; }
     let c = complex_at(cfg, cell_index(p.x), cell_index(p.z))?;
     c.rooms.iter().filter_map(|r| v2::sprawl::tablet(&c, r))
         .find(|q| q.distance_squared(p) < 64.0)
@@ -1830,7 +1830,7 @@ pub struct QuestHere {
 }
 
 pub fn quest_at(cfg: &WorldSampleConfig, p: Vec3) -> Option<QuestHere> {
-    if cfg.generator_version < v2::quest::VERSION || cfg.world_type == WorldType::Superflat {
+    if !crate::features::legacy_preview(cfg.generator_version, v2::quest::VERSION) || cfg.world_type == WorldType::Superflat {
         return None;
     }
     let id = (cell_index(p.x), cell_index(p.z));

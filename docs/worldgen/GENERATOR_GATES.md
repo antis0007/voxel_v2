@@ -1,9 +1,9 @@
 # Generator gate registry
 
-`CURRENT_GENERATOR_VERSION` (`crates/voxel/src/config.rs`) is the save
-compatibility contract: `generator_version >= N` must mean one feature set
-forever, on every branch. Numbers are shared across branches and worktrees,
-so a gate is claimed here before it is used in code.
+`CURRENT_GENERATOR_VERSION` (`crates/voxel/src/config.rs`) selects the shared
+surface default. Each save records its own generator version. A recorded
+version must keep its feature set across branches and worktrees. Claim new
+gate numbers here before using them in code.
 
 ## Claiming a gate
 
@@ -29,6 +29,9 @@ Gates 1 to 53 are history (`landscape.rs`, `lib.rs`, `sites.rs`,
 being owned by one session.
 
 ## Rows
+
+| 322 | Regional civilization: shared surface worlds add surveyed Anchor city outskirts. The loading map shows nearby living settlements, their surveyed roads and Anchor city ruins. | shared regional civilization | default for new surface worlds |
+| 321 | Shared surface line: new Hills, Ridged and Planet worlds start on one generator version, and features shared by both surfaces turn on through `engine_worldgen::features::enabled` instead of per-world `world_type` checks (`SHARED_SURFACE_GENERATOR`, `crates/voxel/src/config.rs`). Planet inherits 290 riverbeds and deep-time coasts. Preview gates for Undercrown, dungeon quests and mechanisms, Anchor outskirts, earthport, dunes and wayside finds stay off this line. | flat/planet parity 2026-11-14 | first shared surface release |
 
 | 320 | Planet wayside finds: player-scale minor finds in 48 m cells on dry, level open ground (stone cairn with a survey cache tucked in its base, abandoned camp with an ash hearth, stone ring and log seats beside a salvage crate, standing-stone ring with an optional offering plinth, hollow fallen log with a cultivator cache in its open end); keeps clear of trails, rivers, caves, trees, settlements, the freight market, ruins, dungeons and surveyor sites (`wayside::WAYSIDE_GENERATOR`, `crates/worldgen/src/wayside.rs`) | local play density | claimed 2026-11-14; dormant, uncommitted; numbered with headroom above the 309 dune gates |
 
@@ -672,4 +675,9 @@ Gate 252 review evidence: [Mountain erosion review](MOUNTAIN_EROSION_REVIEW.md).
 | 306 | `DEPOSIT_GENERATOR` | `crates/worldgen/src/planetary/dunes.rs` | Deposit after erosion and retain its physical thickness. |
 | 307 | `ERRATIC_RELIEF_GENERATOR` | `crates/worldgen/src/planetary/erratics.rs` |  |
 | 308 | `ERRATIC_DEPOSIT_GENERATOR` | `crates/worldgen/src/planetary/erratics.rs` | Solid rock deposited after erosion; historical307 relief stays unchanged. |
+| 309 | `ENVELOPE_GENERATOR` | `crates/worldgen/src/planetary/dunes.rs` | Smooth sand availability in body space, without smoothing dune crests. |
+| 310 | `DUNGEON_MECHANISMS_GENERATOR` | `crates/voxel/src/config.rs` | Dungeon tilework, false-wall caches and shared mechanical fittings. |
+| 320 | `WAYSIDE_GENERATOR` | `crates/worldgen/src/wayside.rs` |  |
+| 321 | `SHARED_SURFACE_GENERATOR` | `crates/voxel/src/config.rs` | First shared default for Hills, Ridged and Planet. |
+| 322 | `REGIONAL_CIVILIZATION_GENERATOR` | `crates/voxel/src/config.rs` | Shared regional civilization and Anchor outskirts. |
 <!-- gates-cli index: end -->

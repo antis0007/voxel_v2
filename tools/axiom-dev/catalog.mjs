@@ -757,12 +757,13 @@ export function mountCatalog(host, ctx) {
       const usage = usageOf(spec);
       body.append(quiet(spec.detail), quiet("Source: " + spec.path + (spec.entry ? " · " + spec.entry.id : "")), relation("Used by", users)
         ?? quiet("No game-object references are indexed for this asset."));
-      for (const [title, rows] of [["Obtained through", usage.produces], ["Used in crafting", usage.consumes],
+      for (const [title, rows] of [["Recipes producing these items", usage.produces], ["Used in crafting", usage.consumes],
         ["Applies this effect", usage.related]]) {
         const links = relation(title, rows);
         if (links) body.append(links);
       }
-      body.append(quiet("Coverage: item art, composed tool masks, status effects, food effects and indexed recipes. Other dynamic references remain unknown."));
+      body.append(quiet("Recipe links show how items are made, not whether their ingredients can be found in game."),
+        quiet("Coverage: item art, composed tool masks, status effects, food effects and indexed recipes. Other dynamic references remain unknown."));
       const sourceLinks = button("Find source references", async () => {
         sourceLinks.disabled = true;
         sourceLinks.textContent = "Finding references…";
@@ -806,7 +807,7 @@ export function mountCatalog(host, ctx) {
     if (spec.kind === "recipe" && spec.path === recipePath) tools.append(button("Wire Recipe", () => ctx.graph(spec)));
     if (spec.product) tools.append(button("Tree", () => showPlan(spec.product, spec.kind === "recipe" ? spec : undefined)));
     if (spec.kind === "recipe" && ctx.playRecipe) {
-      tools.append(button("Try", () => ctx.playRecipe(spec), "Build current art and launch the native recipe preview"));
+      tools.append(button("Try", () => ctx.playRecipe(spec), "Build saved objects and art with the recipe draft. Preview ingredients can be supplied; gathering and progression are not verified."));
     }
     try {
       const doc = await ctx.load(spec.path);
@@ -898,14 +899,18 @@ export function mountCatalog(host, ctx) {
             }
           }
         }
-        body.append(button("Crafting Web", () => showCraftWeb(spec.product)),
-          button("+ Recipe", () => ctx.create(recipePath, spec.product), "New recipe for " + spec.label));
+        body.append(sectionCard("Getting this item",
+          quiet(madeBy.length ? madeBy.length + (madeBy.length === 1 ? " indexed recipe makes" : " indexed recipes make") + " this item. Ingredient availability and progression are not verified."
+            : "No indexed recipe makes this item. It may still come from gathering, loot or trade; these sources are not fully indexed."),
+          button("Inspect ingredient plan", () => showPlan(spec.product), "See named ingredients, quantities and supplies outside the recipe plan"),
+          button("Crafting Web", () => showCraftWeb(spec.product)),
+          button("+ Recipe", () => ctx.create(recipePath, spec.product), "New recipe for " + spec.label),
+          deposit ? button("Deposit Rules", () => setSection("Deposits", deposit.key)) : null));
         const preview = madeBy[0];
         if (ctx.playRecipe && preview) {
           body.append(sectionCard("Evidence", button("Try crafting in Axiom", () => ctx.playRecipe(preview)),
-            quiet("Builds saved game objects and art with the current recipe draft.")));
+            quiet("Builds saved game objects and art with the current recipe draft. The preview can supply ingredients; it does not verify gathering or progression.")));
         }
-        if (deposit) body.append(button("Deposit Rules", () => setSection("Deposits", deposit.key)));
       } else if (spec.kind === "creature" || spec.kind === "biome") {
         if (spec.kind === "creature" && spec.detail) body.append(quiet(spec.detail));
         if (spec.kind === "biome") body.append(biomeStudio(ctx, doc, spec, changed));

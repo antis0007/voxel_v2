@@ -123,6 +123,7 @@ enum When {
     Always,
     SmallLocks,
     GreatLock,
+    Mechanisms,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -152,6 +153,7 @@ pub fn lectern_lines(world: &World, p: IVec3) -> Option<Vec<String>> {
             When::Always => true,
             When::SmallLocks => q.small_locks > 0,
             When::GreatLock => q.great_lock,
+            When::Mechanisms => engine_worldgen::features::legacy_preview(world.generator_version, engine_voxel::DUNGEON_MECHANISMS_GENERATOR),
         })
         .map(|l| {
             l.text

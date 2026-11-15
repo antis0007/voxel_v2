@@ -6,6 +6,7 @@
 // Floating (air on water), Side (beside soil), Hanging (under soil), Grafted (set by a grown tree's `fruit`).
 // `regrow` rows are picked with Use back to `sprout`. `gourd` stems set `crop` on free ground beside them.
 // `aura` rows are working blocks: Mana, Collect, Harvest (reaps and replants ripe plots in range),
+// `spread_per_mille`: a mature working flower plants a copy on free soil beside it per 2 s beat (stops at 3 nearby).
 // Tend (each 2 s, 1 mana from a covering mana flower or receiver hurries every growing plot in range), Mist (plots in range count as watered).
 // A Mana `feed` eats one loose `item` within `reach_metres` per 2 s pulse for `mana_per_item` mana.
 // `produce` pays that resource index instead of `crop`. `food` makes the `crop` item edible.
@@ -676,6 +677,7 @@
         yield_min: 1,
         yield_max: 2,
         wild_seed_per_mille: 0,
+        spread_per_mille: 4,
         aura: Some(Tend(
             radius_metres: 5.0,
             ticks: 600,
@@ -700,6 +702,7 @@
         yield_min: 1,
         yield_max: 1,
         wild_seed_per_mille: 0,
+        spread_per_mille: 4,
         aura: Some(Mist(
             radius_metres: 4.0,
         )),
@@ -789,6 +792,7 @@
         yield_min: 1,
         yield_max: 1,
         wild_seed_per_mille: 0,
+        spread_per_mille: 4,
         aura: Some(Mist(
             radius_metres: 3.0,
         )),
@@ -838,6 +842,7 @@
         yield_min: 1,
         yield_max: 1,
         wild_seed_per_mille: 0,
+        spread_per_mille: 4,
         aura: Some(Mana(
             per_second: 0.5,
             radius_metres: 8.0,
@@ -866,6 +871,7 @@
         yield_min: 1,
         yield_max: 1,
         wild_seed_per_mille: 0,
+        spread_per_mille: 4,
         aura: Some(Collect(
             radius_metres: 6.0,
         )),

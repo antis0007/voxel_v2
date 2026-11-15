@@ -113,6 +113,14 @@
       "note": "Same chain as A11-07; no distinct oil-crop route.",
       "updated": "2026-11-13"
     },
+    "L029": {
+      "status": "building",
+      "evidence": [
+        "tools/axiom-dev/scenarios/crusher-pulverize.json"
+      ],
+      "note": "Crusher ingot->dust recipes 4-6 (1:1, loop-neutral). Smelter-style set, secondary outputs still open.",
+      "updated": "2026-11-14"
+    },
     "L032": {
       "status": "verified",
       "evidence": [

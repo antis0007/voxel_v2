@@ -125,7 +125,7 @@ fn portal_guide(ui: &mut egui::Ui) {
         let material = if hell { B::Basalt } else { B::Crystal };
         // Physical dimensions, rather than a block count that breaks at finer
         // voxel scales. Corners are optional for both kinds of frame.
-        egui::Grid::new("portal_structure").spacing([2.0, 2.0]).show(ui, |ui| {
+        egui::Grid::new("portal_structure").spacing([2.0, 2.0]).min_col_width(22.0).min_row_height(22.0).show(ui, |ui| {
             for y in 0..5 { for x in 0..4 {
                 let edge = y == 0 || y == 4 || x == 0 || x == 3;
                 let corner = (y == 0 || y == 4) && (x == 0 || x == 3);
@@ -198,7 +198,7 @@ fn smeltery_structure(ui: &mut egui::Ui) {
             }
         });
         ui.ctx().data_mut(|d| d.insert_temp(id, layer));
-        egui::Grid::new("smeltery_structure_grid").spacing([4.0,4.0]).show(ui, |ui| {
+        egui::Grid::new("smeltery_structure_grid").spacing([4.0,4.0]).min_col_width(28.0).min_row_height(28.0).show(ui, |ui| {
             for z in 0..5 { for x in 0..5 {
                 let block = if layer==0 || x==0 || x==4 || z==0 || z==4 {
                     Some(if layer==1 && z==4 && x==2 { B::SmelteryController }
@@ -628,6 +628,15 @@ fn harvest_sources(ui: &mut egui::Ui, item: Item, size: i32, nav: &mut Option<Na
         return false;
     }
     ui.label(RichText::new("Harvest Sources").size(13.0).color(AMBER));
+    let location = match item {
+        Item::Resource(0 | 3) => Some("Look for copper and coal in exposed rock and cave walls."),
+        Item::Resource(2) => Some("Search underground cave walls for iron veins."),
+        Item::Block(crate::world::BlockId::Stone) => Some("Mine exposed stone on slopes or at cave entrances."),
+        _ => None,
+    };
+    if let Some(location) = location {
+        ui.weak(location);
+    }
     let cells = index::cells_per_harvest_item(item, size);
     if cells > 1 {
         ui.label(RichText::new(format!("{cells} voxels per whole item")).size(13.0).color(MUTED));

@@ -204,6 +204,10 @@ impl std::ops::DerefMut for KindCounts {fn deref_mut(&mut self)->&mut Self::Targ
 #[derive(Default)]
 #[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
 pub struct Factory {
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    drill_delivery: bool,
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    furnace_ingot: bool,
     /// Consumed into the persistent workshop record after a real pipe delivery.
     #[cfg_attr(feature = "multiplayer", serde(skip))]
     pub(crate) workshop_delivery: bool,
@@ -422,6 +426,12 @@ pub(crate) fn tick_power(world: &mut World, dt: f32) {
         }
     }
     world.factory.tick_with_power(dt, size, |p| passive.get(&p).copied());
+    if std::mem::take(&mut world.factory.drill_delivery) {
+        world.goals.note_production(super::goals::Event::DrillDelivered);
+    }
+    if std::mem::take(&mut world.factory.furnace_ingot) {
+        world.goals.note_production(super::goals::Event::FurnaceIngot);
+    }
 }
 
 impl Factory {
@@ -1171,6 +1181,12 @@ pub fn action(world: &mut World, player: Vec3, action: Action) -> Option<B> {
                                     power::fmt_energy(power::battery_capacity(n.upgrade) as f64),
                                     power::fmt_power(power::battery_rate(n.upgrade) as f64)
                                 ));
+                            } else if n.kind == Kind::GasTank {
+                                world.expedition.say(format!(
+                                    "Tank reinforced: {} · holds {:.0} g.",
+                                    industry::tank_tier_name(n.upgrade),
+                                    industry::gas_capacity(n) as f32 / 1000.0
+                                ));
                             } else {
                                 world.expedition.say("Drive upgraded: faster processing with proportionally higher power demand.");
                             }
@@ -1859,6 +1875,7 @@ impl Factory {
                     n.blocks.input[material.index()] -= count;
                 }
                 n.output[out] += yield_n;
+                self.furnace_ingot |= n.kind == Kind::Furnace && matches!(out, 6..=8);
                 if let Some((side, amount)) = recipe.byproduct {
                     n.output[side] += amount;
                 }
@@ -2074,6 +2091,9 @@ impl Factory {
 
     fn deliver(&mut self, packet: transit::Packet) {
         self.release(packet.dst, packet.item, packet.amount);
+        let drill_ore = matches!(packet.item, 0..=3)
+            && self.nodes.get(&packet.src).is_some_and(|n| n.kind == Kind::MiningDrill)
+            && self.nodes.get(&packet.dst).is_some_and(|n| n.kind == Kind::Storage);
         let workshop_metal = self.nodes.get(&packet.src).is_some_and(|n| {
             matches!((n.kind, packet.item), (Kind::Furnace, 8) | (Kind::AlloyKiln | Kind::BlastFurnace, 15))
         })
@@ -2091,6 +2111,7 @@ impl Factory {
             _ => packet.amount,
         };
         self.workshop_delivery |= workshop_metal && leftover < packet.amount;
+        self.drill_delivery |= drill_ore && leftover < packet.amount;
         if packet.item == ETHANOL && leftover < packet.amount
             && self.nodes.get(&packet.dst).is_some_and(|n| n.kind == Kind::Storage)
             && let Some(source) = self.nodes.get_mut(&packet.src).filter(|n| n.kind == Kind::Cultivator)

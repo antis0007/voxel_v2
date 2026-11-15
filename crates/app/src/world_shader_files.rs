@@ -17,6 +17,8 @@ pub const WORLD_SHADER_FILES: &[&str] = &[
     "furnishing_surfaces.wgsl",
     "architectural_surfaces.wgsl",
     "gilded_surfaces.wgsl",
+    "hell_surfaces.wgsl",
+    "realm_light.wgsl",
     "sky_volume_shared.wgsl",
     "world_shader.wgsl",
 ];

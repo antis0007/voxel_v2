@@ -141,6 +141,23 @@ pub(in crate::egui_ui) fn well(p: &Painter, r: Rect, u: f32) {
     p.rect_stroke(r, 0, egui::Stroke::new(1.0, WELL_LIGHT), egui::StrokeKind::Inside);
 }
 
+/// A catalogue cell on a gapless grid: the vanilla recessed bevel, one
+/// physical pixel thick, so neighbours share a dark/light seam instead of a gutter.
+pub(in crate::egui_ui) fn cell(p: &Painter, r: Rect) {
+    let ppp = p.ctx().pixels_per_point().max(0.5);
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let r = Rect::from_min_max(pos2(snap(r.left()), snap(r.top())), pos2(snap(r.right()), snap(r.bottom())));
+    let u = 1.0 / ppp;
+    if super::super::themes::get(p.ctx()) != 0 {
+        let theme = super::super::themes::current(p.ctx());
+        p.rect_filled(r, 0, theme.recess);
+        bevel(p, r, u, theme.recess.gamma_multiply(0.5), theme.edge.gamma_multiply(0.45));
+        return;
+    }
+    p.rect_filled(r, 0, WELL);
+    bevel(p, r, u, WELL_DARK, WELL_LIGHT);
+}
+
 /// Gold edge for the selected hotbar slot, inside the well's bevel.
 pub(in crate::egui_ui) fn selected(p: &Painter, r: Rect, u: f32) {
     p.rect_stroke(r.shrink(u * 0.5), 0, egui::Stroke::new(2.0, crate::egui_ui::grimoire::GOLD), egui::StrokeKind::Inside);

@@ -44,6 +44,7 @@ struct Port {
     vent: bool,
     outlet: u8,
     gas: u8,
+    flow: u32,
 }
 
 pub fn route(world: &mut World, state: &mut State) {
@@ -71,11 +72,12 @@ pub fn route(world: &mut World, state: &mut State) {
             vent: n.gas_vent,
             outlet: if n.ruptured { 0 } else { n.gas_vent_side },
             gas: if n.ruptured { 0 } else { n.gas_vent_species },
+            flow: port_flow(n),
         }))
         .collect();
     for (&(x, y, z), source) in &before {
         let p = IVec3::new(x, y, z);
-        let Port { mass, open: enabled, kind, closed, vent, outlet: vent_side, gas, .. } = *source;
+        let Port { mass, open: enabled, kind, closed, vent, outlet: vent_side, gas, flow, .. } = *source;
         if !enabled || mass.iter().all(|&v| v == 0) {
             continue;
         }
@@ -97,8 +99,8 @@ pub fn route(world: &mut World, state: &mut State) {
                 .factory
                 .nodes
                 .get(&q)
-                .map_or(0, |n| GAS_CAPACITY.saturating_sub(n.exhaust.iter().sum()));
-            let mut room = target_room.min(4096);
+                .map_or(0, |n| gas_capacity(n).saturating_sub(n.exhaust.iter().sum()));
+            let mut room = target_room.min(flow.max(other.flow));
             for i in 0..SPECIES {
                 if !accepts(other.kind, other.mode, i) {
                     continue;

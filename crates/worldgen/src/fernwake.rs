@@ -1,6 +1,6 @@
 //! Authored district joined to the cultivation descent. Metres, stable identities,
 //! explicit solids and voids; older generators keep their original terrain.
-use crate::{BlockId as B, WorldSampleConfig, WorldType};
+use crate::{BlockId as B, WorldSampleConfig};
 use glam::Vec3;
 pub mod waterworks;
 pub mod freight;
@@ -10,7 +10,7 @@ pub const VERSION: u32 = 78;
 pub const RESIDENTS: u32 = 4;
 
 pub fn active(cfg: &WorldSampleConfig) -> bool {
-    cfg.generator_version >= VERSION && matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged)
+    cfg.generator_version >= VERSION && crate::features::enabled(cfg, crate::features::Feature::Fernwake)
 }
 
 pub fn resident_home(cfg: &WorldSampleConfig, id: u32) -> Option<Vec3> {

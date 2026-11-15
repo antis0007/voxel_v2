@@ -81,4 +81,9 @@
     (61, (weight: 1, realms: [Surface], danger: 3)),
     (62, (weight: 1, realms: [Surface], danger: 3)),
     (63, (weight: 1, biomes: ["Meadow", "Savanna", "Heathland"], realms: [Surface], danger: 3)),
+    // Tree mimics stand among real trees: rotors and ropers grown as pines and palms.
+    (64, (weight: 1, biomes: ["Taiga", "Forest", "Alpine", "CloudForest"], realms: [Surface])),
+    (66, (weight: 1, biomes: ["Taiga", "Forest", "Alpine", "CloudForest"], realms: [Surface])),
+    (65, (weight: 1, biomes: ["Rainforest", "CycadMarsh", "Coast", "LastShore"], realms: [Surface])),
+    (67, (weight: 1, biomes: ["Rainforest", "CycadMarsh", "Coast", "LastShore"], realms: [Surface])),
 ]

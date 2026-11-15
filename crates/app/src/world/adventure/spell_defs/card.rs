@@ -97,8 +97,12 @@ pub fn read(spell: u32, discoveries: u32, rank: u32) -> Card {
                     super::super::water_transfer::LIMIT as f32 / 512.0)));
                 card.cost.push_str(" on transfer; selection free");
             }
-            super::super::fieldcraft::RECALL => card.stats = format!("Quick return · {:.0} m · {:.0} s",
-                super::super::fieldcraft::RECALL_RANGE, super::super::fieldcraft::RECALL_SECONDS),
+            super::super::fieldcraft::RECALL => {
+                card.stats = format!("Quick return · {:.0} m · {:.0} s",
+                    super::super::fieldcraft::RECALL_RANGE, super::super::fieldcraft::RECALL_SECONDS);
+                card.details.push(("Home escape", format!("{} s unhurt hold · First circle required",
+                    amount(super::super::fieldcraft::ESCAPE_SECONDS))));
+            }
             97 => card.stats = format!("{:.0} m reach", super::super::fieldcraft::SALVAGE_RANGE),
             super::super::spells::DONT_PANIC => {
                 card.stats = format!("{} s", amount(super::super::spells::DONT_PANIC_SECONDS));

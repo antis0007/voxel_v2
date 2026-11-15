@@ -1,6 +1,6 @@
-//! Text voxel models on an 8-per-metre grid, authored in `assets/models/**.vox`.
+//! Text voxel models on an 8- or 16-per-metre grid, authored in `assets/models/**.vox`.
 //!
-//! Format: `size X Y Z`, palette lines `p <char> <rrggbb> <glow>`, then for each
+//! Format: `size N N N` (N is 8 or 16 voxels per metre), palette lines `p <char> <rrggbb> <glow>`, then for each
 //! occupied layer `y <n>` followed by one row of X characters per Z. `.` is empty.
 //! The model fills one metre cell; +X is its front or arm direction.
 use super::Model;
@@ -23,7 +23,9 @@ pub fn loaded_assets() -> Vec<String> { LABELS.read().unwrap().iter().cloned().c
 /// parsing, shader changes or accumulated leaked models on repeated edits.
 pub fn preview(asset: &str, source: &str) -> Result<usize, String> {
     if !LABELS.read().unwrap().contains(asset) { return Err("Model is not loaded in this scene; inspect models for available names".into()); }
-    if source.len() > 16_384 || source.lines().next() != Some("size 8 8 8") { return Err("Expected size 8 8 8 and at most 16384 bytes".into()); }
+    let Some(n) = source.lines().next().and_then(grid).filter(|_| source.len() <= 16_384) else {
+        return Err("Expected size 8 8 8 or size 16 16 16 and at most 16384 bytes".into());
+    };
     let mut palette = BTreeSet::new();
     let mut layers = BTreeSet::new();
     let mut rows = None;
@@ -39,17 +41,17 @@ pub fn preview(asset: &str, source: &str) -> Result<usize, String> {
             }
             "y" if words.len() == 2 => {
                 let layer = words[1].parse::<u8>().map_err(|_| "Invalid model layer")?;
-                if rows.is_some_and(|n| n != 8) || layer >= 8 || !layers.insert(layer) { return Err("Incomplete or duplicate model layer".into()); }
+                if rows.is_some_and(|r| r != n) || layer as usize >= n || !layers.insert(layer) { return Err("Incomplete or duplicate model layer".into()); }
                 rows = Some(0);
             }
             _ => {
-                if words.len() != 1 || line.len() != 8 || rows.is_none_or(|n| n >= 8)
+                if words.len() != 1 || line.len() != n || rows.is_none_or(|r| r >= n)
                     || !line.bytes().all(|c| c == b'.' || palette.contains(&c)) { return Err("Invalid voxel row or unknown palette key".into()); }
                 rows = rows.map(|n| n + 1);
             }
         }
     }
-    if rows != Some(8) { return Err("A complete eight-row layer is required".into()); }
+    if rows != Some(n) { return Err("Every layer needs one row per voxel of depth".into()); }
     let model = VoxelModel::parse(source, "");
     let count = model.voxels.len();
     if count == 0 { return Err("Model must contain at least one voxel".into()); }
@@ -58,7 +60,14 @@ pub fn preview(asset: &str, source: &str) -> Result<usize, String> {
     Ok(count)
 }
 
-pub const PER_METRE: i32 = 8;
+/// Voxels per metre for a `size` header: 8 (default grid) or 16 (fine parts such as cables).
+fn grid(header: &str) -> Option<usize> {
+    match header.trim() {
+        "size 8 8 8" => Some(8),
+        "size 16 16 16" => Some(16),
+        _ => None,
+    }
+}
 
 pub struct Voxel {
     cell: IVec3,
@@ -71,6 +80,7 @@ pub struct Voxel {
 
 pub struct VoxelModel {
     voxels: Vec<Voxel>,
+    per_metre: i32,
     label: String,
 }
 
@@ -98,11 +108,11 @@ impl VoxelModel {
             && let Some(file) = std::env::var_os("VOXEL_FORGE_MODEL_FILE")
             && std::fs::metadata(&file).is_ok_and(|meta| meta.is_file() && meta.len() <= 16_384)
             && let Ok(text) = std::fs::read_to_string(file)
-            && text.lines().next() == Some("size 8 8 8")
+            && text.lines().next().and_then(grid).is_some()
         {
             let model = Self::parse(&text, label);
             if !model.voxels.is_empty() && model.voxels.iter().all(|v| {
-                v.cell.min_element() >= 0 && v.cell.max_element() < PER_METRE
+                v.cell.min_element() >= 0 && v.cell.max_element() < model.per_metre
             }) {
                 return model;
             }
@@ -115,10 +125,11 @@ impl VoxelModel {
         let mut voxels = Vec::new();
         let mut layer: Option<i32> = None;
         let mut row = 0;
+        let mut per_metre = 8;
         for line in source.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
             let mut word = line.split_whitespace();
             match word.next() {
-                Some("size") => {}
+                Some("size") => per_metre = grid(line).unwrap_or(8) as i32,
                 Some("p") => {
                     let (Some(k), Some(hex), Some(glow)) = (word.next(), word.next(), word.next()) else { continue };
                     let Some(key) = k.chars().next() else { continue };
@@ -153,7 +164,7 @@ impl VoxelModel {
                 v.exposed[i] = !cells.contains(&(v.cell + *d));
             }
         }
-        Self { voxels, label: label.into() }
+        Self { voxels, per_metre, label: label.into() }
     }
 
     /// Draws the model in the cell whose minimum corner is `origin` (metres),
@@ -163,7 +174,7 @@ impl VoxelModel {
             let preview = PREVIEWS.read().unwrap().get(&self.label).cloned();
             if let Some(preview) = preview { preview.draw(mesh, origin, rotation, tint); return; }
         }
-        let unit = 1.0 / PER_METRE as f32;
+        let unit = 1.0 / self.per_metre as f32;
         let centre = Vec3::splat(0.5);
         for v in &self.voxels {
             let (color, glow) = match v.key {

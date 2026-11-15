@@ -127,12 +127,15 @@ pub(super) fn parse(source: &str) -> Result<Vec<Option<Pixels>>, String> {
 
 /// Sheet texels for the held-item mesh, in `held_art::icon_texels` form.
 pub(crate) fn texels(icon: Icon) -> Option<(usize, usize, Vec<Option<(u8, [u8; 3])>>)> {
-    static ITEM_OUTLINE: LazyLock<Option<C>> =
-        LazyLock::new(|| ITEMS.lines().find_map(|line| hex(line.strip_prefix("outline ")?)));
+    // Each sheet's `outline` colour is ink: key 0, so the held mesh can soften it.
+    static OUTLINES: LazyLock<[Option<C>; 3]> = LazyLock::new(|| {
+        [RESOURCES, ITEMS, MACHINES].map(|sheet| sheet.lines().find_map(|line| hex(line.strip_prefix("outline ")?)))
+    });
     let (sheet, id) = sprite(icon)?;
     let pixels = SHEETS[sheet].get(id)?.as_ref()?;
+    let outline = OUTLINES.get(sheet).copied().flatten();
     let texels = pixels.iter().map(|c| {
-        let ink = sheet == 1 && Some(*c) == *ITEM_OUTLINE;
+        let ink = Some(*c) == outline;
         (c.a() == 255).then(|| (if ink { 0 } else { b'#' }, [c.r(), c.g(), c.b()]))
     }).collect();
     Some((SIZE, SIZE, texels))
@@ -162,6 +165,19 @@ static BLOCK_SPRITES: LazyLock<Vec<(crate::material::BlockId, usize)>> = LazyLoc
 /// so the caller draws the shaded cube.
 pub(crate) fn paint_block(p: &Painter, r: Rect, block: crate::material::BlockId) -> bool {
     BLOCK_SPRITES.iter().find(|(b, _)| *b == block).is_some_and(|&(_, id)| paint_sprite(p, r, 4, id, None))
+}
+
+/// Sheet texels of a plant or produce block's sprite for the held-item mesh, in
+/// `texels` form (outline ink is key 0); `None` when the block draws as a cube.
+pub(crate) fn block_texels(block: crate::material::BlockId) -> Option<(usize, usize, Vec<Option<(u8, [u8; 3])>>)> {
+    static OUTLINE: LazyLock<Option<C>> = LazyLock::new(|| BLOCKS.lines().find_map(|line| hex(line.strip_prefix("outline ")?)));
+    let &(_, id) = BLOCK_SPRITES.iter().find(|(b, _)| *b == block)?;
+    let pixels = SHEETS[4].get(id)?.as_ref()?;
+    let texels = pixels.iter().map(|c| {
+        let ink = Some(*c) == *OUTLINE;
+        (c.a() == 255).then(|| (if ink { 0 } else { b'#' }, [c.r(), c.g(), c.b()]))
+    }).collect();
+    Some((SIZE, SIZE, texels))
 }
 
 /// Draws the shared spell backplate; false if the sheet lacks it.

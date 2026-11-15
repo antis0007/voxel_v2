@@ -2,6 +2,7 @@ import { el, button, panel } from "./inspector.mjs";
 import { copyText } from "./context-menu.mjs";
 import { nativeArtPanel } from "./native-art-panel.mjs";
 import { enginePanel } from "./engine-panel.mjs";
+import { layoutPanel } from "./layout-editor.mjs";
 import { parse, decode } from "./syntax.mjs";
 import { organizePanels } from "./panel-organizer.mjs";
 
@@ -189,6 +190,7 @@ export function mountPlaytest(host, api, note, visible) {
     panel("Convoy", inspectConvoy),
     panel("Location ambience", inspectAmbience),
     enginePanel(api, note),
+    layoutPanel(api, note),
     panel("Civilization", flex(inspectFactions, realmOrder, realmTarget, submitRealm)),
     panel("Dungeon and magic", flex(dungeonView, dungeonControls[0], dungeonControls[1]), flex(spellEffect, dungeonControls[2])),
     panel("Design refinement", review, reviewStatus, reviewOutput),

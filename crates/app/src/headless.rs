@@ -303,7 +303,7 @@ fn run_with_region(scenario: &Scenario, options: RegionOptions) -> Result<Outcom
         let loaded = Session::load_exact(std::path::Path::new(directory))?;
         let cfg = loaded.world.sample_config();
         if cfg.seed != scenario.seed || cfg.world_type != scenario.world || cfg.voxel_scale != scenario.scale
-            || cfg.generator_version != scenario.generator_version.unwrap_or(crate::world::CURRENT_GENERATOR_VERSION) {
+            || cfg.generator_version != scenario.generator_version.unwrap_or_else(|| World::default_generator(scenario.world)) {
             return Err("exact session world differs from the continuation document".into());
         }
         if options.origin.is_some_and(|origin| loaded.sim.cpu_region.as_ref().is_none_or(|region| region.published.origin != origin)) {

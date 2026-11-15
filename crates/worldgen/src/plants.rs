@@ -33,7 +33,7 @@ pub fn block_in_column(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample) 
     };
     if bamboo != BlockId::Air { return bamboo; }
     if cfg.generator_version < engine_voxel::HILLS_CANE_GENERATOR
-        || cfg.world_type != crate::WorldType::Hills
+        || !crate::features::enabled(cfg, crate::features::Feature::Cane)
         || p.y <= column.height || p.y > column.height + cfg.blocks_for_span(3.0)
         || !matches!(column.surface, BlockId::Grass | BlockId::Dirt | BlockId::Sand | BlockId::Mud)
     { return BlockId::Air; }

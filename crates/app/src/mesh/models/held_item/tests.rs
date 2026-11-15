@@ -115,7 +115,7 @@ fn mining_moves_the_held_item_without_changing_its_topology() {
 use crate::player::viewmodel::clips::Name;
 
 /// Tip minus grip in camera-local space (right, up, back) at `t` seconds into `name`.
-fn blade(name: Name, t: f32) -> Vec3 { (name.clip().sample(t).rotation * blade_rest()) * Vec3::Y }
+fn blade(name: Name, t: f32) -> Vec3 { (name.clip().sample(t).rotation * blade_rest().0) * Vec3::Y }
 
 #[test]
 fn stroke_contact_lays_the_blade_across_the_view() {

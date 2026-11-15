@@ -366,7 +366,18 @@ pub(crate) fn block_with(
         if underground {
             let pocket = crate::aquifer_pocket(cfg, p, &column);
             if pocket == BlockId::Air && cfg.generator_version >= crate::deep::VERSION {
-                return crate::deep::cave_air(cfg, p, &column);
+                let block = crate::deep::cave_air(cfg, p, &column);
+                // Historical worlds keep the complete deep-cave result. On
+                // the shared line, flora may fill only its remaining dry air.
+                if block != BlockId::Air || !crate::features::shared_line(cfg) {
+                    return block;
+                }
+            }
+            if pocket == BlockId::Air && crate::features::enabled(cfg, crate::features::Feature::CaveFlora) && crate::flora::active(cfg) {
+                let plant = crate::flora::cave(cfg, p, |q| crate::flora::rock_at(cfg, q));
+                if plant != BlockId::Air {
+                    return plant;
+                }
             }
             return pocket;
         }

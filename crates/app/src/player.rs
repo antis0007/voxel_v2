@@ -6,6 +6,7 @@ pub(crate) mod radial;
 pub mod viewmodel;
 mod climb;
 mod checkpoint;
+mod mantle;
 pub mod hazards;
 pub mod observations;
 pub mod glide;
@@ -1227,6 +1228,10 @@ fn update_player_local(
     let actual = player.pos - old_pos;
     let blocked =
         (actual.x - horiz_delta.x).abs() > 0.0001 || (actual.z - horiz_delta.z).abs() > 0.0001;
+    // Airborne against a wall: a held jump mantles a ledge in reach; otherwise slime soles rebound.
+    if blocked && !was_on_ground && !mantle::try_start(player, input, world, origin, gravity) {
+        traversal::wall_bounce(player, input, world, horiz_delta, actual);
+    }
     let mut stepped_up_this_frame = false;
     if was_on_ground && !sneaking && blocked {
         let mut stepped = old_pos;

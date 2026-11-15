@@ -7,6 +7,8 @@ pub(super) const RECALL_RANGE: f32 = 24.0;
 pub(super) const RECALL_SECONDS: f32 = 30.0;
 pub(super) const SALVAGE_RANGE: f32 = 8.0;
 const CIRCLE_RADIUS: f32 = 0.8;
+/// Seconds the cast is held, unhurt, before a one-way escape to the home circle.
+pub(super) const ESCAPE_SECONDS: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CircleAnchor {
@@ -40,6 +42,16 @@ impl CircleAnchor {
             && !matches!(world.get(foot_cell), BlockId::Water | BlockId::Lava)
             && clear).then_some(at)
     }
+}
+
+/// Place the caster at a circle landing, upright to the circle's surface.
+fn arrive(player: &mut Player, at: Vec3, up: Vec3) {
+    player.pos = at;
+    player.precise_pos = at.as_dvec3();
+    player.vel = Vec3::ZERO;
+    player.gravity_frame = (glam::Quat::from_rotation_arc(player.up_dir(), up)
+        * player.gravity_frame).normalize();
+    player.movement.fall_speed = 0.0;
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -85,6 +97,8 @@ pub(super) struct Recall {
     realm: u64,
     expires: f32,
     armed: bool,
+    /// Start of the unbroken hold that leads to an escape; a hit restarts it.
+    held_since: f32,
 }
 
 impl Adventure {
@@ -92,13 +106,39 @@ impl Adventure {
         if !alive || !casting {
             self.circle_cast_latched = false;
         }
+        let (now, hurt) = (self.time, self.hurt > 0.0);
         if let Some(mark) = self.recall.as_mut() {
             if !alive || mark.realm != world.regions.instance_id || mark.expires <= self.time {
                 self.recall = None;
             } else {
                 mark.armed |= !casting;
+                if hurt {
+                    mark.held_since = now;
+                }
             }
         }
+    }
+
+    /// The first circle drawn is home. A long unhurt hold sends the caster there
+    /// one way from anywhere in this realm; circles are stored per realm.
+    fn escape_home(&mut self, world: &mut World, player: &mut Player, feet: Vec3) -> bool {
+        let home = match world.portals.circles {
+            CircleRoute::Marked(home) | CircleRoute::Linked(home, _) => home,
+            CircleRoute::Empty => return false,
+        };
+        if home.contains(feet) {
+            return false;
+        }
+        self.recall = None;
+        let Some(at) = home.landing(world, player) else {
+            world.expedition.say("Home Circle · Landing blocked");
+            return false;
+        };
+        self.circle_cast_latched = true;
+        arrive(player, at, home.up);
+        self.spawn_voxel_burst(feet, spell_color(RECALL), 12, 1.0, 0.04);
+        self.spawn_voxel_burst(home.feet, spell_color(RECALL), 12, 1.0, 0.04);
+        true
     }
 
     pub(super) fn recall_thread(&mut self, world: &mut World, player: &mut Player) -> bool {
@@ -122,12 +162,17 @@ impl Adventure {
                 realm: world.regions.instance_id,
                 expires: self.time + RECALL_SECONDS,
                 armed: false,
+                held_since: self.time,
             });
-            world.expedition.say("Circle Set · Release and Cast to Return");
+            world.expedition.say(if world.portals.circles.is_empty() {
+                "Circle Set · Release and Cast to Return"
+            } else {
+                "Circle Set · Release to Return · Hold for Home Circle"
+            });
             return true;
         };
         if !mark.armed {
-            return false;
+            return self.time - mark.held_since >= ESCAPE_SECONDS && self.escape_home(world, player, feet);
         }
         if feet.distance_squared(mark.feet) > RECALL_RANGE * RECALL_RANGE {
             world.expedition.say("Circle · Out of Range");
@@ -187,7 +232,7 @@ impl Adventure {
             self.recall = None;
             world.expedition.say(match next {
                 Empty => "Circle Link Cleared",
-                Marked(_) => "First Circle Drawn · Sneak-cast at the other end",
+                Marked(_) => "Home Circle Drawn · Sneak-cast to Link · Hold Cast to Return",
                 Linked(..) => "Circles Linked · Cast while standing inside",
             });
             return Some(true);
@@ -208,12 +253,7 @@ impl Adventure {
             world.expedition.say("Circle · Landing blocked");
             return Some(false);
         };
-        player.pos = at;
-        player.precise_pos = at.as_dvec3();
-        player.vel = Vec3::ZERO;
-        player.gravity_frame = (glam::Quat::from_rotation_arc(player.up_dir(), destination.up)
-            * player.gravity_frame).normalize();
-        player.movement.fall_speed = 0.0;
+        arrive(player, at, destination.up);
         self.recall = None;
         self.spawn_voxel_burst(feet, spell_color(RECALL), 12, 1.0, 0.04);
         self.spawn_voxel_burst(destination.feet, spell_color(RECALL), 12, 1.0, 0.04);

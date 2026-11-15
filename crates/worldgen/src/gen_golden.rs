@@ -32,7 +32,7 @@ fn gen_golden() {
             }
         }
     }
-    for version in [2u32, 9, 12, 15, 16, 20, 31, 32, 33, 34, CURRENT_GENERATOR_VERSION] {
+    for version in [2u32, 9, 12, 15, 16, 20, 31, 32, 33, 34, engine_voxel::WORKSHOP_SUPPLY_GENERATOR, engine_voxel::SHARED_SURFACE_GENERATOR] {
         for (seed, world_type) in [(424242u32, WorldType::Hills), (7, WorldType::Hills)] {
             for scale in [S::OneMeter, S::HalfMeter] {
                 let cfg = WorldSampleConfig {

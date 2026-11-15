@@ -1558,11 +1558,13 @@ fn surface_noise(p: vec2<f32>) -> f32 {
     return surface_noise_grad(p).x;
 }
 
-// Conservative octave clamping, not an exact integral of the complete shader.
-// A noise cell loses contrast between five and two pixels across and converges
-// to its statistical mean. Fixed wavelengths never change with camera distance.
+// Octave clamping, not an exact integral of the complete shader. A noise cell
+// keeps full contrast down to about three pixels across and reaches its
+// statistical mean near one pixel. The old 5-to-2 pixel window erased the 5 cm
+// lattice a few metres out, flattening nearby walls and floors. Fixed
+// wavelengths never change with camera distance.
 fn surface_detail_weight(footprint_in_cells: f32) -> f32 {
-    return 1.0 - smoothstep(0.20, 0.50, max(footprint_in_cells, 0.0));
+    return 1.0 - smoothstep(0.30, 0.90, max(footprint_in_cells, 0.0));
 }
 
 // Box-filtered periodic mortar. Its integral retains thin-joint coverage
@@ -3473,6 +3475,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let industrial_block = kind == 12 && is_industrial_block(block);
     // Gilded Cave blocks author their own finish, relief and metal per texel.
     let gilded_block = kind == 12 && is_gilded_block(block);
+    // Hell rock, caps and drifts author their own relief and ember glow.
+    let hell_block = is_hell_block(block) && !is_viewmodel && !terrain_is_backdrop(in.ao_strength);
     let manufactured_surface = orbital_part || plated_block || industrial_block || gilded_block || is_factory_panel(kind)
         || kind == 23 || kind == 41 || kind == 53 || kind == 61;
     let authored_finish = rigid_material || manufactured_surface;
@@ -3595,6 +3599,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
     surface_finish = vec3<f32>(1.0, 1.0, 0.0);
     gilded_metal = 0.0;
     gilded_glow = vec3<f32>(0.0);
+    hell_glow = vec3<f32>(0.0);
     // Fallback for gravel and natural materials outside the four-way blend.
     natural_relief_strength = vec4<f32>(0.045, 0.030, 0.060, 0.025);
     // Distant terrain shades with the detail map's texel normal (16-128 m)
@@ -3686,6 +3691,12 @@ fn fs_main(in: VsOut) -> WorldOutput {
             let fade = 1.0 - smoothstep(0.7, 1.4, model_fp);
             detail_color *= mix(1.0, grain, fade);
         }
+    } else if hell_block {
+        // Hell detail rides on the stock natural surface, so value and grain
+        // match the rock and drifts the planet already shows.
+        let stock = natural_surface(albedo, in.voxel_pos, geometric_normal, kind, footprint);
+        detail_color = hell_surface(stock, in.voxel_pos * cam.world_params.x, geometric_normal, block,
+            footprint * cam.world_params.x);
     } else if is_natural {
         // Climate stays in world coordinates: texture scale must not move the
         // snowline, beaches, or biome transitions.
@@ -3723,8 +3734,9 @@ fn fs_main(in: VsOut) -> WorldOutput {
         let tilt = cobble_tilt(uv, geometric_normal, fp_m / material_scale) * min(detail_strength, 1.0);
         n = terrain_safe_unit3(n - (tilt - n * dot(n, tilt)), n);
     }
-    if gilded_block && !is_viewmodel {
-        // Coin domes, tile bevels and relief written by gilded_surface.
+    if (gilded_block || hell_block) && !is_viewmodel {
+        // Coin domes, tile bevels and relief written by gilded_surface and
+        // hell_surface.
         let tilt = natural_tilt * min(detail_strength, 1.0);
         n = terrain_safe_unit3(n - (tilt - n * dot(n, tilt)), n);
     }
@@ -3829,7 +3841,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
         filtered_slope_variance += 0.004;
         let under = select(vec3<f32>(0.090, 0.095, 0.110), vec3<f32>(0.34, 0.39, 0.46), kind == 44);
         let top = select(vec3<f32>(0.30, 0.29, 0.27), vec3<f32>(0.78, 0.79, 0.80), kind == 44);
-        albedo = mix(under, top, smoothstep(0.15, 0.85, gas.shade)) * gas.density;
+        // Industry gas keeps its species hue: the vertex colour relative to the
+        // material's own base. Terrain smoke and steam carry that base, so
+        // their ratio is 1 and they look exactly as before.
+        let base_srgb = select(vec3<f32>(0.25, 0.26, 0.28), vec3<f32>(0.80, 0.85, 0.89), kind == 44);
+        let base_lin = terrain_srgb_to_linear(base_srgb);
+        let hue = (in.base_color / max(dot(in.base_color, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4))
+            / (base_lin / max(dot(base_lin, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4));
+        albedo = mix(under, top, smoothstep(0.15, 0.85, gas.shade)) * gas.density
+            * clamp(hue, vec3<f32>(0.5), vec3<f32>(1.8));
     }
     // Ropy dark crust over narrow molten seams. Side faces advect downwards;
     // the metre-space pixel grid keeps a consistent scale across voxel sizes.
@@ -3886,6 +3906,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
 
     var water_depth = 10.0;
     var water_foam = 0.0;
+    // Emission of a realm glow pool (realm_light.wgsl), pre-exposure.
+    var realm_water_emit = vec3<f32>(0.0);
     var water_jacobian = 1.0;
     // Walls of a pool or a flowing step get the same water body colour as the
     // surface, without waves or foam. They used to be a flat teal albedo.
@@ -4137,6 +4159,15 @@ fn fs_main(in: VsOut) -> WorldOutput {
             water_foam = aeration * current_detail * 0.36;
         }
         water_foam = max(water_foam, sea_whitecap);
+        if realm_rig_on() && !water_side {
+            // A realm glow pool lights its own bed; `albedo` is still the
+            // substrate here. The body keeps a little reflectance for lamp glints.
+            realm_water_emit = realm_water_glow(world_pos, depth, albedo,
+                terrain_safe_unit3(relative_pos, vec3<f32>(0.0, -1.0, 0.0)), n, t, fp_m);
+            if dot(realm_water_emit, realm_water_emit) > 0.0 {
+                water_col = water_col * 0.25;
+            }
+        }
         albedo = mix(water_col, WATER_FOAM, water_foam);
         let water_roughness = 0.045 + 0.025 * marine + 0.025 * stream;
         roughness = mix(select(water_roughness, material_tint.w, material_tint.w >= 0.0), 0.48, water_foam);
@@ -4591,7 +4622,27 @@ fn fs_main(in: VsOut) -> WorldOutput {
     // Leaf clusters transmit some ambient sky light through their canopy.
     // Keep rock/soil contact shading and enclosed canopy shadows intact.
     let cavity_floor = mix(0.42, 0.60, f32(foliage) * ambient_sky);
-    let cavity      = mix(mix(cavity_floor, 1.0, shaped_ao), 1.0, hemi * 0.08);
+    // Occlusion is contact detail. Through ground fog and the far veil the
+    // in-scattered air in front of a slope is lit evenly, so cavity and macro
+    // occlusion must fade with the same path the fog stage integrates; kept at
+    // full strength they printed dark blotches on fogged ranges. This mirrors
+    // the fog optical depth below without its height integral (an upper bound,
+    // which only fades occlusion sooner) and leaves cave interiors untouched.
+    let ao_cave = clamp(light.sky_art[1].w, 0.0, 1.0);
+    let ao_fog_start = max(light.fog_params.x, 0.0);
+    var ao_fog_range = max(light.fog_params.y - ao_fog_start, 1.0);
+    let ao_planet_air = select(0.0, (1.0 - ao_cave)
+        * (1.0 - smoothstep(1500.0, 8000.0, max(cam.planet[1].w, 0.0))),
+        cam.planet[0].w > 0.5 && cam.planet[0].w < 1.5);
+    ao_fog_range = mix(ao_fog_range, max(ao_fog_range, 6000.0 - ao_fog_start),
+        ao_planet_air * daylight * (1.0 - smoothstep(0.15, 0.65, heavy_cloud)));
+    let ao_fog_density = mix(0.22, 0.10, daylight) + heavy_cloud * 0.10;
+    let ao_fog_depth = (1.35 + ao_fog_density * 3.2)
+        * max(dist - ao_fog_start, 0.0) / ao_fog_range;
+    let ao_veil = (1.0 - exp(-max(dist - 65.0, 0.0) / 1850.0)) * 0.78;
+    let ao_keep = mix(exp(-clamp(ao_fog_depth, 0.0, 80.0)) * (1.0 - ao_veil), 1.0, ao_cave);
+    let cavity      = mix(1.0, mix(mix(cavity_floor, 1.0, shaped_ao), 1.0, hemi * 0.08), ao_keep);
+    let fog_macro_occlusion = mix(1.0, macro_occlusion, ao_keep);
     let ambient     = (
         light.ambient_exposure.rgb * mix(vec3<f32>(0.38), vec3<f32>(1.0), hemi * hemi)
             * mix(1.0, 0.55, clear_day)
@@ -4599,7 +4650,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
               vec3<f32>(fill_luma),
               cloudiness * 0.18) * sky_fill_strength
         + ground_tint * ground_amt + dusk_sky_fill
-    ) * cavity * macro_occlusion * mix(1.0, 0.86, cloudiness * daylight * 0.55);
+    ) * cavity * fog_macro_occlusion * mix(1.0, 0.86, cloudiness * daylight * 0.55);
     // A small non-sky fill keeps deep-cave silhouettes readable without making
     // the underground look like an overlit interior. It follows the cavity and
     // face hemisphere so micro-relief still has shape.
@@ -4636,9 +4687,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
             * (0.78 + 0.22 * facing_hollow) * (0.70 + 0.30 * cavity)
             * select(0.0, 1.0, kind != 8 && kind != 9);
     }
+    if realm_rig_on() && kind != 8 && kind != 9 && !is_viewmodel {
+        cave_fill += realm_surface_light(world_pos, n, light.torch_meta.y, fp_m, cavity, hemi) * fire_exposure;
+    }
     var emissive = animated_emission + lava_emission * fire_exposure
+        + realm_water_emit * fire_exposure
         + hedron_glow * mix(1.0, fire_exposure, 0.35)
-        + select(vec3<f32>(0.0), gilded_glow * fire_exposure, gilded_block);
+        + select(vec3<f32>(0.0), gilded_glow * fire_exposure, gilded_block)
+        + select(vec3<f32>(0.0), hell_glow * fire_exposure * min(detail_strength, 1.0), hell_block);
     // Keep the authored body albedo. Only the moving ribbons emit, in the
     // selected spell's colour carried by the wand mesh, never a universal hue.
     if (kind == 55 && !authored_kit) || kind == 22 || kind == 51 {
@@ -5092,6 +5148,23 @@ fn fs_main(in: VsOut) -> WorldOutput {
 
     // Underground draw-distance gaps end in darkness, never outdoor fog.
     let camera_cave = clamp(light.sky_art[1].w, 0.0, 1.0);
+    if camera_cave >= 0.999 && light.mood.x < 0.001 && realm_rig_on() {
+        // A sunless realm has its own air, shaft of light and glowing water;
+        // the draw distance ends at its fog range, not 80 m.
+        var realm_lit = max(lit, vec3<f32>(0.0));
+        if uw_active() && kind == 8 && world_pos.y > cam.camera_pos.y {
+            // The glowing surface seen from below, rippled by the same web.
+            let pool = realm_pool_at(cam.camera_pos.xyz);
+            if pool >= 0 {
+                let b = light.realm[4u + u32(pool) * 2u];
+                let web = realm_caustic(world_pos.xz * 1.3, light.torch_meta.y, 0.0, fp_m);
+                realm_lit = realm_pool_tint(b.z) * b.y * (0.30 + 0.9 * web) * fire_exposure;
+            }
+        }
+        realm_lit = realm_air(realm_lit, cam.camera_pos.xyz, view_dir, dist, fire_exposure);
+        let fade = 1.0 - smoothstep(light.fog_params.y * 0.85, max(light.fog_params.y, 1.0), dist);
+        return WorldOutput(vec4<f32>(realm_lit * fade, 1.0), vec4<f32>(0.0));
+    }
     if camera_cave >= 0.999 && light.mood.x < 0.001 {
         let fade = 1.0-smoothstep(24.0, max(32.0, min(light.fog_params.y, 80.0)), dist);
         return WorldOutput(vec4<f32>(max(lit,vec3<f32>(0.0))*fade,1.0),vec4<f32>(0.0));
@@ -5114,6 +5187,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     let sky_luma = dot(raw_sky_radiance, vec3<f32>(0.2126, 0.7152, 0.0722));
     let weather_sky_radiance = mix(raw_sky_radiance, vec3<f32>(sky_luma), heavy_cloud * 0.55)
         * mix(1.0, 0.78, heavy_cloud * daylight);
+    let realm_haze = light.realm[11].x > 0.5;
+    let ground_fog_radiance = select(weather_sky_radiance, light.fog_color_density.rgb, realm_haze);
     // Integrate the local weather layer in both atmosphere modes. The aerial
     // LUT models planetary air and does not contain this ground fog.
     let fog_start = max(light.fog_params.x, 0.0);
@@ -5144,8 +5219,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
         ground_transmittance = exp(-clamp(optical_depth, 0.0, 80.0));
     }
     var atmosphere_transmittance = ground_transmittance;
-    var atmosphere_scatter = weather_sky_radiance * (1.0 - ground_transmittance);
-    if atmosphere_mode() >= ATMOSPHERE_MODE_SKY_VIEW_LUT {
+    var atmosphere_scatter = ground_fog_radiance * (1.0 - ground_transmittance);
+    if !realm_haze && atmosphere_mode() >= ATMOSPHERE_MODE_SKY_VIEW_LUT {
         let ap = aerial_perspective(view_dir, dist, scale, vec3<f32>(0.0));
         atmosphere_transmittance *= clamp(ap.a, 0.0, 1.0);
         atmosphere_scatter += max(ap.rgb, vec3<f32>(0.0)) * ground_transmittance;
@@ -5157,12 +5232,14 @@ fn fs_main(in: VsOut) -> WorldOutput {
         * mix(1.0, 0.25, camera_cave);
     let cloud_transmittance = 1.0 - cloud_fog;
     // Fog radiance is a property of the air, not of the surface normal.
-    let cloud_fog_radiance = max(mix(weather_sky_radiance, sky_up, 0.35), vec3<f32>(0.0));
+    let cloud_fog_radiance = max(select(mix(weather_sky_radiance, sky_up, 0.35),
+        ground_fog_radiance, realm_haze), vec3<f32>(0.0));
     lit = lit * cloud_transmittance + cloud_fog_radiance * (1.0 - cloud_transmittance);
     // The observer's air can be enclosed even when looking toward a lit exit.
     // A shaded receiver outdoors still has the same in-scatter in front of it.
     atmosphere_scatter *= mix(1.0, 0.28, camera_cave);
     lit = lit * atmosphere_transmittance + atmosphere_scatter;
+    lit = hell_squall_air(lit, dist, ground_fog_radiance);
     // Earth-scale Rayleigh barely tints land inside the 6 km coverage, so far
     // forest stayed saturated up to the streaming edge. Fade it toward the sky
     // the viewer sees behind it, as the reference backdrops do. The target was
@@ -5180,7 +5257,8 @@ fn fs_main(in: VsOut) -> WorldOutput {
     if LEAN_SHADING && far_close > 0.0 {
         veil_sky = max(atmosphere_color(view_dir), vec3<f32>(0.0));
     }
-    let veil = (1.0 - exp(-max(dist - 65.0, 0.0) / 1850.0)) * 0.78 * (1.0 - camera_cave);
+    let veil = select((1.0 - exp(-max(dist - 65.0, 0.0) / 1850.0)) * 0.78 * (1.0 - camera_cave),
+        0.0, realm_haze);
     // Take the horizon's hue at the surface's own brightness, and only part of
     // the horizon's brightness. A plain mix toward a low sun's horizon gave lit
     // and shaded faces one value, so every far range read as the same beige.
@@ -5259,7 +5337,7 @@ fn fs_main(in: VsOut) -> WorldOutput {
 
     // Nearby mist sits in front of the graded surface and distant haze, just
     // as it does in the sky pass. Later lighting must use its transmittance too.
-    let mist = local_mist(view_dir, dist, 1.0 - camera_cave, weather_sky_radiance);
+    let mist = local_mist(view_dir, dist, 1.0 - camera_cave, ground_fog_radiance);
     lit = lit * clamp(mist.a, 0.0, 1.0) + max(mist.rgb, vec3<f32>(0.0));
     // Inside a cosmos chamber the fog is the night sky of another universe.
     if light.mood.x > 0.001 {

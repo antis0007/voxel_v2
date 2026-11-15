@@ -102,10 +102,18 @@ pub(super) fn draw(ctx: &egui::Context, s: &MapState, top: f32) {
     crate::egui_ui::hud_layout::claim(ctx, "minimap", footprint);
     if s.prefs.coordinates {
         let cell = pos.floor().as_ivec3();
-        let text = if strict { format!("{:.0} · {:.0}", origin.x, origin.y) } else { format!("{} · {} · {}", cell.x, cell.y, cell.z) };
-        let at = pos2(frame.center().x, frame.bottom() + 3.0);
-        p.text(at + vec2(1.0, 1.0), Align2::CENTER_TOP, &text, FontId::monospace(10.5), style::INK);
-        p.text(at, Align2::CENTER_TOP, &text, FontId::monospace(10.5), style::PAPER);
+        // Axis letters on every value: a bare `0 · 100 · 2` reads as three unknown stats.
+        // The planet layer is a projected map plane, so it names its two map axes.
+        let text = if strict {
+            format!("E {:.0} · S {:.0}", origin.x, origin.y)
+        } else {
+            format!("X {} · Y {} · Z {}", cell.x, cell.y, cell.z)
+        };
+        // Right-aligned to the map: a labelled line is wider than the map and would
+        // run off the window edge if centred.
+        let at = pos2(frame.right(), frame.bottom() + 3.0);
+        p.text(at + vec2(1.0, 1.0), Align2::RIGHT_TOP, &text, FontId::monospace(10.5), style::INK);
+        p.text(at, Align2::RIGHT_TOP, &text, FontId::monospace(10.5), style::PAPER);
     }
 }
 

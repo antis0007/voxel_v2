@@ -111,7 +111,10 @@ mod boiler_tests;
 /// (the Lightless realm). Record layout is unchanged; older saves load as before.
 /// Version 75 appends the fourteen Gilded Cave blocks (gilded gate through sunstone) and world
 /// type code 8 (the Gilded Cave realm). Record layout is unchanged; older saves load as before.
-pub(crate) const SAVE_VERSION: u8 = 75;
+/// Version 76 appends the Highfold and Gloaming gates and the Gloaming moss, log and leaves, and
+/// world type codes 9 and 10 (the Highfold and the Gloaming). Record layout is unchanged.
+/// Version 77 appends mechanical button and pressure plate states.
+pub(crate) const SAVE_VERSION: u8 = 77;
 // V1-V9 used a single decimal digit. V10+ keeps the fixed eight-byte header
 // and uses two digits; discovery and reclamation share this parser.
 fn save_version(bytes: &[u8]) -> Result<u8> {
@@ -543,7 +546,8 @@ fn load_bytes(bytes: &[u8], slot: &Path) -> Result<SavedSession> {
     };
     let generator_version = if version_two { input.u32()? } else { 1 };
     ensure!(
-        (1..=super::CURRENT_GENERATOR_VERSION).contains(&generator_version)
+        (1..=engine_voxel::WORKSHOP_SUPPLY_GENERATOR).contains(&generator_version)
+            || (engine_voxel::SHARED_SURFACE_GENERATOR..=engine_voxel::CURRENT_GENERATOR_VERSION).contains(&generator_version)
             || (engine_voxel::COASTAL_PLANET_GENERATOR..=engine_voxel::MOBILE_RIVERBED_GENERATOR).contains(&generator_version)
             || generator_version == engine_voxel::CUSTOM_PLANET_VERSION
             || generator_version == 137
@@ -554,7 +558,6 @@ fn load_bytes(bytes: &[u8], slot: &Path) -> Result<SavedSession> {
             || generator_version == engine_voxel::HELL_MIRROR_GENERATOR
             || generator_version == engine_voxel::HELL_BIOME_GENERATOR
             || (engine_voxel::PLANET_FREIGHT_GENERATOR..=engine_voxel::PLANET_FREIGHT_DETOUR_GENERATOR).contains(&generator_version)
-            || generator_version == engine_voxel::PLANET_GENERATOR_VERSION
             || (engine_voxel::WATERSHED_EROSION_GENERATOR..=engine_voxel::BRANCHING_WATERSHEDS_GENERATOR).contains(&generator_version)
             || generator_version == engine_voxel::LANDSCAPE_CYCLES_GENERATOR
             || generator_version == engine_voxel::DEEP_TIME_GENERATOR
@@ -568,6 +571,7 @@ fn load_bytes(bytes: &[u8], slot: &Path) -> Result<SavedSession> {
             || generator_version == engine_voxel::DIKE_SWARM_GENERATOR
             || generator_version == engine_voxel::CARVED_SURFACE_GENERATOR
             || generator_version == engine_voxel::ROCK_RELIEF_GENERATOR
+            || generator_version == engine_voxel::DUNGEON_MECHANISMS_GENERATOR
             || generator_version == engine_voxel::FLOODPLAIN_MEANDER_GENERATOR
             || generator_version == engine_worldgen::planetary::reference_relief::VERSION
             || generator_version == engine_worldgen::manyfold::maze::TWISTED
@@ -1021,6 +1025,7 @@ fn load_bytes(bytes: &[u8], slot: &Path) -> Result<SavedSession> {
             super::rules::Rules::default()
         });
         world.rules.systems.publish();
+        crate::dev_panel::gilded_layout::load(world.world_type, world.seed, &root);
         if version < 71 { super::farming::sidecar::load(&mut world, &root); }
         if version < 60 {
             super::block_data::sidecar::load(&mut world.block_data, &root);

@@ -47,7 +47,7 @@ actions!(
     QuickSelect, Map, Waypoint, Minimap, ToggleHud, Screenshot, Debug, Fullscreen, Hotbar1, Hotbar2, Hotbar3,
     Hotbar4, Hotbar5, Hotbar6, Hotbar7, Hotbar8, Hotbar9, HotbarPrev, HotbarNext, Undo, Redo,
     BlueprintCorner, BlueprintCopy, BlueprintCut, BlueprintPaste, BlueprintRotate, BlueprintMirror,
-    Blueprints, Records, GoalTrack, SystemMap, NavTarget,
+    Blueprints, Records, GoalTrack, SystemMap, NavTarget, RecipeLookup, UsesLookup,
 );
 
 /// Actions `Input` tracks per frame; only these accept mouse buttons.

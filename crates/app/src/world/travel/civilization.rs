@@ -304,9 +304,7 @@ fn enabled(world: &World) -> bool {
     if world.multiplayer.is_some() {
         return false;
     }
-    world.sample_config().civilization_enabled() && world.ca_view.is_none()
-        && world.generator_version >= geo::VERSION
-        && world.world_type == crate::world::WorldType::Planet
+    geo::enabled(&world.sample_config()) && world.ca_view.is_none()
 }
 
 fn door(world: &World, plot: IVec3, key: u8) -> Vec3 {

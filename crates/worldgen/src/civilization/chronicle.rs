@@ -126,7 +126,7 @@ impl Chronicle {
             seed: cfg.seed,
             generator: cfg.generator_version,
             planet_recipe: cfg.planet_fingerprint(),
-            landscape_checksum: crate::planetary::regional_view(cfg).checksum,
+            landscape_checksum: crate::geo::planet_for(cfg).checksum,
             model_revision: MODEL_REVISION,
             region: [key.x, key.y],
             deep_time_myr: crate::planetary::DRIFT_MYR,

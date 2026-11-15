@@ -22,6 +22,12 @@ pub struct LookAt<'a> {
     pub block: BlockId,
     /// Measured cell temperature, including ambient and frozen states.
     pub temperature_c: Option<f32>,
+    /// What the climate alone would hold the cell at. The temperature chip shows
+    /// only when the cell departs from it (or on Shift): `20°C` on every brick is noise.
+    pub ambient_c: Option<f32>,
+    /// Survival mining facts for the held tool; `None` in creative or for cells
+    /// with nothing to mine.
+    pub harvest: Option<Harvest>,
     pub volume_ul: Option<u64>,
     pub water: Option<crate::world::water_tools::Reading>,
     pub bucket_ul: Option<u32>,
@@ -32,6 +38,23 @@ pub struct LookAt<'a> {
     /// The assembly at the crosshair, when the block is one.
     pub machine: Option<&'a Probe>,
 }
+
+/// The Jade harvest line: which tool the block needs and whether the held one
+/// gets a drop.
+#[derive(Clone, Copy, Debug)]
+pub struct Harvest {
+    /// Cheapest craftable tool that harvests the block, when one is needed.
+    pub tool: Option<crate::world::inventory::Item>,
+    /// Minimum tool tier; 0 means the hand drops it.
+    pub tier: u8,
+    /// Hold time with the held tool.
+    pub seconds: f32,
+    /// False when the held tool is below the tier: the block breaks with no drop.
+    pub drops: bool,
+}
+
+/// Degrees from ambient before a temperature counts as news.
+const TEMPERATURE_NEWS_C: f32 = 10.0;
 
 /// Seconds the panel takes to settle when the target changes.
 const SETTLE: f64 = 0.12;
@@ -153,7 +176,10 @@ fn header(ui: &mut egui::Ui, look: &LookAt) {
                     .map(|_| look.block.display_name())
                     .unwrap_or(look.block.display_name());
                 ui.label(label_text(ui, name).size(scaled(ui, 12.0)).color(PAPER));
-                if let Some(temp_c) = look.temperature_c {
+                let shift = ui.input(|i| i.modifiers.shift);
+                if let Some(temp_c) = look.temperature_c.filter(|t| {
+                    shift || look.ambient_c.is_none_or(|a| (t - a).abs() >= TEMPERATURE_NEWS_C)
+                }) {
                     let colour = if temp_c > 300.0 { DANGER } else { AMBER };
                     ui.label(label_text(ui, format!("{temp_c:.0}°C")).color(colour));
                 }
@@ -167,7 +193,30 @@ fn header(ui: &mut egui::Ui, look: &LookAt) {
                 );
                 facts(ui, look);
             });
+            if let Some(harvest) = look.harvest {
+                harvest_line(ui, harvest);
+            }
         });
+    });
+}
+
+/// `Requires: Stone pickaxe · 1.2 s`, red with `No Drop` when the held tool is
+/// under tier. A hand-harvestable block shows only its time, and only on Shift.
+fn harvest_line(ui: &mut egui::Ui, h: Harvest) {
+    let shift = ui.input(|i| i.modifiers.shift);
+    if h.tier == 0 && !shift {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        if h.tier > 0 {
+            let need = h.tool.map_or_else(|| format!("Tier {}", h.tier), |tool| tool.name().to_owned());
+            ui.label(label_text(ui, format!("Requires: {need}")).color(if h.drops { JADE } else { DANGER }));
+            if !h.drops {
+                ui.label(label_text(ui, "No Drop").color(DANGER));
+            }
+        }
+        ui.label(label_text(ui, format!("{:.1} s", h.seconds)).color(MUTED));
     });
 }
 

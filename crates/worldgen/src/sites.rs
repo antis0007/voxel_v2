@@ -539,7 +539,7 @@ pub fn visit_skylines(
     mut emit: impl FnMut([Vec3; 9], f32, B, B),
 ) {
     if cfg.generator_version < 39
-        || !matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged)
+        || !crate::features::enabled(cfg, crate::features::Feature::SettlementSkylines)
     {
         return;
     }

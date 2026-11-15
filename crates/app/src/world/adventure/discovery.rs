@@ -213,18 +213,30 @@ impl Adventure {
             .collect()
     }
 
-    /// Undiscovered spells this wand tier can already hold.
+    /// Undiscovered spells this wand tier and instrument can already hold.
     fn current_tier_pool(&self) -> Vec<u32> {
         let tier = self.wand.max(1);
         self.discovery_pool()
             .into_iter()
-            .filter(|&id| spell_available(id, tier, self.rare_spells))
+            .filter(|&id| spell_available(id, tier, self.rare_spells)
+                && wands::fits_instrument(id, self.loadout.mode))
             .collect()
     }
 
     /// Finds a usable spell first; future tiers only after that pool is exhausted.
     pub fn discover_with(&mut self, salt: u32) -> Option<u32> {
-        let usable = self.current_tier_pool();
+        let mut usable = self.current_tier_pool();
+        let known = self.effective_spell_log();
+        // The first discovery opens deck composition, not just another base spell.
+        // Existing knowledge remains authoritative; no separate tutorial state.
+        if !(0..=MAX_SPELL_ID).any(|id| known.grants(id) && wands::is_modifier(id)) {
+            let modifiers: Vec<u32> = usable.iter().copied()
+                .filter(|&id| wands::is_modifier(id))
+                .collect();
+            if !modifiers.is_empty() {
+                usable = modifiers;
+            }
+        }
         let ahead: Vec<u32> = self
             .discovery_pool()
             .into_iter()

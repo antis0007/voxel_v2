@@ -96,7 +96,10 @@ pub fn prompt(world: &World, player: &Player, slot: usize) -> Option<Prompt> {
             let b = world.get(cell);
             Some(Prompt { title: b.display_name(), action: if b.chest_tier().is_some() || super::containers::is_cache(b) {
                 "[F] Open Chest"
-            } else if engine_content::fittings::state(b).is_some() { "[F] Toggle" }
+            } else if matches!(b, BlockId::MechanicalButton | BlockId::MechanicalButtonOn) { "[F] Press" }
+            else if b == BlockId::PressurePlateOn { "[F] Reset" }
+            else if b == BlockId::PressurePlate { "Step to activate" }
+            else if engine_content::fittings::state(b).is_some() { "[F] Toggle" }
             else if b == BlockId::ClaimStake && super::farming::base::enabled(world) {
                 super::farming::base::stake_action(world, cell)
             }

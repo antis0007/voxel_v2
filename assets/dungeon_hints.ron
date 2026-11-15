@@ -10,5 +10,9 @@
         (when: SmallLocks, text: "Small Keys: side caches"),
         (when: GreatLock, text: "Great Key: deep cache"),
         (when: Always, text: "Keys Held: {held}"),
+        (when: Mechanisms, text: "Bronze plates: hatches"),
+        (when: Mechanisms, text: "Buttons: nearby doors"),
+        (when: Mechanisms, text: "Odd masonry: annexes"),
+        (when: Mechanisms, text: "Torchlight reveals foes"),
     ],
 )

@@ -43,4 +43,8 @@ refuses rows without one.
 
 ## Conversion-cycle audit
 
-`node tools/axiom-dev/alchemy-cli.mjs cycles` reads processes, fabrication and brewing from disk and fails (exit 1) when a loop gains items (parity rule C-MC1). Units are items, not mass. Reactions, Touch of gold and mana flowers are not modelled.
+`node tools/axiom-dev/alchemy-cli.mjs cycles` reads processes, fabrication and brewing from disk. Exit 1 means a gain in the parsed resource model; exit 2 means no gain was found but runtime coverage is incomplete. Neither is a whole-game conservation proof. Resource quantities use 64 units per item, not mass.
+
+The solver constrains all resource inputs, including feed outside each cycle, and counts side products outside the cycle. Declared process block inputs are finite feed, constrained separately at one cubic metre per batch. Witnesses include recipe batch coefficients, input/output quantities, net resources, machine work ticks and power-times-work energy units. Work ticks are not elapsed time.
+
+Runtime catalyst retention (notably Cultivator mode 0), Washer water, heat, upgrades, block-producing paths, the bronze reaction adapter, Touch of gold and mana flowers remain outside the complete model. Do not whitelist farming merely to make the audit green: source classification needs authoritative shared runtime semantics.

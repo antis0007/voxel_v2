@@ -613,7 +613,7 @@ pub fn hint(block: B, tier: u32) -> &'static str {
         return "RMB  Unlock";
     }
     if let Some(s)=engine_content::fittings::state(block) {
-        return if s.lever { "RMB  Switch" } else if s.open { "RMB  Close" } else { "RMB  Open" };
+        return if s.switch.is_some() { "RMB  Switch" } else if s.open { "RMB  Close" } else { "RMB  Open" };
     }
     if super::factory::Kind::from_block(block).is_some() {
         return "RMB  Open";
@@ -625,7 +625,7 @@ pub fn hint(block: B, tier: u32) -> &'static str {
         B::SalvageCrate | B::SurveyCache | B::CultivatorCache => "RMB  Open",
         B::Workbench => "RMB  Craft",
         B::Bed => "RMB  Sleep",
-        B::Smelter => "RMB  Smelt ore   ·   Requires coal",
+        B::Smelter => "Use  ·  Smelt ore and coal from pack",
         B::RedCap | B::MushroomStem | B::AmberCap | B::UmberCap => "F  Harvest biomass",
         B::SweetBerries | B::Grapes | B::Tomato | B::GlowBerries | B::Apple | B::Cherry | B::Fig => "RMB  Pick",
         B::CropHarvester => "RMB on soil  Set · Range 4 m",
@@ -701,6 +701,7 @@ pub fn interact(
             }
             world.sync_from_inventory();
             if processed > 0 {
+                world.goals.note_production(super::goals::Event::FieldSmelted);
                 world.adventure.sounds.push(crate::audio::Event {
                     cue: crate::audio::Cue::Smelt, pos: Some((p.as_vec3() + Vec3::splat(0.5)) * world.voxel_scale.meters()),
                     gain: 0.55, pitch: 1.0,
@@ -712,7 +713,17 @@ pub fn interact(
                 world.reconcile_legacy_to_inventory();
                 world.sync_from_inventory();
             } else {
-                world.expedition.say("Need ore, 0.25 coal and room for the ingot. F  Fit a blade part or modifier");
+                let stock = &world.expedition.resources;
+                let has_batch = world.inventory.count_item(quartz) >= quartz_batch
+                    || FIELD_SMELTING.iter().any(|&(ore, amount, _)| stock[ore] >= amount);
+                let message = if has_batch && stock[3] >= SMELT_COAL {
+                    "Pack full. Free space for ingots and use the smelter again."
+                } else if stock[3] < SMELT_COAL {
+                    "Smelting needs ¼ coal per batch. Mine coal ore and keep it in your pack."
+                } else {
+                    "Carry a full piece of copper, tin or iron ore to smelt an ingot."
+                };
+                world.expedition.say(message);
             }
         }
         B::SalvageCrate | B::SurveyCache | B::CultivatorCache => {

@@ -7,6 +7,7 @@ mod globe_gpu;
 mod geology;
 mod groups;
 mod panel;
+pub(crate) mod regional;
 pub mod planet_map;
 pub mod preview;
 mod solve;
@@ -92,6 +93,7 @@ pub struct WorldLoadReport {
     pub spawn: Option<Vec3>,
     /// Capture pose `(yaw offset, tilt)` in radians; live screens leave it unset.
     pub pose: Option<[f32; 2]>,
+    pub regional: Option<regional::View>,
     pub ready: bool,
 }
 
@@ -287,6 +289,13 @@ pub fn draw(ctx: &egui::Context, report: &WorldLoadReport) {
         p.circle_stroke(centre, radius * 0.72, Stroke::new(1.0, theme.edge.gamma_multiply(0.55)));
         p.line_segment([centre - vec2(radius * 0.72, 0.0), centre + vec2(radius * 0.72, 0.0)],
             Stroke::new(1.0, theme.edge.gamma_multiply(0.55)));
+    }
+
+    if wide && radius >= 140.0 && let Some(view) = &report.regional
+        && let Some(map) = view.map.get()
+    {
+        let inset = pos2(centre.x - radius * 0.72, centre.y + radius * 0.85);
+        regional::draw(&p, inset, radius, view, map);
     }
 
     let panel = if compact {

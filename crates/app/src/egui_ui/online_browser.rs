@@ -351,7 +351,7 @@ pub(super) fn page(root: &mut egui::Ui, owner: &mut super::EguiUi) -> super::UiA
                     if matches!(owner.coop.view.phase, super::coop_panel::Phase::Menu | super::coop_panel::Phase::Single) {
                         let recent = owner.library_entries.iter().filter(|e| e.saved > 0).max_by_key(|e| e.saved);
                         if let Some(id) = host_block(ui, recent.map(|e| e.id.as_str()), owner.library_loading) {
-                            result = super::UiAction::OpenWorld(id);
+                            result = super::UiAction::HostWorld(id);
                         }
                     }
                 });
@@ -361,20 +361,20 @@ pub(super) fn page(root: &mut egui::Ui, owner: &mut super::EguiUi) -> super::UiA
     result
 }
 
-/// Host path: names the latest saved world and returns its id when Host This World is pressed.
+/// Host path: returns the latest saved world's id when Host Latest World is pressed.
 fn host_block(ui: &mut egui::Ui, latest: Option<&str>, loading: bool) -> Option<String> {
     ui.separator();
     caption_host(ui);
     let mut open = None;
     ui.add_enabled_ui(latest.is_some() && !loading, |ui| {
-        if action(ui, "Host This World", true).clicked() { open = latest.map(str::to_owned); }
+        if action(ui, "Host Latest World", true).clicked() { open = latest.map(str::to_owned); }
     });
     open
 }
 
 fn caption_host(ui: &mut egui::Ui) {
     super::front_end::caption(ui, "INVITE A FRIEND");
-    ui.label(RichText::new("Opens the latest world. Friends in the pause menu hosts it and copies an invite code.").small().color(MUTED));
+    ui.label(RichText::new("Opens your latest world to friends once it has loaded.").small().color(MUTED));
 }
 
 /// One listing row; returns the code when Join is pressed.

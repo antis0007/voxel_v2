@@ -32,7 +32,7 @@ pub(super) fn find(cfg: &WorldSampleConfig, start: Vec2, end: Vec2) -> Vec<Vec2>
             if cost != costs[i] { continue; }
             if i == last { break; }
             let p = position(i);
-            let a = *sampled[i].get_or_insert_with(|| planetary::ground(cfg, p.x, p.y, STEP));
+            let a = *sampled[i].get_or_insert_with(|| crate::geo::ground(cfg, p.x, p.y, STEP));
             for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)] {
                 let x = (i % nx) as i32 + dx;
                 let z = (i / nx) as i32 + dz;
@@ -40,7 +40,7 @@ pub(super) fn find(cfg: &WorldSampleConfig, start: Vec2, end: Vec2) -> Vec<Vec2>
                 let j = z as usize * nx + x as usize;
                 if blocked.contains(&(i.min(j), i.max(j))) { continue; }
                 let q = position(j);
-                let b = *sampled[j].get_or_insert_with(|| planetary::ground(cfg, q.x, q.y, STEP));
+                let b = *sampled[j].get_or_insert_with(|| crate::geo::ground(cfg, q.x, q.y, STEP));
                 let distance = p.distance(q).max(0.01);
                 let grade = (a.top_m - b.top_m).abs() / distance;
                 if !dry(&a) || !dry(&b) || grade > 0.48 || b.slope > 0.75 { continue; }
@@ -74,7 +74,7 @@ fn walkable(cfg: &WorldSampleConfig, start: Vec2, end: Vec2) -> bool {
     let mut previous = None;
     for i in 0..=count {
         let p = start.lerp(end, i as f32 / count as f32);
-        let g = planetary::ground(cfg, p.x, p.y, 1.0);
+        let g = crate::geo::ground(cfg, p.x, p.y, 1.0);
         if !dry(&g) || previous.is_some_and(|h: f32| (g.top_m - h).abs() > 1.1) { return false; }
         previous = Some(g.top_m);
     }

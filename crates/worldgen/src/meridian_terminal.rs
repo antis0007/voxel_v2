@@ -37,7 +37,7 @@ pub fn smelter(cfg:&WorldSampleConfig)->IVec3 {if cfg.generator_version>=monumen
 pub fn enabled(cfg:&WorldSampleConfig)->bool {cfg.generator_version>=VERSION && cfg.world_type!=WorldType::Superflat}
 pub fn block(cfg:&WorldSampleConfig,p:IVec3,height:i32)->Option<B> {
     if !enabled(cfg) {return None;}
-    if cfg.generator_version>=earthport::VERSION {return earthport::block(cfg,p,height);}
+    if crate::features::legacy_preview(cfg.generator_version, earthport::VERSION) {return earthport::block(cfg,p,height);}
     if cfg.generator_version>=monument::VERSION {return monument::block(cfg,p,height);}
     let m=(p.as_vec3()+Vec3::splat(0.5))*cfg.voxel_meters();
     let x=m.x-X;let z=m.z-Z;

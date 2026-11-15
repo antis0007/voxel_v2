@@ -12,6 +12,10 @@ pub(super) const SIDES: [IVec3; 6] = [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::N
 
 /// Runs every mature working flower; `feet` is the player's position in metres.
 pub fn service(world: &mut World, feet: Vec3) {
+    if !world.farming.mist_ready {
+        // A fresh load has no mist list yet; plots must not roll dry before the first pulse.
+        rebuild_mist(world);
+    }
     if !world.farming.clock.is_multiple_of(PERIOD) || world.farming.plots.is_empty() {
         return;
     }
@@ -30,6 +34,8 @@ pub struct Pulse {
     pub to_player: f32,
     /// Plots tending flowers hurried.
     pub tended: u32,
+    /// Flowers that planted a copy beside themselves.
+    pub spread: u32,
 }
 
 /// Brings every growing plot within `radius` (metres) `ticks` closer to its next roll.
@@ -68,6 +74,59 @@ fn tend(world: &mut World, p: IVec3, centre: Vec3, radius: f32, ticks: u32, cost
     candidates.len() as u32
 }
 
+/// Same-crop plots allowed within two cells before a flower stops spreading.
+const SPREAD_CROWD: usize = 2;
+
+/// Plants one copy of the flower at `p` on free soil beside it, if its seeded roll hits.
+/// Spreading stops once two of its kind stand nearby, so a bed never carpets the field.
+fn spread(world: &mut World, p: IVec3, index: u8, crop: &table::Crop, changed: &mut Vec<IVec3>) -> bool {
+    let hash = super::stage::roll(world.seed, p, world.farming.clock ^ 0x5157_4ead);
+    if crop.spread_per_mille == 0 || hash % 1000 >= crop.spread_per_mille
+        || world.farming.plots.len() >= super::MAX_PLOTS || !crop.planting.is_soil()
+    {
+        return false;
+    }
+    let crowd = world.farming.plots.range((p.x - 2, i32::MIN, i32::MIN)..=(p.x + 2, i32::MAX, i32::MAX))
+        .filter(|&(&(x, y, z), plot)| plot.crop == index && (IVec3::new(x, y, z) - p).abs().max_element() <= 2)
+        .count();
+    if crowd > SPREAD_CROWD {
+        return false;
+    }
+    let start = (hash / 1000) as usize;
+    for i in 0..4 {
+        let q = p + SIDES[(start + i) % 4];
+        if !resident(world, q) || !resident(world, q - IVec3::Y) || world.get(q) != crate::world::BlockId::Air {
+            continue;
+        }
+        let ground = world.get(q - IVec3::Y);
+        if !(crop.soil.contains(&ground) || ground == super::BED) {
+            continue;
+        }
+        if let Ok(commit) = super::effects::replace(world, q, crate::world::BlockId::Air, crop.sprout) {
+            commit.publish_voxel(world, changed);
+            world.farming.plots.insert(super::key(q), super::Plot::new(index, world.farming.clock));
+            return true;
+        }
+    }
+    false
+}
+
+/// Lists mature resident mist flowers without running any other aura.
+fn rebuild_mist(world: &mut World) {
+    let scale = world.voxel_scale.meters();
+    let mist: Vec<(IVec3, i32)> = world.farming.plots.iter()
+        .filter_map(|(&(x, y, z), plot)| {
+            let crop = table::get(plot.crop)?;
+            let Some(Aura::Mist { radius_metres }) = crop.aura else { return None };
+            let p = IVec3::new(x, y, z);
+            (plot.stage >= crop.mature() && resident(world, p))
+                .then_some((p, (radius_metres / scale).floor() as i32))
+        })
+        .collect();
+    world.farming.mist = mist;
+    world.farming.mist_ready = true;
+}
+
 /// One flower pass; `mana_pulse` marks the two-second mana beat.
 pub fn pulse(world: &mut World, feet: Vec3, mana_pulse: bool) -> Pulse {
     let mut report = Pulse::default();
@@ -84,6 +143,7 @@ pub fn pulse(world: &mut World, feet: Vec3, mana_pulse: bool) -> Pulse {
         .take(MAX_FLOWERS)
         .collect();
     world.farming.mist.clear();
+    world.farming.mist_ready = true;
     // Tending runs first so a garden's own mana flowers pay it before the player or receivers.
     let mut flowers = flowers;
     flowers.sort_by_key(|(_, a)| !matches!(a, Aura::Tend { .. }));
@@ -96,6 +156,16 @@ pub fn pulse(world: &mut World, feet: Vec3, mana_pulse: bool) -> Pulse {
                 .then(|| ((p.as_vec3() + Vec3::splat(0.5)) * scale, radius_metres, 2.0 * per_second))
         })
         .collect();
+    if mana_pulse && world.adventure.dirty_voxels.len() < super::DIRTY_LIMIT {
+        let mut changed = Vec::new();
+        for &(p, _) in &flowers {
+            let index = world.farming.plots[&super::key(p)].crop;
+            if let Some(crop) = table::get(index) && spread(world, p, index, crop, &mut changed) {
+                report.spread += 1;
+            }
+        }
+        world.adventure.dirty_voxels.extend(changed);
+    }
     let mut mana = 0.0;
     for (p, aura) in flowers {
         let centre = (p.as_vec3() + Vec3::splat(0.5)) * scale;

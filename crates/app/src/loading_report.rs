@@ -92,7 +92,7 @@ pub fn preparing(cfg: &WorldSampleConfig, entry: &geo::Entry) -> WorldLoadReport
     WorldLoadReport {
         world_key: world_key(cfg), seed: cfg.seed, stages,
         map: entry.progress.solve_atlas().map_or(GlobeMap::Empty, GlobeMap::PlanetSolve),
-        drift, planet: true, face_km: 0.0, spawn: None, pose: None, ready: false,
+        drift, planet: true, face_km: 0.0, spawn: None, pose: None, regional: None, ready: false,
     }
 }
 
@@ -200,5 +200,17 @@ pub fn build(i: &Inputs) -> WorldLoadReport {
         })
     };
     let world_key = world_key(&cfg);
-    WorldLoadReport { world_key, seed: cfg.seed, stages, map, drift, planet, face_km, spawn, pose: None, ready: i.ready }
+    let origin = glam::Vec2::new(cfg.world_x(center.0), cfg.world_z(center.1));
+    let regional = solved.then(|| {
+        crate::egui_ui::world_loader::regional::request(
+            cfg, glam::Vec3::new(origin.x, 0.0, origin.y), world_key,
+        ).map(|map| {
+            use crate::world::farming::jobs::communities;
+            let populations = map.get().into_iter().flat_map(|map| map.settlement_ids())
+                .filter_map(|id| communities::population(i.world, id).map(|count| (id, count)))
+                .collect();
+            crate::egui_ui::world_loader::regional::View { origin, map, populations }
+        })
+    }).flatten();
+    WorldLoadReport { world_key, seed: cfg.seed, stages, map, drift, planet, face_km, spawn, pose: None, regional, ready: i.ready }
 }

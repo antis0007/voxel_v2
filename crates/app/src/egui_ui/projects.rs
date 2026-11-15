@@ -420,9 +420,8 @@ pub(super) fn draw(
 ) {
     ui.heading("Projects");
     let key = egui::Id::new("project_branch");
-    let mut branch = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
-    // Branches open with the system they plan: quests, machines, forge, magic.
-    let open = [unlocks.quests, unlocks.factory, unlocks.forge, unlocks.magic, unlocks.factory];
+    let mut branch = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(5);
+    let open = [unlocks.quests, unlocks.factory, unlocks.forge, unlocks.magic, unlocks.factory, true];
     if !open.get(branch).copied().unwrap_or(false) {
         branch = open.iter().position(|o| *o).unwrap_or(0);
     }
@@ -433,6 +432,7 @@ pub(super) fn draw(
             "Tools / Weapons",
             "Wands",
             "Traversal",
+            "Survival",
         ]
         .iter()
         .enumerate()
@@ -480,7 +480,7 @@ pub(super) fn draw(
                     );
                     wands(ui, view, inv, page);
                 }
-                _ => {
+                4 => {
                     let jump = keybinds::hint(Action::Jump);
                     let sneak = keybinds::hint(Action::Sneak);
                     for (item, control) in [
@@ -508,6 +508,50 @@ pub(super) fn draw(
                         recipe(ui, item, inv, m);
                         ui.weak(control);
                         ui.add_space(4.0);
+                    }
+                }
+                _ => {
+                    super::goals_hud::next(ui);
+                    ui.collapsing("First Ingot", |ui| {
+                        ui.label(format!("Carry ore and coal, then use [{}] on a placed Field smelter.",
+                            keybinds::hint(Action::Interact)));
+                        for item in [Item::Block(B::Smelter), Item::Resource(0), Item::Resource(2), Item::Resource(3)] {
+                            recipe(ui, item, inv, m);
+                        }
+                    });
+                    if unlocks.factory && crate::world::systems::Systems::active().automation() {
+                        ui.collapsing("First Powered Machine", |ui| {
+                            ui.label("Fuel the generator, run a cable to the furnace, then select Ore mode and load raw ore.");
+                            for kind in [Kind::Generator, Kind::Cable, Kind::Furnace] {
+                                recipe(ui, Item::Block(kind.block()), inv, m);
+                            }
+                        });
+                        ui.collapsing("Automatic Ore Delivery", |ui| {
+                            ui.label("Power a drill above an ore vein. Run Item pipe from the drill to an Output crate.");
+                            for kind in [Kind::MiningDrill, Kind::Pipe, Kind::Storage] {
+                                recipe(ui, Item::Block(kind.block()), inv, m);
+                            }
+                        });
+                    }
+                    ui.separator();
+                    if crate::world::systems::Systems::active().magic() {
+                        ui.strong("Make a Return Circle");
+                        ui.label("Cast with the starter wand, then draw a circle to mark a way home.");
+                        if ui.button("Teleportation Circle Guide").clicked() {
+                            super::magic_guide::open_circle(ui.ctx());
+                            *page = 6;
+                        }
+                    }
+                    if m.workshop.is_some() {
+                        ui.strong("Explore the Workshop Mine");
+                        ui.label("Follow the mine route to the guardian vault and free the Lanterncap.");
+                        if ui.button("Expedition Log").clicked() {
+                            ui.ctx().data_mut(|d| d.insert_temp(key, 0_usize));
+                        }
+                    } else {
+                        ui.strong("Scout a Cave");
+                        ui.label("Bring torches and a stone pickaxe. Mine Resonant Crystal for a gate project.");
+                        recipe(ui, Item::Block(B::Crystal), inv, m);
                     }
                 }
             }

@@ -80,6 +80,11 @@ fn shadow_vertex(in: VsIn, ownership: bool) -> ShadowVertex {
         out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         return out;
     }
+    if kind == 43u || kind == 44u {
+        // Smoke and steam do not occlude light; they must not cast cube shadows.
+        out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        return out;
+    }
     if kind == 34u {
         if gen.time < 0.0 {
             out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);

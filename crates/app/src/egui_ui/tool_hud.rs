@@ -6,7 +6,9 @@ use egui::{Align2, Color32, FontId, Stroke, pos2, vec2};
 pub fn traversal(ctx: &egui::Context, player: &crate::player::Player, voxel_meters: f32) {
     let t = &player.traversal;
     let readout = if t.sling_charge > 0.0 {
-        Some((t.sling_charge, format!("Stretch: {:.0}%", t.sling_charge * 100.0)))
+        let snap = t.sling_charge >= 1.0 && t.sling_full <= crate::player::traversal::SLING_SNAP_WINDOW;
+        Some((t.sling_charge, if snap { "Stretch: Snap".to_owned() }
+            else { format!("Stretch: {:.0}%", t.sling_charge * 100.0) }))
     } else if t.thrust || t.hover {
         if t.jet == 1 { Some((t.fuel_seconds / crate::player::traversal::BURN_SECONDS,
             format!("Fuel: {:.1} s", t.fuel_seconds))) }

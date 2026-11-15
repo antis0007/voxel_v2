@@ -138,6 +138,9 @@ Cast. A Focus Grimoire reduces their base upkeep from 8 to 6 mana/s and from
   to move the far end, or inside to clear the pair.
 - **Quick return** · Cast outside a linked circle, release, then cast again to
   return. One mark, 24 m range, 30 s lifetime. Successful casts cost 18 base mana.
+- **Home escape** · With a circle drawn, hold the cast 3 s anywhere in the same
+  realm to land on the first (home) circle. One way, no range limit; a hit
+  restarts the hold. Circles are stored per realm, so it never crosses realms.
 - **Crystal Gates** · Build two upright Resonant Crystal frames with matching
   clear openings. Interact with the first to attune it and the second to link.
   Walk through either opening. Gear → Teleportation Circle · Guide links to

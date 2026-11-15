@@ -1,4 +1,5 @@
 //! Presentation springs driven by fixed-step player and equipment state.
+use crate::mesh::models::fingers::{self, Fingers};
 use glam::Vec2;
 
 pub mod clips;
@@ -56,6 +57,9 @@ pub struct State {
     /// One-shot clip on the held item and its time in clip seconds.
     #[serde(skip)]
     pub clip: Option<(clips::Name, f32)>,
+    /// Eased finger openness of the main hand (see `mesh::models::fingers`).
+    #[serde(skip)]
+    pub fingers: Fingers,
     #[serde(skip)]
     breath: f32,
     #[serde(skip)]
@@ -76,7 +80,7 @@ impl Default for State {
         Self { sway: Spring::default(), aim: 0.0, inspect: 0.0, interact: 0.0,
             equip: 0.0, gait: 0.0, speed: 0.0, hit: 0.0, fidget: 0.0, mine: 0.0, sky: 1.0,
             tier: 0, seed: 0, previous_angles: Vec2::ZERO, previous_health: 100.0,
-            idle: 0.0, interaction_time: 0.0, mine_clock: 0.0, mine_timing: None, swing_lag: 0.0, clip: None, breath: 0.0, equip_time: 0.0, held_seen: None, hit_stop: 0.0, landed_seen: 0, sky_clock: 0.0, sky_target: 1.0, initialized: false }
+            idle: 0.0, interaction_time: 0.0, mine_clock: 0.0, mine_timing: None, swing_lag: 0.0, clip: None, fingers: Fingers::CLOSED, breath: 0.0, equip_time: 0.0, held_seen: None, hit_stop: 0.0, landed_seen: 0, sky_clock: 0.0, sky_target: 1.0, initialized: false }
     }
 }
 
@@ -117,13 +121,17 @@ pub fn tick(player: &mut super::Player, world: &crate::world::World,
     let eye = player.eye(world.voxel_scale).floor().as_ivec3();
     let held = crate::mesh::models::held_item::held(world, player);
     let sway_rate = crate::mesh::models::held_item::sway_rate(held);
-    let state = &mut player.viewmodel;
     let adv = &world.adventure;
+    let grip_item = if adv.swing() > 0.0 { crate::mesh::models::held_item::swung(world, held) } else { held };
+    let grip_target = fingers::review_override()
+        .unwrap_or_else(|| fingers::preset(crate::mesh::models::held_item::grip(grip_item)));
+    let state = &mut player.viewmodel;
     if !state.initialized {
         state.previous_angles = angles;
         state.previous_health = adv.health;
         state.held_seen = held;
         state.equip_time = clips::Name::Equip.clip().duration;
+        state.fingers = grip_target;
         state.initialized = true;
     }
     if state.held_seen != held {
@@ -139,6 +147,7 @@ pub fn tick(player: &mut super::Player, world: &crate::world::World,
         + if inertia.is_finite() { inertia } else { Vec2::ZERO };
     state.sway.step(target * crate::comfort::camera_motion(), sway_rate, dt);
     approach(&mut state.speed, speed.min(14.0), 10.0, dt);
+    state.fingers.approach(grip_target, fingers::PRESETS.ease_rate, dt);
     state.gait = (state.gait + speed * dt * 1.8).rem_euclid(std::f32::consts::TAU);
     let wand_held = adv.wand > 0 && adv.swing() <= 0.0;
     if adv.wand > 0 {

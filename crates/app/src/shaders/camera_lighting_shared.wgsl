@@ -144,6 +144,9 @@ struct Lighting {
     // sunset saturation], [cloud contrast, exposure gain, -, -].
     sky_art: array<vec4<f32>,2>,
     torch_group_bounds: array<vec4<f32>,16>,
+    // Sunless-realm light rig (world.rs LightingState::realm): [0] on, cavern,
+    // grotto; [1] fill; [2] air rgb + range; [3..9) glow pools; [9..11) shaft.
+    realm: array<vec4<f32>,12>,
 };
 
 @group(1) @binding(0) var<uniform> light : Lighting;

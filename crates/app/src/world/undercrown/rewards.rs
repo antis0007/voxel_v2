@@ -43,6 +43,11 @@ fn row(id: ObjectId) -> Option<&'static Row> {
     ROWS.iter().find(|r| r.district == id.district() && r.room == id.room() && r.prop == id.prop())
 }
 
+/// True when the prop has a reward row (items, a spell or a wand).
+pub fn has_reward(id: ObjectId) -> bool {
+    row(id).is_some()
+}
+
 pub fn for_prop(id: ObjectId) -> &'static [(Item, u32)] {
     row(id).map_or(&[], |r| r.items.as_slice())
 }
@@ -60,7 +65,7 @@ const DISPLAY_LIFT: f32 = 0.9;
 /// Rewards shown above unclaimed plinths, from generator 292 where plinths
 /// have a cap to stand them on. Each plinth shows its first reward.
 pub fn plinth_displays(plan: &Plan, state: &State) -> Vec<(Vec3, Item)> {
-    if plan.v2.as_ref().is_none_or(|layout| layout.version < props::VERSION) {
+    if plan.v2.as_ref().is_none_or(|layout| !engine_worldgen::features::legacy_preview(layout.version, props::VERSION)) {
         return Vec::new();
     }
     plan.props

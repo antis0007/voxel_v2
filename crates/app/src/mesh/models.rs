@@ -32,6 +32,7 @@ mod traversal;
 mod wayfarer;
 mod wand_asset;
 mod wand_pose;
+pub(crate) mod fingers;
 #[cfg(test)]
 mod wand_checks;
 #[cfg(test)]
@@ -811,6 +812,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
         mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| enemy.model(mesh, world.adventure.time, world));
         mesh.fade_since(mark, coverage);
     }
+    world.adventure.draw_hurled(&mut mesh, world.voxel_scale.meters());
     for companion in world.adventure.companions() {
         mesh.with_surface_kind(AUTHORED_SURFACE, |mesh| companion.model(mesh, world.adventure.time, viewer));
     }
@@ -1114,8 +1116,10 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
     // The held wand: styled from the player's atelier choices, idle in the hand
     // and drawn forward when a cast is under way. The tool takes the hand on a swing.
     let pinned = held_item::pinned();
+    // Far above a planet the wand is stowed with the hands; see `held_item::stowed`.
+    let stowed = held_item::stowed(world, player);
     if (world.adventure.wand > 0 || player.viewmodel.equip > 0.01)
-        && world.adventure.swing() <= 0.0 && !pinned {
+        && world.adventure.swing() <= 0.0 && !pinned && !stowed {
         let adv = &world.adventure;
         let spell = if adv.casting() { adv.last_cast } else { adv.loadout.slot(adv.loadout.cursor) };
         let held_seed=if adv.wand>0 { adv.loadout.seed } else { player.viewmodel.seed };
@@ -1143,7 +1147,6 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
     }
     // Held hotbar items drop away while a wand is drawn; a melee swing takes the hand.
     let swinging = world.adventure.swing() > 0.0;
-    let stowed = held_item::stowed(world, player);
     if !stowed && (pinned || swinging || world.adventure.wand == 0 && player.viewmodel.equip <= 0.01) {
         let mut held_view = held_item::View {
             eye, forward, right, up,
@@ -1166,14 +1169,7 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
             Some(item) => held_item::draw(&mut mesh, item, &held_view),
             None => held_item::bare_placement(&held_view),
         };
-        let relax = if holding_torch {
-            held_item::TORCH_RELAX
-        } else if held.is_none() {
-            held_item::BARE_RELAX
-        } else {
-            0.0
-        };
-        wayfarer::draw_hand(&mut mesh, &hand_view, Some(placement), relax);
+        wayfarer::draw_hand(&mut mesh, &hand_view, Some(placement), player.viewmodel.fingers);
     }
     if let Some(stack) = world.inventory.offhand.filter(|_| !stowed) {
         // Reflect geometry, including winding, to retain front-facing surfaces.
@@ -1187,8 +1183,8 @@ pub fn build(world: &World, player: &crate::player::Player, day: &crate::world::
             v.torch_lit = crate::held_flame_can_burn(world, player, position);
         }
         let placement = held_item::draw(&mut mesh, stack.item, &v);
-        let relax = if holding_torch { held_item::TORCH_RELAX } else { 0.0 };
-        wayfarer::draw_hand(&mut mesh, &hand_view, Some(placement), relax);
+        let fingers = fingers::preset(held_item::grip(Some(stack.item)));
+        wayfarer::draw_hand(&mut mesh, &hand_view, Some(placement), fingers);
         for vertex in &mut mesh.vertices[start..] {
             let p = Vec3::from_array(vertex.pos);
             vertex.pos = (p - right * (2.0 * (p-eye/mesh.scale).dot(right))).to_array();

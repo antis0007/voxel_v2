@@ -38,13 +38,13 @@ pub(super) fn tabs(ui: &mut egui::Ui, mode: &mut u8, group: &mut String) -> bool
         ),
     ];
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(3.0, 3.0);
+        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
         for (tab_mode, tab_group, label, item) in tabs {
             let selected = *mode == tab_mode && group.as_str() == tab_group;
             let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::click());
+                ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::click());
             screen::tab(ui.painter(), rect, 1.0, selected);
-            draw_item_icon(ui.painter(), rect.shrink(5.0), item);
+            draw_item_icon(ui.painter(), rect.shrink(4.0), item);
             if response.on_hover_text(label).clicked() {
                 *mode = tab_mode;
                 *group = tab_group.into();
@@ -58,8 +58,9 @@ pub(super) fn tabs(ui: &mut egui::Ui, mode: &mut u8, group: &mut String) -> bool
 pub(super) fn slot(ui: &mut egui::Ui, size: [f32; 2], item: Item) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(size[0], size[1]), egui::Sense::click_and_drag());
-    screen::well(ui.painter(), rect, 1.0);
-    draw_item_icon(ui.painter(), rect.shrink(5.0), item);
+    screen::cell(ui.painter(), rect);
+    // One unit per side: the vanilla 16-in-18 icon fill (32 of 36 points).
+    draw_item_icon(ui.painter(), rect.shrink(rect.width() / 18.0), item);
     if response.hovered() {
         screen::hover(ui.painter(), rect, 1.0);
     }

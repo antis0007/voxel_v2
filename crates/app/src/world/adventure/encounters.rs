@@ -6,6 +6,8 @@ pub(super) enum Mechanic {
     None,
     RubbleAmbush,
     CacheAmbush,
+    CeilingDrop,
+    LightReveal,
     Suppressor,
     Interceptor,
     Hexer,
@@ -19,6 +21,9 @@ pub(super) struct Recipe {
 }
 
 // Add recipes here; existing site/slot records still own death and reward persistence.
+const CEILING_DROP: usize = 5;
+const LIGHT_REVEAL: usize = 6;
+
 pub(super) const RECIPES: &[Recipe] = &[
     Recipe {
         kind: 3,
@@ -50,6 +55,8 @@ pub(super) const RECIPES: &[Recipe] = &[
         name: "Kiln Trapper",
         loot: &[(3, 64), (5, 32)],
     },
+    Recipe { kind: 3, mechanic: Mechanic::CeilingDrop, name: "Vault Droplet", loot: &[(3, 64), (13, 128)] },
+    Recipe { kind: 11, mechanic: Mechanic::LightReveal, name: "Veil Stalker", loot: &[(7, 64)] },
 ];
 
 #[cfg_attr(feature = "multiplayer", derive(serde::Serialize, serde::Deserialize))]
@@ -89,6 +96,15 @@ impl State {
             windup: 1.1,
         }
     }
+    pub fn specialize(&mut self, mechanic: Mechanic) {
+        self.recipe = Some(match mechanic {
+            Mechanic::CeilingDrop => CEILING_DROP,
+            Mechanic::LightReveal => LIGHT_REVEAL,
+            _ => return,
+        });
+        self.concealed = true;
+    }
+
     pub fn mechanic(&self) -> Mechanic {
         self.recipe.map_or(Mechanic::None, |i| RECIPES[i].mechanic)
     }
@@ -178,7 +194,16 @@ pub(super) fn ambush(
             || e.status.any()
             || e.slow > 0.0
             || (e.pos - e.home).length() > 0.6;
-        let woken = if e.encounter.mechanic() == Mechanic::CacheAmbush {
+        let woken = if e.encounter.mechanic() == Mechanic::CeilingDrop {
+            let behind = e.pos - feet;
+            let below = behind.y > 0.5 && behind.x.hypot(behind.z) < 2.6;
+            let los = below && line(world, e.center(), eye);
+            below && super::perception::watch(e, senses, distance, los, dt)
+        } else if e.encounter.mechanic() == Mechanic::LightReveal {
+            let cell = (e.center() / world.voxel_scale.meters()).floor().as_ivec3();
+            senses.noticeable && distance < 10.0 && line(world, e.center(), eye)
+                && crate::world::block_light::level_at(world, cell) >= 6
+        } else if e.encounter.mechanic() == Mechanic::CacheAmbush {
             distance < 2.4 && forward.dot(offset.normalize_or_zero()) < -0.15
                 && line(world, e.pos + Vec3::Y * 0.25, eye)
         } else {
@@ -221,6 +246,23 @@ pub(super) fn disguise(e: &Enemy, m: &mut Model, time: f32) -> bool {
         return true;
     }
     if !e.encounter.concealed { return false; }
+    if e.encounter.mechanic() == Mechanic::LightReveal {
+        return true;
+    }
+    if e.encounter.mechanic() == Mechanic::CeilingDrop {
+        let shake = e.aware * 0.06 * (time * 23.0).sin();
+        for (offset, size) in [
+            (Vec3::new(0.0, 0.87, 0.0), Vec3::new(0.78, 0.23, 0.69)),
+            (Vec3::new(-0.14, 0.64, 0.06), Vec3::new(0.36, 0.30, 0.43)),
+            (Vec3::new(0.17, 0.44, -0.07), Vec3::new(0.22, 0.27, 0.25)),
+        ] {
+            m.cuboid(e.pos + offset + Vec3::X * shake, size, Quat::IDENTITY, [0.29, 0.28, 0.24], 0.0);
+        }
+        if e.aware >= super::perception::SUSPICIOUS {
+            m.glow_voxel(e.pos + Vec3::Y * 0.4, Vec3::splat(0.065), Quat::IDENTITY, PALETTE_AMBER, 0.45, 0.8);
+        }
+        return true;
+    }
     // A suspicious lurker shifts under its stones: the fair warning before it bursts.
     let stir = ((e.aware - super::perception::SUSPICIOUS) / (1.0 - super::perception::SUSPICIOUS)).clamp(0.0, 1.0);
     for (i, (x, y, z, w)) in [

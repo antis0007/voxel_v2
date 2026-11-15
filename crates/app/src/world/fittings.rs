@@ -1,7 +1,7 @@
 //! Player-built metre-grid doors, hatches and local mechanical switches.
 use super::inventory::{Item, ItemStack};
 use super::{BlockId as B, World, effects, player_aabb};
-use engine_content::fittings as shape;
+use engine_content::fittings::{self as shape, Switch};
 use glam::IVec3;
 use std::collections::HashSet;
 
@@ -64,7 +64,7 @@ pub fn place(
     let a = shape::anchor(p, n);
     s.z = player.forward_dir().x.abs() > player.forward_dir().z.abs();
     s.open = false;
-    s.upper = !s.door && !s.lever && player.eye(world.voxel_scale).y < a.y as f32 + n as f32 * 0.5;
+    s.upper = !s.door && s.switch.is_none() && player.eye(world.voxel_scale).y < a.y as f32 + n as f32 * 0.5;
     let mut edits = Vec::new();
     for y in 0..if s.door { 2 * n } else { n } {
         for z in 0..n {
@@ -80,7 +80,7 @@ pub fn place(
     }
     let support = (0..n).any(|x| (0..n).any(|z| world.solid(a + IVec3::new(x, -1, z))))
         || (!s.door
-            && !s.lever
+            && s.switch.is_none()
             && [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
                 .iter()
                 .any(|d| world.solid(a + *d * n)));
@@ -124,41 +124,103 @@ pub fn interact(
     if (p.as_vec3() - player.eye(world.voxel_scale)).length() * world.voxel_scale.meters() > 6.0 {
         return false;
     }
-    let mut targets = vec![p];
-    if s.lever {
-        let n = shape::step(world.voxel_scale.meters());
-        let a = shape::anchor(p, n);
-        for y in -3..=3 {
-            for z in -3..=3 {
-                for x in -3..=3 {
-                    if x * x + y * y + z * z > 9 {
-                        continue;
-                    }
-                    let q = a + IVec3::new(x, y, z) * n;
-                    if shape::state(world.get(q)).is_some_and(|t| !t.lever && (!t.door || !t.upper))
-                    {
-                        targets.push(q);
-                    }
+    match s.switch {
+        Some(Switch::Plate) if !s.open => return true,
+        Some(_) => signal(world, p, !s.open, player, blocks, chunks),
+        None => {
+            let mut edits = body(world, p);
+            set_open(&mut edits, !s.open);
+            commit(world, &edits, player, blocks, chunks);
+        }
+    }
+    true
+}
+
+fn set_open(edits: &mut [(IVec3, B)], open: bool) {
+    for (_, block) in edits {
+        let state = shape::state(*block).unwrap();
+        *block = shape::block(shape::State { open, ..state });
+    }
+}
+
+/// The same three-metre linkage serves every mechanical input. Commit the
+/// switch and all outputs together so their saved states agree after a retry.
+fn signal(
+    world: &mut World,
+    p: IVec3,
+    active: bool,
+    player: &crate::player::Player,
+    blocks: &mut HashSet<IVec3>,
+    chunks: &mut HashSet<IVec3>,
+) {
+    let n = shape::step(world.voxel_scale.meters());
+    let anchor = shape::anchor(p, n);
+    let mut edits = body(world, p);
+    for y in -3..=3 {
+        for z in -3..=3 {
+            for x in -3..=3 {
+                if x * x + y * y + z * z > 9 {
+                    continue;
+                }
+                let target = anchor + IVec3::new(x, y, z) * n;
+                if shape::state(world.get(target)).is_some_and(|s| s.switch.is_none() && (!s.door || !s.upper) && s.open != active) {
+                    edits.extend(body(world, target));
                 }
             }
         }
     }
-    for q in targets {
-        let mut edits = body(world, q);
-        for (_, b) in &mut edits {
-            let mut t = shape::state(*b).unwrap();
-            t.open = if s.lever { !s.open } else { !t.open };
-            *b = shape::block(t);
-        }
-        if overlaps(world, &edits, player) {
-            world.expedition.say("Opening obstructed");
-            continue;
-        }
-        if effects::fitting_batch(world, &edits, blocks, chunks).is_err() {
-            world.expedition.say("Mechanism unavailable");
-        }
+    set_open(&mut edits, active);
+    if commit(world, &edits, player, blocks, chunks) {
+        world.adventure.sounds.push(crate::audio::Event {
+            cue: crate::audio::Cue::Clang,
+            pos: Some((anchor.as_vec3() + glam::Vec3::splat(n as f32 * 0.5)) * world.voxel_scale.meters()),
+            gain: 0.55,
+            pitch: if active { 1.15 } else { 0.85 },
+        });
+    }
+}
+
+fn commit(
+    world: &mut World,
+    edits: &[(IVec3, B)],
+    player: &crate::player::Player,
+    blocks: &mut HashSet<IVec3>,
+    chunks: &mut HashSet<IVec3>,
+) -> bool {
+    if overlaps(world, edits, player) {
+        world.expedition.say("Opening obstructed");
+        return false;
+    }
+    if effects::fitting_batch(world, edits, blocks, chunks).is_err() {
+        world.expedition.say("Mechanism unavailable");
+        return false;
     }
     true
+}
+
+pub fn step(
+    world: &mut World,
+    player: &crate::player::Player,
+    blocks: &mut HashSet<IVec3>,
+    chunks: &mut HashSet<IVec3>,
+) {
+    if !player.on_ground || player.flying || player.anchor.is_some() || player.up_dir().y < 0.99
+        || world.adventure.is_dead() || !world.rules.mode.interacts() || world.ca_view.is_some()
+    {
+        return;
+    }
+    let v = world.voxel_scale.meters();
+    let p = (player.pos - glam::Vec3::Y * (0.06 / v)).floor().as_ivec3();
+    if world.get(p) != B::PressurePlate {
+        return;
+    }
+    let n = shape::step(v);
+    let local = (player.pos - shape::anchor(p, n).as_vec3()) / n as f32;
+    if (0.04..=0.96).contains(&local.x) && (0.04..=0.96).contains(&local.z)
+        && (0.02..=0.15).contains(&local.y)
+    {
+        signal(world, p, true, player, blocks, chunks);
+    }
 }
 
 pub fn harvest(

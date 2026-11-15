@@ -82,6 +82,9 @@ fn ease(t: f32) -> f32 {
 
 #[path = "enemy_presentation/locomotion.rs"]
 mod locomotion;
+#[path = "enemy_presentation/motion.rs"]
+pub(super) mod motion;
+pub(super) use motion::BodyMotion;
 #[cfg(feature = "multiplayer")]
 #[path = "enemy_presentation/replica.rs"]
 mod replica;
@@ -104,6 +107,7 @@ pub(super) fn apply_replica_pose(e: &mut Enemy, pose: ReplicaPose) {
 #[cfg(feature = "multiplayer")]
 pub(super) fn advance_replica_pose(e: &mut Enemy, dt: f32) {
     e.reaction.advance(e.flash, e.knock, e.yaw, dt);
+    motion::advance(e, dt);
     e.flash = (e.flash - dt).max(0.0);
     e.slow = (e.slow - dt).max(0.0);
     // Boss action state remains authoritative; ordinary tells have a known release.
@@ -155,7 +159,7 @@ fn pose_frame(e: &Enemy, time: f32, wind: f32) -> (Vec3, Quat) {
 /// Attack emitters and rendered parts share the same rigid body transform.
 pub(super) fn posed_point(e: &Enemy, point: Vec3, time: f32, wind: f32) -> Vec3 {
     let (breath, rotation) = pose_frame(e, time, wind);
-    e.pos + rotation * (point + breath - e.pos)
+    motion::pose_point(e, e.pos + rotation * (point + breath - e.pos))
 }
 
 pub(super) fn wind(e: &Enemy) -> f32 {
@@ -169,6 +173,7 @@ pub(super) fn pose(e: &Enemy, m: &mut Model, mark: usize, time: f32, wind: f32) 
     let breath_blocks = breath.y / m.scale_meters();
     for v in &mut m.vertices[mark..] { v.pos[1] += breath_blocks; }
     m.rotate_since(mark, e.pos, rotation);
+    motion::pose_body(e, m, mark);
     status_tint(e, m, mark);
 }
 

@@ -176,6 +176,11 @@ fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
         }
         return if r.outline != Outline::Hewn && k < v.max(0.6) && (fy < 0.6 || (fy >= r.h - 0.6 && fy < r.h)) { c.pal.trim } else { stone(c, m, v) };
     }
+    if crate::features::legacy_preview(c.version, engine_voxel::DUNGEON_MECHANISMS_GENERATOR)
+        && let Some(b) = mechanisms(c, r, m, v, dwall)
+    {
+        return b;
+    }
     if fy < 0.0 {
         if let Some(b) = dress::below(c, r, rx, rz, fy, v) {
             return b;
@@ -302,6 +307,42 @@ fn room_body(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
         .unwrap_or(B::Air)
 }
 
+/// A false wall leads to the button behind the cache door. Both controls
+/// reach their own fittings through the same linkage used in player builds.
+fn mechanisms(c: &Complex, r: &Room, m: Vec3, v: f32, depth: f32) -> Option<B> {
+    if r.kind != Kind::Store || r.cache || r.sealed || r.outline != Outline::Rect
+        || depth < 1.0 || r.w() < 11.0 || r.d() < 10.0
+    {
+        return None;
+    }
+    let x = (m.x.floor() - r.x0.ceil()) as i32;
+    let z = (m.z.floor() - r.z0.ceil()) as i32;
+    let y = (m.y.floor() - r.floor.ceil()) as i32;
+    if !(3..=9).contains(&x) || !(2..=5).contains(&z) {
+        return None;
+    }
+    Some(match (x, z, y) {
+        (3, 3 | 4, -2) | (4, 4, -1) => B::Air,
+        (4, 4, -2) => B::CarvedStone,
+        (6, 4, -1) => B::StarTile,
+        (3, 3 | 4, -1) => B::OakTrapdoorZTop,
+        (_, _, -1) => if z == 5 || x == 9 { B::InlaidMarble } else { B::LozengeTile },
+        (3, 2, 0) => B::PressurePlate,
+        (5, 3, 0..=1) => B::MirageBrick,
+        (5, 3, 2) => B::CarvedStone,
+        (7, 3, 0) => B::OakDoorZ,
+        (7, 3, 1) => B::OakDoorZUpper,
+        (6, 4, 0) => B::MechanicalButton,
+        (8, 3, 0) if m.x.rem_euclid(1.0) < v && m.z.rem_euclid(1.0) < v => {
+            if m.y.rem_euclid(1.0) < v { B::SurveyCache } else { B::Air }
+        }
+        (8, 4, 0) if m.x.rem_euclid(1.0) < v && m.z.rem_euclid(1.0) < v && m.y.rem_euclid(1.0) < v => B::Torch,
+        (5..=9, 2 | 5, 0..=2) | (5 | 7 | 9, 3..=4, 0..=2) | (6 | 8, 3..=4, 2) => c.pal.trim,
+        (6 | 8, 3..=4, 0..=1) | (3..=4, 2..=4, 0..=1) => B::Air,
+        _ => return None,
+    })
+}
+
 fn floor_block(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     let (rx, rz) = (m.x - r.x0, m.z - r.z0);
     // A border of trim and a field of floor stone.
@@ -312,6 +353,17 @@ fn floor_block(c: &Complex, r: &Room, m: Vec3, v: f32) -> B {
     };
     if r.sealed && r.kind == Kind::Core {
         return B::TombStone;
+    }
+    if crate::features::legacy_preview(c.version, engine_voxel::DUNGEON_MECHANISMS_GENERATOR)
+        && dwall >= 1.0 && matches!(r.kind, Kind::Store | Kind::Scriptorium | Kind::Infirmary | Kind::Crypt)
+    {
+        let (x, z) = ((rx - r.w() * 0.5).abs(), (rz - r.d() * 0.5).abs());
+        if x + z < 2.0 {
+            return B::StarTile;
+        }
+        if x + z < 2.0 + v || (dwall - 1.5).abs() < v * 0.5 {
+            return B::InlaidMarble;
+        }
     }
     if c.version >= 46 {
         let border = dwall < 1.0;

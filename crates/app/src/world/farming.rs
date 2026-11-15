@@ -55,6 +55,7 @@ pub struct State {
     cursor: Option<Key>,
     /// Mature mist flowers (cell, radius in cells), rebuilt each flower pulse; never saved.
     pub(crate) mist: Vec<(IVec3, i32)>,
+    pub(crate) mist_ready: bool,
 }
 
 fn key(p: IVec3) -> Key {

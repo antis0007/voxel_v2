@@ -2,35 +2,60 @@
 use crate::BlockId as B;
 use glam::{IVec3, Vec3};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Switch {
+    Lever,
+    Button,
+    Plate,
+}
+
 #[derive(Clone, Copy)]
 pub struct State {
     pub door: bool,
-    pub lever: bool,
+    pub switch: Option<Switch>,
     pub z: bool,
     pub open: bool,
     pub upper: bool,
 }
 pub fn state(b: B) -> Option<State> {
+    let switch = match b {
+        B::MechanicalButton | B::MechanicalButtonOn => Some(Switch::Button),
+        B::PressurePlate | B::PressurePlateOn => Some(Switch::Plate),
+        B::Lever | B::LeverOn => Some(Switch::Lever),
+        _ => None,
+    };
+    if switch.is_some() {
+        return Some(State {
+            door: false, switch, z: false, upper: false,
+            open: matches!(b, B::LeverOn | B::MechanicalButtonOn | B::PressurePlateOn),
+        });
+    }
     let i = b as u32;
     let first = B::OakDoor as u32;
-    if i < first || i > B::LeverOn as u32 {
+    if i < first || i >= B::Lever as u32 {
         return None;
     }
     let i = i - first;
     Some(State {
         door: i < 8,
-        lever: i >= 16,
+        switch: None,
         z: if i < 8 { i & 4 != 0 } else { i & 2 != 0 },
         open: i & 1 != 0,
         upper: if i < 8 { i & 2 != 0 } else { i & 4 != 0 },
     })
 }
 pub fn block(s: State) -> B {
+    if let Some(switch) = s.switch {
+        let base = match switch {
+            Switch::Lever => B::Lever,
+            Switch::Button => B::MechanicalButton,
+            Switch::Plate => B::PressurePlate,
+        };
+        return B::from_u32(base as u32 + s.open as u32);
+    }
     B::from_u32(
         B::OakDoor as u32
-            + if s.lever {
-                16 + s.open as u32
-            } else if s.door {
+            + if s.door {
                 s.z as u32 * 4 + s.upper as u32 * 2 + s.open as u32
             } else {
                 8 + s.upper as u32 * 4 + s.z as u32 * 2 + s.open as u32
@@ -39,8 +64,8 @@ pub fn block(s: State) -> B {
 }
 pub fn canonical(b: B) -> Option<B> {
     state(b).map(|s| {
-        if s.lever {
-            B::Lever
+        if s.switch.is_some() {
+            block(State { open: false, ..s })
         } else if s.door {
             B::OakDoor
         } else {
@@ -64,7 +89,13 @@ pub fn boxes(b: B, p: IVec3, scale: f32) -> Vec<(Vec3, Vec3)> {
     let n = step(scale);
     let base = anchor(p, n).as_vec3();
     let mut authored = Vec::with_capacity(4);
-    if s.lever {
+    if let Some(switch) = s.switch.filter(|s| *s != Switch::Lever) {
+        let inset = if switch == Switch::Plate { 0.08 } else { 0.27 };
+        let height = if s.open { 0.035 } else { 0.075 };
+        authored.push((Vec3::new(inset, 0.0, inset), Vec3::new(1.0 - inset, 0.025, 1.0 - inset)));
+        let rim = inset + 0.05;
+        authored.push((Vec3::new(rim, 0.025, rim), Vec3::new(1.0 - rim, height, 1.0 - rim)));
+    } else if s.switch == Some(Switch::Lever) {
         authored.push((Vec3::new(0.25, 0.0, 0.25), Vec3::new(0.75, 0.14, 0.75)));
         let lean = if s.open { 1.0 } else { -1.0 };
         for i in 0..4 {

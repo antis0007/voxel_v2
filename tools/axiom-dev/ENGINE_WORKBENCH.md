@@ -53,7 +53,17 @@ or performance measurement.
 
 ## Compact inspection
 
-`inspect` accepts up to six sections. Omit them for player and location only.
+Use `node tools/axiom-dev/engine-cli.mjs inspect world civilization` in a
+running Hills, Ridged, or Planet session. The civilization section uses the
+live community report, including stock, workers, construction, production,
+road work, travel and scheduler activity.
+
+Generate a fixed-seed regional comparison with
+`cargo run -p engine_worldgen --example regional_review -- target/regional-review`.
+The terrain, settlement markers, roads and city ruins come from the native
+generator and use the same regional survey as the loading-screen inset.
+
+`inspect` accepts up to nine sections. Omit them for player and location only.
 Transport rounds small floating-point observations to four decimals so both
 interfaces avoid unreadable binary-float noise; native calculations are unchanged.
 
@@ -248,3 +258,22 @@ node tools/axiom-dev/engine-cli.mjs scenario tools/axiom-dev/scenarios-combat/fi
 `{min,max}`. It prints `pass` and failures and exits 1 on failure. Field foes
 (`world/adventure/field_foes.rs`): Blade Rotor 60, Stone Colossus 61, Ruin Walker 62;
 the Great Rock Worm is burrower strain 87.
+
+## Realm layout editor (Gilded Cave)
+
+**Playtest → Realm layout editor.** Start a fresh world with world `gilded`
+(any seed), then **Load layout**. Every room and structure is one native
+`Layout` (`crates/worldgen/src/gilded.rs`, schema `LAYOUT_FIELDS`): Gallery,
+Coin cavern, Passage, Grotto and Light groups, about 77 fields with units,
+bounds and help text served by the engine. Sliders, colour pickers and choices
+apply live (or with **Apply** when Live is off); resident chunks regenerate.
+**Reroll shapes** takes every shape from another seed and keeps the light;
+**Reset to seed** drops the edits; **Save to world** writes
+`gilded_layout.ron` beside the world save, which the game loads with the world;
+**Copy RON** copies the whole layout. **Go to view** moves the camera to a
+review pose (creative or spectator), **Capture** saves a native frame.
+
+CLI: `'{"op":"layout"}'`, `'{"op":"layout","action":"set","values":{"pillar_form":1,"hoard_air":"#ff2a1a"}}'`,
+actions `describe`, `set`, `reset`, `reroll` (`seed`), `save`, `export`, `view` (`view`).
+Edits are dev previews; player edits inside regenerated chunks are kept.
+

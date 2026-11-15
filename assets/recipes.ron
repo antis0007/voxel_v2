@@ -428,6 +428,20 @@
             description: "Switch doors and hatches within three metres.",
         ),
         (
+            name: "Mechanical Button",
+            output: (item: Block(MechanicalButton), count: 2),
+            pattern: ["cP"],
+            key: [('c', Block(Cobblestone)), ('P', Block(Planks))],
+            description: "Press to switch doors and hatches within three metres.",
+        ),
+        (
+            name: "Pressure Plate",
+            output: (item: Block(PressurePlate), count: 1),
+            pattern: [" U ", "PPP"],
+            key: [('U', Resource(6)), ('P', Block(Planks))],
+            description: "Step to switch nearby doors and hatches. Use again to reset.",
+        ),
+        (
             name: "Ladder",
             output: (
                 item: Block(Ladder),
@@ -1572,6 +1586,42 @@
             key: [
                 ('G', Block(GoldBlock)),
                 ('S', Block(Sandstone)),
+                ('C', Block(Crystal)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Highfold Gate",
+            output: (
+                item: Block(HighfoldGate),
+                count: 1,
+            ),
+            pattern: [
+                "FLF",
+                "LCL",
+                "FLF",
+            ],
+            key: [
+                ('F', Resource(24)),
+                ('L', Block(Limestone)),
+                ('C', Block(Crystal)),
+            ],
+            description: "",
+        ),
+        (
+            name: "Gloaming Gate",
+            output: (
+                item: Block(GloamingGate),
+                count: 1,
+            ),
+            pattern: [
+                "WAW",
+                "ACA",
+                "WAW",
+            ],
+            key: [
+                ('W', Block(Log)),
+                ('A', Block(AmberCap)),
                 ('C', Block(Crystal)),
             ],
             description: "",

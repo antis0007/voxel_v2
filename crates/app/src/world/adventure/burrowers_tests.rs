@@ -69,6 +69,7 @@ fn surface_worms_are_seen_but_rarely_hunt() {
         damage += d;
     }
     println!("surface: risen {risen} wary {wary} damage {damage:.1}");
+    assert!(risen >= 12, "worms are not rare on open ground: {risen} in 90 minutes");
     assert!(wary * 10 >= risen * 6, "most open-ground bodies are wary: {wary}/{risen}");
     assert!(damage <= 120.0, "six 15-minute stands lost {damage} health on the surface");
 }

@@ -6,6 +6,9 @@ Run from this checkout with Node.js 22 or newer.
 powershell -ExecutionPolicy Bypass -File .\tools\Open-AxiomDev.ps1
 ```
 
+Shortcut: double-click `AxiomDev.cmd` in the repo root, or the **Axiom Dev Panel**
+desktop shortcut (Ctrl+Alt+A).
+
 Keep the launcher window open while editing or playtesting. It prints the local browser URL if the browser does not open. Use `-NoBrowser` to open the printed URL yourself. The server listens on a random loopback port and requires the session key in the printed URL. No packages, accounts, or AI services are required.
 
 Unattended improvement, world system switches and the live-engine loop: [AUTOPILOT.md](AUTOPILOT.md).

@@ -64,7 +64,7 @@ impl Adventure {
     pub fn quest_entries(&self, cfg: &crate::world::WorldSampleConfig, workshop_prepared: bool) -> Vec<QuestEntry> {
         use crate::world::{WorldType, workshop};
         let mut entries = Vec::new();
-        if matches!(cfg.world_type, WorldType::Hills | WorldType::Ridged)
+        if engine_worldgen::features::enabled(cfg, engine_worldgen::features::Feature::Workshop)
             && cfg.generator_version >= 4 && sites::workshop_heart(cfg).is_some() {
             if cfg.generator_version >= 48 && workshop::home(cfg).is_some() {
                 let stage = if workshop::returned(self) && workshop::automated(self) { 4 }

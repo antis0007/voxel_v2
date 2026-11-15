@@ -33,6 +33,44 @@ pub(crate) fn focus(
     .map(|(_, prompt)| prompt)
 }
 
+thread_local! {
+    /// Raw id of the room the player last stood in; 0 outside the Undercrown.
+    static LAST_ROOM: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// On entering an Undercrown room, name it on the message line and count the
+/// finds still unclaimed there, so exploring has a readable goal. Never
+/// overrides a message already showing.
+pub(crate) fn announce_room(world: &mut super::World, feet_m: Vec3) {
+    if world.generator_version < FIRST_VERSION {
+        return;
+    }
+    let plan = plan(&world.sample_config());
+    let Some(room) = plan.room_at(feet_m) else {
+        LAST_ROOM.with(|last| last.set(0));
+        return;
+    };
+    let key = room.id.raw();
+    if LAST_ROOM.with(|last| last.replace(key)) == key || world.expedition.message_seconds > 0.0 {
+        return;
+    }
+    let unclaimed = plan
+        .props
+        .iter()
+        .filter(|p| p.id.district() == room.id.district() && p.id.room() == room.id.room())
+        .filter(|p| {
+            rewards::has_reward(p.id)
+                && world.undercrown.get(p.id) & engine_worldgen::undercrown::flags::CLAIMED == 0
+        })
+        .count();
+    let text = match unclaimed {
+        0 => room.name.to_string(),
+        1 => format!("{} · 1 Find", room.name),
+        n => format!("{} · {n} Finds", room.name),
+    };
+    world.expedition.say_for(text, 3.5);
+}
+
 /// Rewards to draw above unclaimed plinths.
 pub(crate) fn plinth_displays(world: &super::World) -> Vec<(Vec3, super::inventory::Item)> {
     if world.generator_version < FIRST_VERSION {

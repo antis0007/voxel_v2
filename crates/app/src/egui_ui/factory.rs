@@ -13,6 +13,7 @@ use crate::world::{
 use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, vec2};
 use glam::IVec3;
 use crate::world::factory::{GOLD_CONCENTRATE, placer};
+use crate::world::factory::industry as gas_tank;
 use super::slot_grid::SlotGrid;
 mod container_tools;
 mod industry;
@@ -522,6 +523,30 @@ pub(super) fn status_label(status: &str) -> &str {
         other => other,
     }
 }
+
+fn recovery_hint(ui: &mut egui::Ui, node: &Node) {
+    if !node.enabled {
+        ui.small("Resume the machine to continue.");
+        return;
+    }
+    let hint = match node.status {
+        "Needs cable / power" => "Connect a power cable and check generator fuel.",
+        "Output blocked" => "Collect output or connect storage with item pipe.",
+        "Exhaust blocked" => "Vent exhaust outdoors or connect a gas duct.",
+        "Needs fuel" if node.kind == Kind::Generator && node.mode == 0 =>
+            "Load coal from your pack below.",
+        "Needs input" if node.kind == Kind::Furnace && node.mode == 0 =>
+            "Add crushed ore, or switch to Ore mode.",
+        "Needs input" if node.kind == Kind::Furnace && node.mode == 1 =>
+            "Add a whole piece of copper, tin or iron ore.",
+        "Shaft complete" if node.kind == Kind::MiningDrill =>
+            "Move the drill over another vein or change its depth.",
+        "Stand clear of shaft" => "Step away from the area below the drill.",
+        "Assembly in shaft" | "Obstruction in shaft" => "Clear the shaft or move the machine.",
+        _ => return,
+    };
+    ui.small(hint);
+}
 fn affordable(inventory: &Expedition, cost: &[(usize, u32)]) -> bool {
     cost.iter().all(|(i, n)| inventory.resources[*i] >= *n)
 }
@@ -573,6 +598,7 @@ fn smelter_panel(
         });
     });
 
+    recovery_hint(ui, node);
     ui.separator();
     if alloy { mode_picker(ui, pos, node, action); }
 
@@ -667,15 +693,18 @@ fn smelter_panel(
         });
         ui.vertical(|ui| {
             ui.small("Output");
-            let outputs: Vec<_> = next
-                .map(|r| vec![(r.output.0, node.output[r.output.0])])
-                .unwrap_or_else(|| {
-                    (0..NAMES.len())
-                        .filter(|&i| node.output[i] > 0 || (gold && i == crate::world::factory::GOLD_INGOT)
-                            || (!gold && matches!(i, 6..=8)))
-                        .map(|i| (i, node.output[i]))
-                        .collect()
-                });
+            // A new batch or mode never hides stock left by an earlier recipe.
+            let outputs: Vec<_> = (0..NAMES.len())
+                .filter(|&i| {
+                    node.output[i] > 0
+                        || next.is_some_and(|r| r.output.0 == i
+                            || r.byproduct.is_some_and(|(side, _)| side == i))
+                        || (next.is_none()
+                            && ((gold && i == crate::world::factory::GOLD_INGOT)
+                                || (!gold && matches!(i, 6..=8))))
+                })
+                .map(|i| (i, node.output[i]))
+                .collect();
             if !outputs.is_empty() || !gold {
                 supply_grid(ui, "smelt-out", &outputs, None);
             }
@@ -695,8 +724,8 @@ fn smelter_panel(
             *action = UiAction::Factory(Action::Load(pos));
         }
         if ui
-            .button("Unload")
-            .on_hover_text("Output Transfer")
+            .button("Unload All")
+            .on_hover_text("Inputs and outputs · May reset batch progress")
             .clicked()
         {
             *action = UiAction::Factory(Action::Collect(pos));
@@ -805,6 +834,8 @@ fn upgrade_button(ui: &mut egui::Ui, pos: IVec3, node: &Node, inventory: &Expedi
     let cost = node.kind.upgrade_cost(node.upgrade);
     let label = if node.kind == Kind::Battery {
         format!("Cells → {}", power::battery_tier_name(node.upgrade + 1))
+    } else if node.kind == Kind::GasTank {
+        format!("Tank → {}", gas_tank::tank_tier_name(node.upgrade + 1))
     } else {
         format!("Drive {} → {}", node.upgrade + 1, node.upgrade + 2)
     };
@@ -817,6 +848,14 @@ fn upgrade_button(ui: &mut egui::Ui, pos: IVec3, node: &Node, inventory: &Expedi
                     "{} at up to {}. Stored charge is kept.",
                     power::fmt_energy(power::battery_capacity(node.upgrade + 1) as f64),
                     power::fmt_power(power::battery_rate(node.upgrade + 1) as f64)
+                ));
+            } else if node.kind == Kind::GasTank {
+                let mut next = node.clone();
+                next.upgrade += 1;
+                ui.small(format!(
+                    "Holds {:.0} g and moves {:.1} g per face each step. Stored gas is kept.",
+                    gas_tank::gas_capacity(&next) as f32 / 1000.0,
+                    gas_tank::port_flow(&next) as f32 / 1000.0
                 ));
             } else {
                 ui.small("Faster batches; the same energy per batch at a higher draw.");
@@ -985,6 +1024,7 @@ fn generator_panel(
             }));
         });
     });
+    recovery_hint(ui, node);
     if node.kind == Kind::Generator {
         mode_picker(ui, pos, node, action);
     }
@@ -1509,7 +1549,8 @@ pub(super) fn draw(
                 conduit_faces(ui, *pos, node, view.focused_links, action);
             }
             if crate::world::factory::industry::component(node.kind) {
-                industry::panel(ui,*pos,node,view,action);return;
+                industry::panel(ui,*pos,node,view,action);
+                upgrade_button(ui,*pos,node,inventory,action);return;
             }
             industry::readings(ui,view);
             if crate::world::factory::industry::port(node.kind) {
@@ -1597,6 +1638,7 @@ pub(super) fn draw(
                     if node.kind.water_port() && (node.kind!=Kind::Generator || node.mode==1) {icons::gauge(ui,node.water as f32/8192.0,icons::TEAL,&format!("{:.0} / 16000 L {}",node.water as f32*1000.0/512.0,if node.kind==Kind::Generator {"coolant"} else {"water"}));}
                 });
             });
+            recovery_hint(ui, node);
             if crate::world::factory::chips::controllable(node.kind) {
                 super::chip_panel::section(ui, view, *pos, action);
             }

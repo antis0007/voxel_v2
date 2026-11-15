@@ -35,6 +35,8 @@ const SHADER_INPUTS: &[(&str, &str)] = shader_inputs![
     "shaders/furnishing_surfaces.wgsl",
     "shaders/architectural_surfaces.wgsl",
     "shaders/gilded_surfaces.wgsl",
+    "shaders/hell_surfaces.wgsl",
+    "shaders/realm_light.wgsl",
     "shaders/world_shader.wgsl",
     "shaders/local_mist_shared.wgsl",
     "shaders/cloud_shader.wgsl",
@@ -196,6 +198,8 @@ fn world_shader_body() -> String {
         "shaders/furnishing_surfaces.wgsl",
         "shaders/architectural_surfaces.wgsl",
         "shaders/gilded_surfaces.wgsl",
+        "shaders/hell_surfaces.wgsl",
+        "shaders/realm_light.wgsl",
         "shaders/sky_volume_shared.wgsl",
         "shaders/world_shader.wgsl",
     ]

@@ -37,6 +37,13 @@ fn main() -> ExitCode {
             for error in errors {
                 eprintln!("{path}: {error}");
             }
+            // What a live session still shows: flawed lines are skipped one by one.
+            if let Ok(all) = ron::from_str::<engine_content::descriptions::Catalog>(&source) {
+                let (entries, flavours) = (all.entries.len(), all.flavours.len());
+                let kept = engine_content::descriptions::usable(all);
+                eprintln!("{path}: in game, {} of {entries} entries and {} of {flavours} flavour lines still load",
+                    kept.entries.len(), kept.flavours.len());
+            }
             ExitCode::FAILURE
         }
     }

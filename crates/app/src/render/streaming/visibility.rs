@@ -101,7 +101,7 @@ pub(super) fn column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) ->
         13.0
     }) + 1;
     let water_level = cfg.water_level();
-    let effective_min = if min_h <= water_level {
+    let mut effective_min = if min_h <= water_level {
         (min_h - cave_margin).min(water_level - CHUNK_SIZE)
     } else {
         min_h - cave_margin
@@ -109,11 +109,24 @@ pub(super) fn column_y_chunk_range(cx: i32, cz: i32, cfg: &WorldSampleConfig) ->
     // Ocean surface chunks are required even when the seabed is several chunks
     // lower (especially at quarter-metre voxel scales).
     // Landmark crowns rise above the ordinary tree margin.
-    let giant_top = engine_worldgen::giant_tree_top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1)).max(engine_worldgen::ruins::top_near(cfg, (ox, oz), (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1)));
-    let effective_max = (max_h + tree_margin)
+    let lo = (ox, oz);
+    let hi = (ox + CHUNK_SIZE - 1, oz + CHUNK_SIZE - 1);
+    let structure_top = if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Gloaming) {
+        engine_worldgen::gloaming::tree_top_near(cfg, lo, hi)
+    } else {
+        engine_worldgen::giant_tree_top_near(cfg, lo, hi)
+            .max(engine_worldgen::ruins::top_near(cfg, lo, hi))
+            .max(crown_top_over_column(cfg, ox, oz))
+    };
+    let mut effective_max = (max_h + tree_margin)
         .max(water_level)
-        .max(giant_top.unwrap_or(i32::MIN))
-        .max(crown_top_over_column(cfg, ox, oz).unwrap_or(i32::MIN));
+        .max(structure_top.unwrap_or(i32::MIN));
+    if cfg.world_type.realm() == Some(engine_voxel::RealmKind::Highfold)
+        && let Some((bottom, top)) = engine_worldgen::highfold::island_bounds(cfg, lo, hi)
+    {
+        effective_min = effective_min.min(bottom);
+        effective_max = effective_max.max(top);
+    }
 
     let min_cy =
         chunk_axis_from_world_block(effective_min).max(chunk_axis_from_world_block(cfg.min_world_y()));

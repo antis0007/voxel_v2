@@ -126,11 +126,15 @@ pub(super) fn frame<'a>(
 /// when the history has no motion stages (the endpoints then crossfade).
 /// `VOXEL_GEOLOGY_DISSOLVE=1` keeps the crossfade, for A/B captures.
 pub(super) fn motion(world: u64, frame: Frame<'_>) -> Option<Arc<motion::Motion>> {
-    static DISSOLVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *DISSOLVE.get_or_init(|| std::env::var_os("VOXEL_GEOLOGY_DISSOLVE").is_some_and(|v| v == "1")) {
+    if dissolve() {
         return None;
     }
-    motion::of(world, frame.from, frame.to)
+    motion::of(world, frame.from, frame.to, &margin_colours())
+}
+
+fn dissolve() -> bool {
+    static DISSOLVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISSOLVE.get_or_init(|| std::env::var_os("VOXEL_GEOLOGY_DISSOLVE").is_some_and(|v| v == "1"))
 }
 
 /// Captures only: hold the history clock at `myr`.
@@ -146,6 +150,7 @@ fn margin_colours() -> [[f32; 3]; 3] {
 pub(super) fn surface(world: u64, frame: &DriftFrame) -> Option<Arc<Surface>> {
     let key = world.rotate_left(17) ^ 0x6c4a_7d17_940e_f000 ^ u64::from(frame.myr);
     surface::history_cached(key, || {
+        let probe_t = std::time::Instant::now(); // PROBE
         let palette = AtlasPalette::new();
         let colours = margin_colours();
         let n = frame.n;
@@ -161,7 +166,12 @@ pub(super) fn surface(world: u64, frame: &DriftFrame) -> Option<Arc<Surface>> {
             .collect();
         let plates: Vec<u16> = frame.texels.iter().map(|t| t.plate).collect();
         let stress: Vec<[f32; 3]> = frame.texels.iter().map(|t| t.stress).collect();
-        seams(n, &mut texels, &plates, &stress, &colours);
+        // A frame the shader carries draws its seams itself, at screen
+        // resolution, from the plate map and margin tint in `motion::of`.
+        if frame.motion.is_empty() || dissolve() {
+            seams(n, &mut texels, &plates, &stress, &colours);
+        }
+        eprintln!("[geology-probe] surface n={} {:.2} ms", n, probe_t.elapsed().as_secs_f64() * 1e3); // PROBE
         Some(Surface {
             key,
             n: frame.n,
@@ -258,20 +268,25 @@ pub(super) fn seams(n: usize, texels: &mut [Texel], plates: &[u16], stress: &[[f
         if !edge {
             continue;
         }
-        let w = stress[i].map(|v| v.max(0.0));
-        let sum = w.iter().sum::<f32>();
-        // A quiet boundary is a pale hairline; an active one takes its colour.
-        let quiet = [0.62, 0.66, 0.70];
-        let tint: [f32; 3] = std::array::from_fn(|c| if sum > 1e-3 {
-            (0..3).map(|k| colours[k][c] * w[k]).sum::<f32>() / sum
-        } else { quiet[c] });
-        let strength = 0.35 + 0.65 * sum.min(1.0);
+        let (tint, strength) = margin_tint(stress[i], colours);
         let t = &mut texels[i];
         for c in 0..3 {
             t.rgb[c] += (tint[c] - t.rgb[c]) * 0.45 * strength;
             t.glow[c] = t.glow[c].max(tint[c] * strength);
         }
     }
+}
+
+/// A seam's colour and strength: a quiet boundary is a pale hairline, an
+/// active one takes its dominant margin's colour.
+pub(super) fn margin_tint(stress: [f32; 3], colours: &[[f32; 3]; 3]) -> ([f32; 3], f32) {
+    let w = stress.map(|v| v.max(0.0));
+    let sum = w.iter().sum::<f32>();
+    let quiet = [0.62, 0.66, 0.70];
+    let tint = std::array::from_fn(|c| if sum > 1e-3 {
+        (0..3).map(|k| colours[k][c] * w[k]).sum::<f32>() / sum
+    } else { quiet[c] });
+    (tint, 0.35 + 0.65 * sum.min(1.0))
 }
 
 const COOL: Color32 = Color32::from_rgb(96, 206, 235);

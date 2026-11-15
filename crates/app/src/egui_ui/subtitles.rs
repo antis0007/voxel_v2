@@ -97,7 +97,7 @@ pub(super) fn draw(ctx: &egui::Context, dt: f32) {
     if lines.is_empty() || !enabled() {
         return;
     }
-    egui::Area::new(egui::Id::new("subtitles"))
+    let shown = egui::Area::new(egui::Id::new("subtitles"))
         .anchor(Align2::RIGHT_BOTTOM, [-16.0, -60.0])
         .interactable(false)
         .show(ctx, |ui| {
@@ -111,6 +111,8 @@ pub(super) fn draw(ctx: &egui::Context, dt: f32) {
                 });
             });
         });
+    // The pickup feed stacks above this column.
+    super::hud_layout::claim(ctx, "subtitles", shown.response.rect);
 }
 
 #[cfg(test)]

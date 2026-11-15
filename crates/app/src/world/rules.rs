@@ -81,9 +81,9 @@ impl GameMode {
         matches!(self, Self::Survival | Self::Creative)
     }
 
-    /// Hostile sight checks and environmental harm reach the player.
+    /// Creatures can acquire the player as a hostile target.
     pub fn visible_to_mobs(self) -> bool {
-        self != Self::Spectator
+        matches!(self, Self::Survival | Self::Adventure)
     }
 
     fn code(self) -> u8 {

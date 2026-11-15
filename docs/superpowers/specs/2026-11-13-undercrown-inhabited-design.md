@@ -258,6 +258,20 @@ and are live in every world now:
     Leap and Lightning arc;
   - wands from the Jeweler's balcony (tier 1), Sea cache (2) and Archive reliquary (3).
   - Ids stay at or below 95, because the found-spell log is limited to that range in the save.
+- Resident hunters announce themselves with a low Warning call when they rise and drop
+  trophies on death: bestiary `drops` on kinds 88-91, spilled by `burrowers::fall`, which
+  now takes `&mut World`. Counts are seeded by the body's slot.
+- Fairness rules (challenge without BS):
+  - Refuge rooms (Ferry landing, Sea isle) are safe. Residents never start a hunt there,
+    a stalking resident withdraws when the player enters one, and none spawn while
+    the player is inside.
+  - Killing a resident keeps its district free of residents for 300 s
+    (`RESIDENT_QUIET_S`, `State::quiet_until`), so a kill earns a calm stretch to loot.
+  - Residents telegraph lunges for longer (`tell_s`): 1.1-1.5 s, against the default 1.0.
+- Room banner: entering an Undercrown room names it on the expedition message line
+  for 3.5 s, with the count of unclaimed reward props ("Flooded courthouse · 2 Finds").
+  It never overrides a message already showing (`undercrown::announce_room`,
+  called from `Adventure::update` beside `undercrown.tick`).
 - Uncompiled and untested as of writing (owner asked for no build).
   Backup branch: `undercrown-life-wip`.
 

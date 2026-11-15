@@ -476,6 +476,37 @@ pub(crate) fn deposit(w: &mut World, site: u32, at: Vec3, item: Item, count: u32
     count - stack.count
 }
 
+pub(crate) fn supply_request(w: &World, resident: u32) -> Option<Item> {
+    let site = owner_site(w, resident)?;
+    let city = w.farming.communities.sites.get(&site)?;
+    let stock = w.block_data.chest(stockpile(w, site)?);
+    [MEAL, Item::Block(super::B::WheatCrop), TIMBER].into_iter()
+        .filter_map(|item| {
+            let target = city.development.needs.iter().find(|need| need.item == item)?.count;
+            let shortfall = target.saturating_sub(production::count(&stock, item));
+            (shortfall > 0).then_some((item, shortfall as f32 / target as f32))
+        })
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(item, _)| item)
+}
+
+pub(crate) fn deliver_supply(w: &mut World, resident: u32, eye: Vec3, item: Item) -> Result<(), &'static str> {
+    let site = owner_site(w, resident).ok_or("Settlement Stores Unavailable")?;
+    if supply_request(w, resident) != Some(item) {
+        return Err("Settlement Supply Request Changed");
+    }
+    if w.inventory.count_item(item) == 0 {
+        return Err("Bring the Requested Supply");
+    }
+    if deposit(w, site, eye, item, 1) == 0 {
+        return Err("Move Beside the Stockpile and Check for Space");
+    }
+    w.inventory.remove_item(item, 1);
+    w.sync_from_inventory();
+    w.expedition.say("Supplies Delivered to the Settlement");
+    Ok(())
+}
+
 pub(crate) fn stock_summary(w: &World, id: u32) -> Option<String> {
     let site = owner_site(w, id)?;
     let c = w.farming.communities.sites.get(&site)?;
@@ -492,7 +523,9 @@ pub(crate) fn report(w: &World) -> serde_json::Value {
     let dead = s.sites.values().flat_map(|c| c.people.values()).filter(|p| p.died_at.is_some()).count();
     let settlements: Vec<_> = s.sites.iter().map(|(&id, c)| {
         let (bread, planks) = stocks(w, id);
-        serde_json::json!({"id": id, "stage": c.stage, "stockpile": c.jobs.stockpile,
+        let population = c.people.values().filter(|resident| resident.died_at.is_none()).count();
+        serde_json::json!({"id": id, "stage": c.stage, "population": population,
+            "territory_m": c.jobs.territory, "stockpile": c.jobs.stockpile,
             "station": c.station, "bread": bread, "planks": planks,
             "workers": crew::ids(&c.jobs).collect::<Vec<_>>(),
             "enlisted": c.people.iter().filter(|(_, p)| p.enlisted).map(|(&id, _)| id).collect::<Vec<_>>(),

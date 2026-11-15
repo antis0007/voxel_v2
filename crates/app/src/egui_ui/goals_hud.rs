@@ -14,7 +14,7 @@ const WIDTH: f32 = 248.0;
 fn action_label(text:&str)->String {
     use crate::keybinds::{Action, hint};
     let mut text = text.to_owned();
-    for (token, action) in [("[F]", Action::Interact), ("[Break]", Action::Break), ("[Inventory]", Action::Inventory)] {
+    for (token, action) in [("[F]", Action::Interact), ("[Break]", Action::Break), ("[Inventory]", Action::Inventory), ("[Cast]", Action::Cast)] {
         text = text.replace(token, &format!("[{}]", hint(action)));
     }
     text
@@ -38,7 +38,7 @@ pub fn publish(ctx: &egui::Context, view: Arc<View>) {
 
 pub(crate) fn publish_world(ctx: &egui::Context, world: &crate::world::World) {
     let scope = world.regions.view.root.clone();
-    let old = ctx.data(|d| d.get_temp::<Arc<std::path::PathBuf>>(egui::Id::new("goal_world")));
+    let old = world_scope(ctx);
     let now = ctx.input(|i| i.time);
     let prior_sample = ctx.data(|d| d.get_temp::<f64>(egui::Id::new("settlement_goal_sample")));
     let refresh_city = old.as_ref() != Some(&scope)
@@ -65,18 +65,35 @@ pub(crate) fn controls(ui: &mut egui::Ui) {
     if ui.checkbox(&mut shown, "Goal Tracker").changed() { set_enabled(shown); }
 }
 
+fn hide_text() -> String {
+    format!("[{}] Hide", crate::keybinds::hint(crate::keybinds::Action::GoalTrack))
+}
+
 fn hide_hint(ui: &mut egui::Ui) {
-    ui.label(RichText::new(format!("[{}] Hide", crate::keybinds::hint(crate::keybinds::Action::GoalTrack)))
-        .size(10.0).color(style::MUTED));
+    ui.label(RichText::new(hide_text()).size(10.0).color(style::MUTED));
+}
+
+/// Shortcuts for the survival tracker and its current recipe.
+fn key_hints(ui: &mut egui::Ui, recipe: bool) {
+    let text = if recipe { format!("{} · [Alt+R] Goal recipe", hide_text()) } else { hide_text() };
+    ui.label(RichText::new(text).size(10.0).color(style::MUTED));
+    ui.label(RichText::new("Inventory → Projects").size(10.0).color(style::MUTED));
 }
 
 fn view(ctx: &egui::Context) -> Option<Arc<View>> {
     ctx.data(|d| d.get_temp::<Arc<View>>(key()))
 }
 
-/// Tier of the goal the player is on: `None` before any snapshot, `Some(None)` once the track is finished.
+/// The world identity already published with the goal snapshot. UI progress
+/// must not leak from a previous world sharing the same egui context.
+pub(super) fn world_scope(ctx: &egui::Context) -> Option<Arc<std::path::PathBuf>> {
+    ctx.data(|d| d.get_temp::<Arc<std::path::PathBuf>>(egui::Id::new("goal_world")))
+}
+
+/// Tier of the current goal: `None` before an evaluated, nonempty track,
+/// `Some(None)` once that track is finished. A pending/failed track is not completion.
 pub(super) fn current_tier(ctx: &egui::Context) -> Option<Option<Tier>> {
-    view(ctx).map(|v| v.current.as_ref().and_then(|row| row.tier))
+    view(ctx).filter(|v| !v.rows.is_empty()).map(|v| v.current.as_ref().and_then(|row| row.tier))
 }
 
 pub fn enabled() -> bool {
@@ -158,25 +175,33 @@ pub(crate) fn tracker(ctx: &egui::Context) {
                         .color(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)));
                 }
                 let Some(row) = &view.current else { return };
-                // Position on the track, from 1: goals the starting kit already meets
-                // sit later in the table and must not inflate the first step.
-                let step = view.rows.iter().position(|r| !r.done).map_or(view.rows.len(), |i| i + 1);
                 let tier = row.tier.map_or("Goal", Tier::label);
-                ui.label(RichText::new(format!("{tier} · {step} / {}", view.rows.len()))
+                ui.label(RichText::new(tier)
                     .size(10.0).color(style::MUTED));
                 ui.label(RichText::new(&row.title).size(12.5).color(style::AMBER));
                 if !row.action.is_empty() {
                     ui.label(RichText::new(action_label(&row.action)).size(11.0).color(style::PAPER));
                 }
-                if !view.ingredients.is_empty() {
+                // The goal's own count first; the recipe inputs after it are capped at
+                // what the goal needs, so a met input reads `2 / 2`, never `3 / 2`.
+                if let Some(target) = &view.target {
+                    ingredient(ui, target.item, target.held, target.needed);
+                }
+                let inputs: Vec<_> = view.ingredients.iter()
+                    .filter(|i| view.target.as_ref().is_none_or(|t| t.item != i.item))
+                    .collect();
+                if !inputs.is_empty() {
                     ui.horizontal_wrapped(|ui| {
-                        for ing in &view.ingredients {
+                        if view.target.is_some() {
+                            ui.label(RichText::new("From").size(10.0).color(style::MUTED));
+                        }
+                        for ing in inputs {
                             ingredient(ui, ing.item, ing.held, ing.needed);
                         }
                     });
                 }
-                // The toggle key is only shown on request, never at rest.
-                if alt { hide_hint(ui); }
+                // Keys are only shown on request, never at rest.
+                if alt { key_hints(ui, view.recipe_item.is_some()); }
             });
             spine(ui.painter(), plate.response.rect);
         });
@@ -201,7 +226,7 @@ fn spine(p: &egui::Painter, rect: Rect) {
 }
 
 fn ingredient(ui: &mut egui::Ui, item: crate::world::inventory::Item, held: u32, needed: u32) {
-    let text = format!("{} / {needed}", held.min(9999));
+    let text = format!("{} / {needed}", held.min(needed));
     let font = FontId::proportional(10.0);
     let text_w = ui.painter().layout_no_wrap(text.clone(), font.clone(), Color32::WHITE).size().x;
     let (rect, response) = ui.allocate_exact_size(vec2(18.0 + 3.0 + text_w + 6.0, 18.0), egui::Sense::hover());
@@ -214,7 +239,23 @@ fn ingredient(ui: &mut egui::Ui, item: crate::world::inventory::Item, held: u32,
     response.on_hover_text(item.name());
 }
 
-/// The Goals page: every tier with its goals and met state.
+pub(super) fn next(ui: &mut egui::Ui) {
+    let Some(view) = view(ui.ctx()) else { return };
+    if let Some(row) = &view.current {
+        ui.label(RichText::new(&row.title).strong().color(style::AMBER));
+        ui.label(action_label(&row.action));
+        ui.horizontal_wrapped(|ui| {
+            if let Some(item) = row.recipe_item {
+                recipe_link(ui, item);
+            }
+            for input in view.ingredients.iter().filter(|i| Some(i.item) != row.recipe_item && i.held < i.needed) {
+                recipe_link(ui, input.item);
+            }
+        });
+    }
+}
+
+/// Completed and available goals.
 pub(super) fn page(ui: &mut egui::Ui) {
     let Some(view) = view(ui.ctx()) else { return };
     controls(ui);
@@ -231,14 +272,27 @@ pub(super) fn page(ui: &mut egui::Ui) {
                 let (mark, color) = match (row.done, current) {
                     (true, _) => ("Done", style::JADE),
                     (false, true) => ("Next", style::AMBER),
+                    (false, false) if row.optional => ("Extra", style::MUTED),
                     (false, false) => ("Open", style::MUTED),
                 };
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.add_sized([34.0, 14.0], egui::Label::new(RichText::new(mark).size(10.0).color(color)));
-                    ui.label(RichText::new(&row.title).color(if row.done { style::MUTED } else { style::PAPER }));
+                    if !row.done && let Some(item) = row.recipe_item {
+                        if ui.link(&row.title).on_hover_text(item.name()).clicked() {
+                            super::recipe_book::request(ui.ctx(), item, false);
+                        }
+                    } else {
+                        ui.label(RichText::new(&row.title).color(if row.done { style::MUTED } else { style::PAPER }));
+                    }
                     ui.label(RichText::new(action_label(&row.action)).size(10.0).color(style::MUTED));
                 });
             }
         }
     });
+}
+
+fn recipe_link(ui: &mut egui::Ui, item: crate::world::inventory::Item) {
+    if ui.link(item.name()).on_hover_text("Recipes and sources").clicked() {
+        super::recipe_book::request(ui.ctx(), item, false);
+    }
 }

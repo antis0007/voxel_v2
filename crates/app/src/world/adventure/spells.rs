@@ -385,25 +385,31 @@ impl Adventure {
     }
 
     pub(super) fn carve_cell(&mut self, world: &mut World, cell: IVec3, harvest: bool) -> bool {
-        if !super::super::orbital::habitat::ordinary_spell_allowed(world, cell) { return false; }
+        self.carve_cell_with(world, cell, harvest, true).is_some()
+    }
+
+    /// Removes terrain at `cell` with the same guards as spell carving and
+    /// returns the block it held; `burst` spawns the per-cell dust puff.
+    pub(super) fn carve_cell_with(&mut self, world: &mut World, cell: IVec3, harvest: bool, burst: bool) -> Option<B> {
+        if !super::super::orbital::habitat::ordinary_spell_allowed(world, cell) { return None; }
         let cfg = world.sample_config();
         if (cell.y <= cfg.min_world_y() + 1 || cell.y >= cfg.max_world_y())
             && !super::super::orbital::habitat::allows_cell(world, cell) {
-            return false;
+            return None;
         }
         let anchor = factory::anchor(cell, factory::step(world));
         if world.factory.nodes.contains_key(&anchor) {
-            return false;
+            return None;
         }
         let old = world.get(cell);
         if old == B::Air || old.is_liquid() {
-            return false;
+            return None;
         }
         // Tree harvesting can publish the removed cell plus a 1024-cell canopy.
         // Defer before changing terrain when that bounded result cannot fit.
         let required = if harvest && old == B::Log { 1025 } else { 1 };
         if self.dirty_voxels.len().saturating_add(required) > 2048 {
-            return false;
+            return None;
         }
         let scale = world.voxel_scale.meters();
         let center = (cell.as_vec3() + Vec3::splat(0.5)) * scale;
@@ -420,18 +426,27 @@ impl Adventure {
             let mut blocks = std::collections::HashSet::new();
             let mut chunks = std::collections::HashSet::new();
             if !super::super::expedition::blast_harvest(world, cell, &mut blocks, &mut chunks) {
-                return false;
+                return None;
             }
             for touched in blocks {
                 self.mark_voxel_dirty(world, touched);
             }
         } else if !self.replace_terrain_cell(world, cell, old, B::Air) {
-            return false;
+            return None;
         }
         // `blast_harvest` fells a tree when the removed block is a log, so the
         // caller does not run the canopy search a second time.
-        self.spawn_voxel_burst(center, col, 4, 1.8, 0.036);
-        true
+        if burst { self.spawn_voxel_burst(center, col, 4, 1.8, 0.036); }
+        Some(old)
+    }
+
+    /// Sets an air cell to `block` under the spell-edit guards (habitat rules,
+    /// dirty-voxel budget). Used by creatures that move terrain around.
+    pub(super) fn place_terrain_cell(&mut self, world: &mut World, cell: IVec3, block: B) -> bool {
+        if world.get(cell) != B::Air {
+            return false;
+        }
+        self.replace_terrain_cell(world, cell, B::Air, block)
     }
 
     pub(super) fn carve_sphere(

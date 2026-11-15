@@ -22,6 +22,10 @@ pub(super) struct BrowserState {
     /// The delete-all button waits for a second, explicit confirmation.
     confirm_delete_all: bool,
 }
+/// `Wildlands · 2 h ago`: the line the title menu shows under Continue.
+pub(super) fn summary(e: &WorldEntry) -> String {
+    format!("{} · {}", kind(e), if e.saved > 0 { age(e.saved) } else { "Needs recovery".into() })
+}
 fn age(saved: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

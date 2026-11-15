@@ -18,6 +18,7 @@ pub struct State {
     events: u32,
     placed: Vec<BlockId>,
     saw_night: bool,
+    saw_day: bool,
     /// Set after the first evaluation, which counts the starting kit silently.
     baselined: bool,
     timer: f32,
@@ -31,8 +32,6 @@ pub struct State {
 pub struct Signals<'a> {
     pub inventory: &'a SurvivalInventory,
     pub machine: &'a dyn Fn(Kind) -> bool,
-    /// `(source, sink)`: a node of `source` exists and one of `sink` holds items.
-    pub stocked: &'a dyn Fn(Kind, Kind) -> bool,
     /// Guardians defeated so far.
     pub guardians: usize,
     /// The world has a starter workshop to walk into.
@@ -52,12 +51,18 @@ pub struct Row {
     pub title: String,
     pub action: String,
     pub done: bool,
+    pub optional: bool,
+    pub recipe_item: Option<Item>,
 }
 
 /// HUD and Goals page snapshot, rebuilt at each evaluation.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct View {
     pub current: Option<Row>,
+    /// Recipe navigation is independent of a measured possession count.
+    pub recipe_item: Option<Item>,
+    /// The item a "hold N" goal asks for and how many are held.
+    pub target: Option<Ingredient>,
     pub ingredients: Vec<Ingredient>,
     pub rows: Vec<Row>,
     pub met_count: u32,
@@ -67,6 +72,27 @@ pub struct View {
 impl State {
     pub fn note(&mut self, event: Event) {
         self.events |= event.bit();
+    }
+
+    /// Record a committed production milestone before a save can capture its output.
+    pub(super) fn note_production(&mut self, event: Event) {
+        if self.events & event.bit() != 0 {
+            return;
+        }
+        self.note(event);
+        for goal in GOALS.iter().filter(|goal| goal.condition == Condition::Event(event)) {
+            if !self.is_done(&goal.id) {
+                self.complete(goal, false);
+            }
+        }
+    }
+
+    fn complete(&mut self, goal: &Goal, silent: bool) {
+        self.completed.push(goal.id.clone());
+        if !silent {
+            self.met_count = self.met_count.wrapping_add(1);
+            self.last_met = Some(goal.title.clone());
+        }
     }
 
     pub fn placed(&mut self, block: BlockId) {
@@ -88,11 +114,16 @@ impl State {
     }
 
     /// Latches `NightSurvived` on the first dawn after a night was seen.
+    /// A world that starts before dawn does not count its opening hours: the night must
+    /// begin after a day was seen.
     pub fn observe_time(&mut self, night: bool) {
         if night {
-            self.saw_night = true;
-        } else if self.saw_night {
-            self.note(Event::NightSurvived);
+            self.saw_night |= self.saw_day;
+        } else {
+            self.saw_day = true;
+            if self.saw_night {
+                self.note(Event::NightSurvived);
+            }
         }
     }
 
@@ -104,7 +135,6 @@ impl State {
             // A world with no workshop has nothing to enter, so the row is skipped.
             Condition::Event(Event::WorkshopEntered) => !s.workshop || self.events & Event::WorkshopEntered.bit() != 0,
             Condition::Event(event) => self.events & event.bit() != 0,
-            Condition::Stocked(source, sink) => (s.stocked)(source, sink),
             Condition::GuardianDefeated => s.guardians > 0,
         }
     }
@@ -116,11 +146,7 @@ impl State {
         self.baselined = true;
         for goal in goals {
             if !self.is_done(&goal.id) && self.met(goal.condition, s) {
-                self.completed.push(goal.id.clone());
-                if !silent {
-                    self.met_count = self.met_count.wrapping_add(1);
-                    self.last_met = Some(goal.title.clone());
-                }
+                self.complete(goal, silent);
             }
         }
         let view = self.build_view(goals, s.inventory);
@@ -131,7 +157,7 @@ impl State {
 
     /// First unmet goal in table order.
     pub fn current<'a>(&self, goals: &'a [Goal]) -> Option<&'a Goal> {
-        goals.iter().find(|g| !self.is_done(&g.id))
+        goals.iter().find(|g| !g.optional && !self.is_done(&g.id))
     }
 
     fn build_view(&self, goals: &[Goal], inventory: &SurvivalInventory) -> View {
@@ -140,11 +166,23 @@ impl State {
             title: g.title.clone(),
             action: g.action.clone(),
             done: self.is_done(&g.id),
+            optional: g.optional,
+            recipe_item: g.recipe_item(),
         };
         let current = self.current(goals);
         View {
             current: current.map(row),
-            ingredients: current.map_or_else(Vec::new, |g| ingredients(g.condition, inventory)),
+            recipe_item: current.and_then(Goal::recipe_item),
+            // Only a "hold N" goal has a count the inventory measures; a placed or built
+            // block held in a pocket would read as done before it is.
+            target: current.and_then(|g| match g.condition {
+                Condition::HasItem(item, needed) => Some(Ingredient { item, held: inventory.count_item(item), needed }),
+                _ => None,
+            }),
+            ingredients: current.map_or_else(Vec::new, |g| {
+                let target = g.recipe.map(|item| Condition::HasItem(item, 1)).unwrap_or(g.condition);
+                ingredients(target, inventory)
+            }),
             rows: goals.iter().map(row).collect(),
             met_count: self.met_count,
             last_met: self.last_met.clone(),
@@ -177,14 +215,9 @@ pub fn update(world: &mut World, dt: f32, night: bool) {
     goals.timer = PERIOD;
     let factory = &world.factory;
     let machine = |kind: Kind| factory.nodes.values().any(|n| n.kind == kind);
-    let stocked = |source: Kind, sink: Kind| {
-        factory.nodes.values().any(|n| n.kind == source)
-            && factory.nodes.values().any(|n| n.kind == sink && n.input.iter().any(|&held| held > 0))
-    };
     let signals = Signals {
         inventory: &world.inventory,
         machine: &machine,
-        stocked: &stocked,
         guardians: world.adventure.records.values().filter(|n| **n & 256 != 0).count(),
         workshop: super::workshop::home(&world.sample_config()).is_some(),
     };
@@ -194,15 +227,17 @@ pub fn update(world: &mut World, dt: f32, night: bool) {
 /// Latches `WorkshopEntered` once the player stands inside the starter workshop.
 /// `feet_m` is the player's feet in metres.
 pub fn visit(world: &mut World, feet_m: glam::Vec3) {
-    if world.goals.events & Event::WorkshopEntered.bit() != 0 { return; }
+    if world.goals.events & Event::WorkshopEntered.bit() != 0 || world.goals.is_done("enter_workshop") { return; }
     let Some(home) = super::workshop::home(&world.sample_config()) else { return };
-    let d = feet_m - home;
-    if d.x.abs() <= WORKSHOP_HALF_WIDTH_M && d.z.abs() <= WORKSHOP_HALF_DEPTH_M && d.y.abs() <= WORKSHOP_HALF_HEIGHT_M {
+    // The bench stands at hall coordinates (-3.5, 2.5); the hall centre is where the walls meet.
+    let d = feet_m - (home + glam::Vec3::new(HALL_CENTRE_FROM_BENCH.0, 0.0, HALL_CENTRE_FROM_BENCH.1));
+    if d.x.abs() <= WORKSHOP_HALF_WIDTH_M && d.z.abs() <= WORKSHOP_HALF_DEPTH_M && (-2.0..=WORKSHOP_HEIGHT_M).contains(&d.y) {
         world.goals.note(Event::WorkshopEntered);
     }
 }
 
-// The starter hall is 18 m by 14.4 m; the bench stands near its middle.
-const WORKSHOP_HALF_WIDTH_M: f32 = 8.0;
-const WORKSHOP_HALF_DEPTH_M: f32 = 6.0;
-const WORKSHOP_HALF_HEIGHT_M: f32 = 4.0;
+// The starter hall is 18 m by 14.4 m; the bounds stay a little inside its walls.
+const HALL_CENTRE_FROM_BENCH: (f32, f32) = (3.5, -2.5);
+const WORKSHOP_HALF_WIDTH_M: f32 = 8.5;
+const WORKSHOP_HALF_DEPTH_M: f32 = 6.5;
+const WORKSHOP_HEIGHT_M: f32 = 4.0;

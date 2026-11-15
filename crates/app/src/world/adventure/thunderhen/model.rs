@@ -16,6 +16,7 @@ const LOOKS: [Look; 3] = [
 ];
 
 pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
+    let mark = m.mark();
     let look = &LOOKS[boss_look::index(e)];
     m.set_surface_kind(58.0);
     let run = e.hen.run.as_ref();
@@ -94,4 +95,5 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
     for (x, y, z) in [(-0.8, 0.9, 0.6), (0.9, 0.6, -0.2), (0.3, 1.0, 1.1)] {
         m.cuboid(at(Vec3::new(x, y, z)), Vec3::new(0.14, 0.3, 0.14), body_q * Quat::from_rotation_z(0.4), [0.7, 0.85, 1.0], 0.6 + charge * 1.6);
     }
+    crate::world::adventure::enemy_presentation::motion::pose_body(e, m, mark);
 }

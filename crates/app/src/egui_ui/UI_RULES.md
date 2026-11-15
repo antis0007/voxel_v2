@@ -61,6 +61,9 @@ Cells hum faintly when full  flavour, italic dim, optional
 
 ## Part 2: UI elements
 
+HUD placement (zones, stacking, the live layout table) lives in
+`docs/design/HUD_LAYOUT.md`; positions come from `assets/hud_layout.ron`.
+
 ### Baseline: vanilla
 - Hotbar, health/hunger-equivalent, crosshair. Nothing else on screen by default.
 - Inventory and machine GUIs use the slot grid. Every machine GUI: input slots left, progress arrow center, output right, energy/fluid bars on the edge. Same layout language everywhere so no machine needs explaining.
@@ -77,6 +80,7 @@ Small panel, top center, shown only while the crosshair is on a block, entity, o
 - Line 1: icon + name. Last line: source (blue italic) if the game has addons or modules.
 - Middle: only live state. Progress bar, energy/fluid, current recipe, owner, growth stage.
 - `[Shift]` expands to details (stored contents, side configuration, harvest tool/tier).
+- The required tool shows at rest when the hand cannot harvest (`Requires: Stone pickaxe`, red with `No Drop` under tier). Temperature shows only when the cell is 10 °C or more off its climate ambient.
 - Hidden entirely when nothing useful to show (plain stone shows name only, or nothing if configured).
 - For this engine's physics materials: show material, phase, temperature, and volume. `Molten Iron · Liquid · 1,540°C · 340 mB`. This replaces any need for lore explaining how materials behave.
 - Fully configurable: position, scale, opacity, which lines show.
@@ -85,6 +89,7 @@ Small panel, top center, shown only while the crosshair is on a block, entity, o
 Item panel on the right side of any inventory screen.
 - Search bar bottom of panel. Prefixes: `@mod`, `#tag`, `$material`, `&fluid`, `^recipe-type`. No natural-language search.
 - `[R]` on any item: how to make it. `[U]`: what it's used in. Works from inventory, tooltips, the overlay, and the map.
+- In play, `[Alt+R]` / `[Alt+U]` look up the block under the crosshair, else the tracked goal's item, else the held item (bindings `Show Recipe` / `Show Uses`).
 - Recipe view shows the machine icon, inputs, outputs, time, energy, and chance outputs as `%`. No descriptive text. A multiblock recipe shows a rotatable 3D structure preview, not a paragraph.
 - `[+]` button transfers ingredients from inventory into the grid or machine.
 - Bookmarks panel on the left (`[A]` to bookmark).

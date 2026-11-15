@@ -60,6 +60,9 @@ pub enum Event {
     LiftBoarded,
     /// An express-lift ride docked at the crown anchorage.
     CrownReached,
+    DrillDelivered,
+    FieldSmelted,
+    FurnaceIngot,
 }
 
 impl Event {
@@ -77,8 +80,6 @@ pub enum Condition {
     /// The factory holds a node of this kind.
     Machine(Kind),
     Event(Event),
-    /// A node of the first kind exists and a node of the second kind holds items.
-    Stocked(Kind, Kind),
     /// At least one guardian has been defeated.
     GuardianDefeated,
 }
@@ -90,7 +91,6 @@ impl Condition {
             Condition::HasItem(item, count) => Some((item, count)),
             Condition::Placed(block) => Some((Item::Block(block), 1)),
             Condition::Machine(kind) => Some((Item::Block(kind.block()), 1)),
-            Condition::Stocked(source, _) => Some((Item::Block(source.block()), 1)),
             Condition::Event(_) | Condition::GuardianDefeated => None,
         }
     }
@@ -103,6 +103,16 @@ pub struct Goal {
     pub title: String,
     pub action: String,
     pub condition: Condition,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub recipe: Option<Item>,
+}
+
+impl Goal {
+    pub fn recipe_item(&self) -> Option<Item> {
+        self.recipe.or_else(|| self.condition.target().map(|(item, _)| item))
+    }
 }
 
 pub(super) const GOALS_RON: &str = include_str!("../../../../../assets/goals.ron");

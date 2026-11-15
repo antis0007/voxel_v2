@@ -189,7 +189,7 @@ impl Plan {
     /// which stamps nothing.
     pub fn model_box(&self, prop: &Prop) -> Option<(Vec3, Vec3)> {
         let layout = self.v2.as_ref()?;
-        Some(if layout.version >= super::v2::props::VERSION {
+        Some(if crate::features::legacy_preview(layout.version, super::v2::props::VERSION) {
             super::v2::props::model_box(prop.kind, prop.pos)
         } else {
             prop.model_box()

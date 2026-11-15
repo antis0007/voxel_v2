@@ -1,6 +1,6 @@
 //! Immutable Blender GLBs; authored clip sampling and bounded CPU skinning.
 //! Topology, UVs, skin weights, inverse binds and clips are decoded only once.
-use super::{Model, wand::WandView, wand_pose::{pose, RIG}};
+use super::{Model, wand::WandView, wand_pose::{pose, RIG}, fingers::Fingers};
 use crate::mesh::Vertex3;
 use glam::{Mat3, Mat4, Quat, Vec3};
 use std::{sync::LazyLock, cell::RefCell};
@@ -11,7 +11,9 @@ struct Vertex { v: Vertex3, joints: [usize;4], weights: [f32;4] }
 enum Values { Rotation(Vec<Quat>), Translation(Vec<Vec3>), Scale(Vec<Vec3>) }
 struct Channel { node: usize, times: Vec<f32>, values: Values, step: bool }
 struct Clip { name: String, duration: f32, channels: Vec<Channel> }
-pub(super) struct Asset { vertices: Vec<Vertex>, indices: Vec<usize>, nodes: Vec<Node>, inverse: [Mat4;LIMIT], clips: Vec<Clip>, socket: usize, wrist:usize, forearm:usize }
+/// One finger joint's turn from the closed bind pose to the end of the authored `open` clip.
+struct OpenJoint { node: usize, finger: usize, axis: Vec3, angle: f32 }
+pub(super) struct Asset { vertices: Vec<Vertex>, indices: Vec<usize>, nodes: Vec<Node>, inverse: [Mat4;LIMIT], clips: Vec<Clip>, socket: usize, wrist:usize, forearm:usize, open: Vec<OpenJoint>, tips: [usize;5] }
 thread_local! { static SKINNED: RefCell<Vec<Vertex3>> = const { RefCell::new(Vec::new()) }; }
 
 impl Asset {
@@ -90,15 +92,24 @@ impl Asset {
         let socket=glb.nodes().find(|n|n.name()==Some("GripSocket")).expect("grip socket").index();
         let wrist=glb.nodes().find(|n|n.name()==Some("Wrist")).expect("wrist joint").index();
         let forearm=glb.nodes().find(|n|n.name()==Some("Forearm")).expect("forearm joint").index();
-        Self {vertices,indices,nodes,inverse,clips,socket,wrist,forearm}
+        let open=clips.iter().find(|c|c.name=="open").map(|clip| clip.channels.iter().filter_map(|c| {
+            let (Values::Rotation(q),Some(n))=(&c.values,nodes.get(c.node)) else {return None};
+            let name=glb.nodes().nth(c.node)?.name()?;
+            let finger=Fingers::of_joint(name)?;
+            let (axis,angle)=(*q.last()?*n.r.inverse()).to_axis_angle();
+            (axis.is_finite() && angle.is_finite()).then_some(OpenJoint {node:c.node,finger,axis,angle})
+        }).collect()).unwrap_or_default();
+        let tip=|finger:&str| glb.nodes().find(|n|n.name()==Some(finger)).expect("fingertip joint").index();
+        let tips=[tip("Thumb2"),tip("Index2"),tip("Middle2"),tip("Ring2"),tip("Little2")];
+        Self {vertices,indices,nodes,inverse,clips,socket,wrist,forearm,open,tips}
     }
 
     fn matrices(&self,v:&WandView) -> [Mat4;LIMIT] {
-        self.relaxed(v,0.0)
+        self.relaxed(v,Fingers::CLOSED)
     }
 
-    /// Clip pose with the fingers uncurled `relax` times the authored "open" turn.
-    fn relaxed(&self,v:&WandView,relax:f32) -> [Mat4;LIMIT] {
+    /// Clip pose with each finger uncurled by its `fingers` multiple of the authored "open" turn.
+    fn relaxed(&self,v:&WandView,fingers:Fingers) -> [Mat4;LIMIT] {
         let p=pose(v);
         let (name,phase)=if v.motion.interact>0.1 || p.fingers>0.4 {("open",v.motion.interact.max(p.fingers/0.60))}
             else if v.motion.inspect>0.1 || p.fingers>0.12 {("inspect",0.5)}
@@ -125,14 +136,10 @@ impl Asset {
             let weight=(p.fingers/0.16).clamp(0.0,1.0);
             for (i,n) in self.nodes.iter().enumerate() {r[i]=n.r.slerp(r[i],weight);}
         }
-        // The bind pose is a closed grip and "open" only eases it, so an empty hand scales that turn.
-        if relax>0.0 && let Some(open)=self.clips.iter().find(|c|c.name=="open") {
-            for c in &open.channels {
-                let (Values::Rotation(q),Some(n))=(&c.values,self.nodes.get(c.node)) else {continue};
-                let Some(end)=q.last() else {continue};
-                let (axis,angle)=(*end*n.r.inverse()).to_axis_angle();
-                if axis.is_finite() {r[c.node]=Quat::from_axis_angle(axis,angle*relax)*r[c.node];}
-            }
+        // The bind pose is a closed grip and "open" only eases it, so a grip scales that turn per finger.
+        for j in &self.open {
+            let amount=fingers.0[j.finger];
+            if amount.abs()>1e-4 {r[j.node]=Quat::from_axis_angle(j.axis,j.angle*amount)*r[j.node];}
         }
         let mut world=[Mat4::IDENTITY;LIMIT];
         for i in 0..self.nodes.len() {
@@ -149,14 +156,14 @@ impl Asset {
     }
 
     fn draw(&self,m:&mut Model,v:&WandView) {
-        self.draw_placed(m,v,None,0.0);
+        self.draw_placed(m,v,None,Fingers::CLOSED);
     }
 
-    fn draw_placed(&self,m:&mut Model,v:&WandView,placement:Option<(Vec3,Quat)>,relax:f32) {
+    fn draw_placed(&self,m:&mut Model,v:&WandView,placement:Option<(Vec3,Quat)>,fingers:Fingers) {
         let mut p=pose(v);
         if let Some((grip,rotation))=placement {p.grip=grip;p.rotation=rotation;}
         if !p.grip.is_finite() || !p.rotation.is_finite() {return;}
-        let world=self.relaxed(v,relax);
+        let world=self.relaxed(v,fingers);
         // Solve in the animated wrist frame: a fixed cuff anchor separates from
         // the hand during inspection/recoil even when the rest mesh is continuous.
         let wrist=Vec3::new(0.105,-0.070,0.0);
@@ -225,8 +232,8 @@ static WAND:LazyLock<Asset>=LazyLock::new(|| {
 static ARM:LazyLock<Asset>=LazyLock::new(|| {
     Asset::load(crate::viewmodel_review::DEFAULT_HAND,"fitted Artificer hand",54.0)
 });
-pub(super) fn draw_hand(m:&mut Model,v:&WandView,placement:Option<(Vec3,Quat)>,relax:f32) {
-    ARM.draw_placed(m,v,placement,relax);
+pub(super) fn draw_hand(m:&mut Model,v:&WandView,placement:Option<(Vec3,Quat)>,fingers:Fingers) {
+    ARM.draw_placed(m,v,placement,fingers);
 }pub(super) fn draw(m:&mut Model,v:&WandView,style:crate::wand_style::WandStyle) {
     if super::wand_sprite::enabled() {super::wand_sprite::draw(m,v,style);}
     else {WAND.draw(m,v);}
@@ -268,10 +275,36 @@ mod tests {
         assert!(open.iter().zip(rest).any(|(a,b)|a.transform_point3(Vec3::X).distance(b.transform_point3(Vec3::X))>0.05));
     }
 
+    fn probe_view() -> WandView {
+        WandView { eye:Vec3::ZERO,forward:Vec3::NEG_Z,right:Vec3::X,up:Vec3::Y,
+            time:0.7,cast:0.0,spell:[0.3,0.8,0.7],boost:0.0,motion:Default::default() }
+    }
+
+    /// Fingertip positions in hand-rig metres, relative to the grip socket.
+    fn fingertips(f:Fingers) -> [Vec3;5] {
+        let w=ARM.relaxed(&probe_view(),f);
+        let origin=|n:usize| (w[n]*ARM.inverse[n].inverse()).transform_point3(Vec3::ZERO);
+        let socket=origin(ARM.socket);
+        ARM.tips.map(|n| {
+            // The distal bone continues the line from its parent joint.
+            let parent=ARM.nodes[n].parent.expect("finger joints have parents");
+            let tip=origin(n);
+            tip+(tip-origin(parent)).normalize_or_zero()*0.028-socket
+        })
+    }
+
+    /// Dev table: `cargo test -p minecraft_style_voxel_prototype fingertip_table -- --ignored --nocapture`.
+    #[test] #[ignore] fn fingertip_table() {
+        for open in [-0.5,0.0,0.5,1.0,2.0,3.0,4.0] {
+            let t=fingertips(Fingers::uniform(open)).map(|t|(t.length()*1000.0).round());
+            eprintln!("open {open:>4}: tip reach from grip socket (mm) thumb/index/middle/ring/little = {t:?}");
+        }
+    }
+
     #[test] fn viewmodel_item_stays_fixed_in_the_hand() {
         // The held item sits on the placement; the hand's grip socket must not drift from it
         // while the hand's own clips run.
-        let socket=|v:&WandView| { let w=ARM.relaxed(v,0.0); (w[ARM.socket]*ARM.inverse[ARM.socket].inverse()).transform_point3(Vec3::ZERO) };
+        let socket=|v:&WandView| { let w=ARM.relaxed(v,Fingers::CLOSED); (w[ARM.socket]*ARM.inverse[ARM.socket].inverse()).transform_point3(Vec3::ZERO) };
         let mut v=WandView { eye:Vec3::ZERO,forward:Vec3::NEG_Z,right:Vec3::X,up:Vec3::Y,
             time:0.7,cast:0.0,spell:[0.3,0.8,0.7],boost:0.0,motion:Default::default() };
         let rest=socket(&v);

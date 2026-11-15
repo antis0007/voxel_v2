@@ -19,8 +19,16 @@
 // hears:      true - sense range scales with player speed; creeping slips it
 // min_cover_m: metres of rock overhead needed where it rises (0 = anywhere); keeps
 //             giants out of shallow ground and starter terrain
-// tell_s:     seconds a lunge shows itself (dust at the player's feet, a groan)
+// tell_s:     seconds a lunge shows itself (dust at the player's feet, a groan);
+//             residents use longer tells so big bites are always readable
 //             before the head can hurt (default 1)
+// carve:      tunnel girth as a multiple of body radius (default 0 = none). Near
+//             the player a carving body removes real ground behind its head,
+//             sprays the spoil and blows a crater when it breaches. Skipped when
+//             the tunnel would be narrower than a voxel.
+// motion Dig - stays inside its host soils just under the surface (a mole's
+//             ridge of kicked-up earth) and pops out to bite.
+// ornament Claws - spade forepaws, hind feet and a snout (diggers).
 // Diggers (Burrow, Breach) never hunt a player standing under open sky unless
 // wounded or touched; a lunge always shows its tell first.
 [
@@ -167,6 +175,7 @@
         tint_jitter: 0.06,
         ornament: Spines,
         trail: Grit,
+        carve: 1.15,
     ),
     (
         kind: 86,
@@ -217,6 +226,60 @@
         tint_jitter: 0.06,
         ornament: Plates,
         trail: Grit,
+        carve: 1.1,
+    ),
+    // Diggers: mole-like bodies that stay just under the turf, plough a ridge
+    // of kicked-up earth and pop out to bite. Names pending owner approval.
+    (
+        kind: 92,
+        motion: Dig,
+        hosts: [Grass, Dirt, Clay, Mud, SnowGrass],
+        weight: 0.8,
+        segments: (3, 4),
+        radius_m: (0.22, 0.30),
+        taper: 0.75,
+        speed: 3.0,
+        lunge: 2.6,
+        weave_m: 0.10,
+        weave_hz: 1.4,
+        turn: 2.6,
+        bite: 7.0,
+        rumble: 0.008,
+        head: (0.30, 0.24, 0.20),
+        body: (0.27, 0.22, 0.19),
+        belly: (0.38, 0.31, 0.26),
+        glow: (0.86, 0.60, 0.58),
+        glow_strength: 0.0,
+        tint_jitter: 0.10,
+        ornament: Claws,
+        trail: Grit,
+        tell_s: 0.8,
+        carve: 1.1,
+    ),
+    (
+        kind: 93,
+        motion: Dig,
+        hosts: [Mud, Clay, FungalSoil, GroveMoss],
+        weight: 0.7,
+        segments: (4, 6),
+        radius_m: (0.32, 0.42),
+        taper: 0.65,
+        speed: 2.4,
+        lunge: 2.4,
+        weave_m: 0.25,
+        weave_hz: 0.9,
+        turn: 2.0,
+        bite: 11.0,
+        rumble: 0.02,
+        head: (0.24, 0.22, 0.18),
+        body: (0.22, 0.20, 0.16),
+        belly: (0.36, 0.33, 0.24),
+        glow: (0.66, 0.52, 0.44),
+        glow_strength: 0.0,
+        tint_jitter: 0.08,
+        ornament: Claws,
+        trail: Grit,
+        tell_s: 1.0,
     ),
     // Drowned Borough resident hunter (name pending owner approval).
     (
@@ -242,6 +305,7 @@
         tint_jitter: 0.04,
         ornament: Spines,
         trail: Bubbles,
+        tell_s: 1.2,
         district: Some(2),
         patience_s: 14.0,
         rest_s: 25.0,
@@ -271,6 +335,7 @@
         tint_jitter: 0.05,
         ornament: Mandibles,
         trail: Grit,
+        tell_s: 1.1,
         district: Some(0),
         patience_s: 10.0,
         rest_s: 20.0,
@@ -300,6 +365,7 @@
         tint_jitter: 0.05,
         ornament: Crystals,
         trail: Motes,
+        tell_s: 1.2,
         district: Some(1),
         patience_s: 9.0,
         rest_s: 22.0,
@@ -329,6 +395,7 @@
         tint_jitter: 0.05,
         ornament: Frills,
         trail: Bubbles,
+        tell_s: 1.5,
         district: Some(7),
         patience_s: 18.0,
         rest_s: 30.0,

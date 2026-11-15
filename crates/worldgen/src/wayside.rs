@@ -38,7 +38,7 @@ const WAYMARK_MAX_M: f32 = 170.0;
 const SETTLEMENT_CLEAR_M: f32 = 80.0;
 
 pub(crate) fn enabled(cfg: &WorldSampleConfig) -> bool {
-    cfg.world_type == WorldType::Planet && cfg.generator_version >= WAYSIDE_GENERATOR
+    cfg.world_type == WorldType::Planet && crate::features::legacy_preview(cfg.generator_version, WAYSIDE_GENERATOR)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -971,6 +971,8 @@ struct LightingUniform {
     /// `SkyArt::lighting_words`: solar disc, sky grade and cloud art controls.
     sky_art: [[f32; 4]; 2],
     torch_group_bounds: [[f32; 4]; 16],
+    /// `LightingState::realm`: sunless-realm fill, air, glow pools and shaft.
+    realm: [[f32; 4]; 12],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1226,6 +1228,7 @@ fn lighting_uniform_from_state(
         biome_ambience: state.biome_ambience,
         mana_ambience: state.mana_ambience,
         location_mood: state.location_mood,
+        realm: state.realm,
         magic: crate::egui_ui::magic_style::world_uniform(),
         sky_art: {
             let mut words = atmosphere_params::SkyArt::active().lighting_words();
@@ -1342,6 +1345,9 @@ pub struct Gpu {
     camera_roll: f32,
     camera_up: Vec3,
     finite_world: bool,
+    /// No far-field horizon mesh: the Manyfold and every pocket realm, whose
+    /// columns are not a heightfield (closed caverns, hanging islands).
+    no_horizon: bool,
     /// The Nether: the sky draws the realm dome (`cam.planet[0].w = -1`).
     realm_sky: bool,
     /// Manyfold shell axis, metres. The interior fill aims here.
@@ -3213,6 +3219,7 @@ impl GpuPendingInit {
             camera_roll: 0.0,
             camera_up: Vec3::Y,
             finite_world: false,
+            no_horizon: false,
             realm_sky: false,
             manyfold_axis_y: 0.0,
                     zone_grade: crate::world::zones::NO_GRADE,
@@ -4002,6 +4009,7 @@ impl Gpu {
         let cfg = world.sample_config();
         self.terrain_arrival = coverage::TerrainArrival::default();
         self.finite_world = cfg.world_type == crate::world::WorldType::Manyfold;
+        self.no_horizon = self.finite_world || cfg.world_type.realm().is_some();
         self.realm_sky = cfg.world_type == crate::world::WorldType::Nether;
         self.manyfold_axis_y = if self.finite_world {
             engine_worldgen::manyfold::axis_y(cfg.generator_version)
@@ -4013,7 +4021,7 @@ impl Gpu {
         }) {
             self.outgoing_planet_mesh = None;
         }
-        if self.finite_world {
+        if self.no_horizon {
             self.planet_mesh = None;
             if let Some(job) = self.planet_build.take() { job.cancel.store(true, Ordering::Relaxed); }
             self.horizon.clear_mesh();
@@ -4181,7 +4189,7 @@ impl Gpu {
         // Minimum-spec mode deliberately disables horizon generation. Waiting
         // for its mesh there leaves an otherwise loaded world behind the loader.
         let resident = usize::from(self.globe_driver.ground_ready());
-        self.finite_world || crate::low_spec::active() || self.planet_mesh.is_some() || render_isolation().skip_horizon_work
+        self.no_horizon || crate::low_spec::active() || self.planet_mesh.is_some() || render_isolation().skip_horizon_work
             || globe::band::horizon_ready(globe::active(), self.tier, self.horizon.mesh.is_some(), resident)
     }
 
@@ -4193,7 +4201,7 @@ impl Gpu {
     /// True once the current world has a far-field mesh. A later rebuild
     /// (edits, walking) must not show the terrain loader over gameplay.
     pub fn horizon_loaded_this_world(&self) -> bool {
-        self.finite_world || self.horizon.loaded_this_world() || self.planet_mesh.is_some() || render_isolation().skip_horizon_work
+        self.no_horizon || self.horizon.loaded_this_world() || self.planet_mesh.is_some() || render_isolation().skip_horizon_work
     }
 
     pub fn upload_camera(

@@ -209,7 +209,7 @@ impl Default for BenchmarkConfig {
             water_review: false,
             sandbox_review: false,
             enabled: false,
-            world_type: WorldType::Hills,
+            world_type: WorldType::Planet,
             voxel_scale: VoxelScalePreset::OneMeter,
             seed: 0xA341_316C,
             weather_preset: None,
@@ -291,7 +291,9 @@ static BENCHMARK_GENERATOR_VERSION:std::sync::atomic::AtomicU32=std::sync::atomi
 fn new_planet_generator(custom: bool) -> u32 {
     static TERRAIN_OVERRIDE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
     if let Some(version) = *TERRAIN_OVERRIDE.get_or_init(|| {
-        if std::env::args().any(|arg| arg == "--branching-watersheds") {
+        if std::env::args().any(|arg| arg == "--dungeon-mechanisms") {
+            Some(engine_voxel::DUNGEON_MECHANISMS_GENERATOR)
+        } else if std::env::args().any(|arg| arg == "--branching-watersheds") {
             Some(engine_worldgen::planetary::BRANCHING_WATERSHEDS_GENERATOR)
         } else if std::env::args().any(|arg| arg == "--resolved-history") {
             Some(engine_worldgen::planetary::RESOLVED_HISTORY_GENERATOR)
@@ -595,10 +597,13 @@ fn parse_benchmark_config() -> BenchmarkConfig {
                 "hall" => WorldType::Hall,
                 "lightless" => WorldType::Realm(engine_voxel::RealmKind::Lightless),
                 "highfold" => WorldType::Realm(engine_voxel::RealmKind::Highfold),
+                "gloaming" => WorldType::Realm(engine_voxel::RealmKind::Gloaming),
                 "gilded" => WorldType::Realm(engine_voxel::RealmKind::Gilded),
+                // Explicit legacy selections let reviews reproduce old terrain.
+                "hills" => WorldType::Hills,
                 "ridged" => WorldType::Ridged,
                 "nether" => WorldType::Nether,
-                _ => WorldType::Hills,
+                _ => WorldType::Planet,
             };
             continue;
         }
@@ -1127,9 +1132,9 @@ const FOXFIRE_LIGHT_RADIUS: f32 = 7.0;
 const FOXFIRE_LIGHT_COLOR: [f32; 3] = [0.30, 0.95, 0.78];
 const FOXFIRE_LIGHT_STRENGTH: f32 = 1.35;
 /// Sunstone: warm white, wide, grouped per clump; hung high in cavern roofs.
-const SUNSTONE_LIGHT_RADIUS: f32 = 26.0;
+const SUNSTONE_LIGHT_RADIUS: f32 = 32.0;
 const SUNSTONE_LIGHT_COLOR: [f32; 3] = [1.00, 0.86, 0.62];
-const SUNSTONE_LIGHT_STRENGTH: f32 = 3.2;
+const SUNSTONE_LIGHT_STRENGTH: f32 = 4.6;
 /// Gilded gate: a gold glow around the heart stone.
 const GILDED_GATE_LIGHT_RADIUS: f32 = 10.0;
 const GILDED_GATE_LIGHT_COLOR: [f32; 3] = [1.00, 0.74, 0.36];
@@ -1923,8 +1928,12 @@ fn main() -> Result<()> {
     let benchmark_config = parse_benchmark_config();
     if let Some(value)=std::env::args().find_map(|arg|arg.strip_prefix("--benchmark-generator-version=").map(str::to_owned)) {
         let version=value.parse::<u32>()?;
-        // The dormant planet solve is reviewable before it becomes the default.
-        let reviewable = (1..=world::CURRENT_GENERATOR_VERSION).contains(&version) || version == engine_voxel::CUSTOM_PLANET_VERSION || version == engine_voxel::CUSTOM_PLANET_GENERATOR_VERSION || version == engine_worldgen::geo::GEO_GENERATOR || version == engine_voxel::PLANET_GENERATOR_VERSION || version == engine_worldgen::ground_exposure::OUTCROP_GENERATOR || version == engine_worldgen::basin::VERSION || version == engine_worldgen::TREE_FOLIAGE_VERSION || version == engine_worldgen::surface::MEADOW_GROUND_VERSION || version == engine_worldgen::vistas::FORM_VERSION || version == engine_worldgen::planet_climate::VERSION || version == engine_worldgen::planet_ocean::VERSION;
+        // Freeze the legacy general range: a new default must not admit
+        // every dormant or unknown number below it. Keep the former Planet
+        // default explicit because it was already reviewable for every kind.
+        let reviewable = (1..=engine_voxel::WORKSHOP_SUPPLY_GENERATOR).contains(&version)
+            || version == engine_voxel::SHARED_SURFACE_GENERATOR
+            || version == engine_voxel::CLEAN_RIVERBED_GENERATOR || version == engine_voxel::CUSTOM_PLANET_VERSION || version == engine_voxel::CUSTOM_PLANET_GENERATOR_VERSION || version == engine_worldgen::geo::GEO_GENERATOR || version == engine_voxel::PLANET_GENERATOR_VERSION || version == engine_worldgen::ground_exposure::OUTCROP_GENERATOR || version == engine_worldgen::basin::VERSION || version == engine_worldgen::TREE_FOLIAGE_VERSION || version == engine_worldgen::surface::MEADOW_GROUND_VERSION || version == engine_worldgen::vistas::FORM_VERSION || version == engine_worldgen::planet_climate::VERSION || version == engine_worldgen::planet_ocean::VERSION;
         // Compare the dormant regional pass with its immediate baseline using
         // one executable, without changing the default or loading real saves.
         let reviewable = reviewable || (engine_worldgen::geo::corridor::VERSION
@@ -1934,6 +1943,7 @@ fn main() -> Result<()> {
             || matches!(benchmark_config.world_type, WorldType::Hills | WorldType::Ridged | WorldType::Planet)
                 && version == engine_worldgen::WOODLAND_HABITAT_PREVIEW
             || version == engine_worldgen::dungeon::v2::TREASURE_VERSION
+            || version == engine_voxel::DUNGEON_MECHANISMS_GENERATOR
             || version == engine_worldgen::undercrown::v2::props::VERSION
             || version == engine_worldgen::undercrown::v2::life::VERSION
             || matches!(benchmark_config.world_type, WorldType::Hills | WorldType::Ridged)
@@ -2199,6 +2209,9 @@ fn main() -> Result<()> {
     let mut coop = multiplayer::coop::Driver::default();
     #[cfg(feature = "multiplayer")]
     let mut coop_review = multiplayer::coop::review();
+    // Set by Host Latest World: host the world the library is opening once it spawns.
+    #[cfg(feature = "multiplayer")]
+    let mut host_after_load = false;
     #[cfg(feature = "multiplayer-sdr")]
     let mut steam_invites = engine_net::steam::invites::Incoming::start().ok();
     #[cfg(feature = "multiplayer-sdr")]
@@ -2652,6 +2665,28 @@ fn main() -> Result<()> {
                             }
                             Some(BindAction::Minimap) if fresh_press => egui_ui::map::toggle_minimap(),
                             Some(BindAction::GoalTrack) if fresh_press => egui_ui::goals_hud::toggle(),
+                            Some(bound @ (BindAction::RecipeLookup | BindAction::UsesLookup))
+                                if fresh_press && grabbed && !creative.any_ui_open() => {
+                                let item = world.as_ref().and_then(|w| {
+                                    let target = egui_ui.as_ref().and_then(|ui| ui.target_block)
+                                        .filter(|block| *block != BlockId::Air)
+                                        .and_then(world::inventory::Item::canonical_block)
+                                        .map(world::inventory::Item::Block);
+                                    let held = w.inventory.hotbar[creative.selected_slot].map(|s| s.item);
+                                    if bound == BindAction::RecipeLookup {
+                                        let goal = w.goals.current(&world::goals::GOALS)
+                                            .and_then(|goal| goal.condition.target()).map(|(item, _)| item);
+                                        goal.or(target).or(held)
+                                    } else {
+                                        target.or(held)
+                                    }
+                                });
+                                if let (Some(item), Some(ui)) = (item, egui_ui.as_ref()) {
+                                    egui_ui::show_recipe(&ui.ctx, item, bound == BindAction::UsesLookup);
+                                    creative.close_panels(); creative.show_palette = true; input.clear(); player.jump_tap_timer = 0.0;
+                                    sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
+                                }
+                            }
                             Some(BindAction::Records) if fresh_press && !creative.show_palette => {
                                 let open = !creative.show_records; creative.close_panels(); creative.show_records = open; input.clear();
                                 sync_creative_ui_cursor(window, &mut grabbed, focused, &mode, &creative);
@@ -2833,12 +2868,27 @@ fn main() -> Result<()> {
                         let action = match key.physical_key {
                             PhysicalKey::Code(KeyCode::KeyZ) if input.ctrl_down && !input.shift_down() => Some(BindAction::Undo),
                             PhysicalKey::Code(KeyCode::KeyZ | KeyCode::KeyY) if input.ctrl_down => Some(BindAction::Redo),
+                            // JEI's R and U, in play: Alt keeps them clear of Cast and the Wand Atelier.
+                            PhysicalKey::Code(KeyCode::KeyR) if input.alt_down => Some(BindAction::RecipeLookup),
+                            PhysicalKey::Code(KeyCode::KeyU) if input.alt_down => Some(BindAction::UsesLookup),
                             PhysicalKey::Code(code) => keybinds::action_for_key(code),
                             PhysicalKey::Unidentified(_) => None,
                         };
+                        let lookup_chord = input.alt_down
+                            && matches!(key.physical_key, PhysicalKey::Code(KeyCode::KeyR | KeyCode::KeyU));
+                        // Alt+F6 opens the HUD editor: the mouse is freed and the HUD keeps
+                        // drawing, so elements can be dragged in place (hud_layout::editor).
+                        if fresh_press && input.alt_down && matches!(mode, AppMode::Playing)
+                            && key.physical_key == PhysicalKey::Code(KeyCode::F6) && !creative.any_ui_open() {
+                            let on = !egui_ui::hud_layout::editing();
+                            egui_ui::hud_layout::set_editing(on);
+                            input.clear();
+                            if on { release_mouse(window, &mut grabbed); } else { capture_mouse(window, &mut grabbed, false, focused); }
+                            return;
+                        }
                         // Releases always reach gameplay; presses belong to the active surface.
                         if let PhysicalKey::Code(code) = key.physical_key
-                            && (!pressed || (matches!(mode, AppMode::Playing) && grabbed && !egui_consumed)) {
+                            && (!pressed || (matches!(mode, AppMode::Playing) && grabbed && !egui_consumed && !lookup_chord)) {
                                 input.keyboard(code, pressed);
                             }
                         let text_editing = egui_ui.as_ref().is_some_and(|ui| ui.ctx.egui_wants_keyboard_input());
@@ -3450,6 +3500,25 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 other => coop_review = other,
+                            }
+                            // Host Latest World: open the session once the loaded world has spawned;
+                            // drop the request if the load failed or never started.
+                            #[cfg(feature = "multiplayer")]
+                            if host_after_load {
+                                match world.as_ref() {
+                                    None if !library.loading() && pending_loaded.is_none() => host_after_load = false,
+                                    Some(_) if multiplayer.is_some() => host_after_load = false,
+                                    Some(w) if !spawning && !coop.busy() => {
+                                        coop.open(w, String::new(), false, w.rules.mode.creative_tools());
+                                        egui_ui.show_friends();
+                                        if matches!(mode, AppMode::Playing) {
+                                            mode = AppMode::Paused;
+                                            release_mouse(window, &mut grabbed);
+                                        }
+                                        host_after_load = false;
+                                    }
+                                    _ => {}
+                                }
                             }
                             // `--multiplayer-capture-delay=S` waits so chat and other players can appear first.
                             #[cfg(feature = "multiplayer")]
@@ -4334,7 +4403,12 @@ fn main() -> Result<()> {
                                     egui_ui.target_machine = None;
                                     egui_ui.target_environment = None;
                                     egui_ui.target_cell_temp_c = None;
+                                    egui_ui.target_harvest = None;
                                 }
+                            }
+                            // The HUD editor closes when play pauses or the mouse is captured again.
+                            if egui_ui::hud_layout::editing() && (grabbed || !matches!(mode, AppMode::Playing)) {
+                                egui_ui::hud_layout::set_editing(false);
                             }
                             let mut action = egui_ui.build_ui(
                                 if spawning { UiMode::Loading } else { ui_mode(&mode) },
@@ -4583,6 +4657,14 @@ fn main() -> Result<()> {
                                 }), &mut player, &mut day_night)
                             } else { action };
                             if let Some(path) = dev_panel::engine::take_capture() { gpu.request_capture(path); }
+                            // A realm layout edit in the dev tools: rebuild every resident chunk from worldgen.
+                            if dev_panel::gilded_layout::take_regen() && let Some(w) = world.as_mut() {
+                                let center = chunk_coord_from_world_block(player.pos.floor().as_ivec3());
+                                let snapshot = w.snapshot_near(center, render_distance_settings().view_distance_chunks);
+                                chunk_cache.reset_with_snapshot(center, &snapshot);
+                                chunk_streamer.reset();
+                                chunk_streamer.queue_needed_visible(&chunk_cache, center);
+                            }
                             if let UiAction::StartWorld { world_type: WorldType::Planet, voxel_scale, seed, planet, .. } = &action {
                                 let generator_version = new_planet_generator(planet.is_some());
                                 let cfg = engine_voxel::WorldSampleConfig {
@@ -4790,7 +4872,16 @@ fn main() -> Result<()> {
                                     #[cfg(not(feature = "multiplayer"))]
                                     let _ = request;
                                 }
-                                UiAction::OpenWorld(id)=>library.open(id),
+                                UiAction::OpenWorld(id)=>{
+                                    #[cfg(feature = "multiplayer")]
+                                    { host_after_load = false; }
+                                    library.open(id);
+                                }
+                                UiAction::HostWorld(id)=>{
+                                    #[cfg(feature = "multiplayer")]
+                                    { host_after_load = world.is_none() && !library.loading(); }
+                                    library.open(id);
+                                }
                                 UiAction::Respawn=>if let Some(w)=world.as_mut(){world::adventure::death::respawn(w,&mut player);},
                                 UiAction::SetRules(rules)=>if let Some(w)=world.as_mut(){w.set_rules(rules);},
                                 UiAction::SetDifficulty(level)=>{
@@ -4819,7 +4910,10 @@ fn main() -> Result<()> {
                                         &mut break_repeat_timer,
                                         &mut pending_tool_action,
                                     );
-                                    selected_world = world_type;
+                                    selected_world = match world_type {
+                                        WorldType::Hills | WorldType::Ridged => WorldType::Planet,
+                                        kind => kind,
+                                    };
                                     selected_voxel_scale = voxel_scale;
                                     selected_seed = seed;
                                     creative.cancel_edits();
@@ -5373,6 +5467,24 @@ fn main() -> Result<()> {
                                     let t = world.sandbox.cell_for(cell, block).temperature;
                                     t.is_finite().then_some(t)
                                 });
+                                egui_ui.target_ambient_c = inspected.map(|(cell, block)| world.sandbox.climate.ambient_for(cell, block));
+                                // Jade's harvest line: survival only, solid cells with a hardness.
+                                egui_ui.target_harvest = inspected
+                                    .filter(|_| world.rules.mode == world::rules::GameMode::Survival)
+                                    .filter(|(_, block)| {
+                                        let physics = &block.material().physics;
+                                        physics.matter_state == material::MatterState::Solid && physics.hardness > 0.0
+                                    })
+                                    .map(|(_, block)| {
+                                        let held = world.inventory.hotbar[creative.selected_slot].map(|s| s.item);
+                                        let broken = world::mining::survival_break(block, world::mining::tool_for_world(world, held));
+                                        egui_ui::look_at::Harvest {
+                                            tool: world::recipe_index::harvest_tool(block),
+                                            tier: broken.required_tier,
+                                            seconds: broken.seconds,
+                                            drops: broken.drops,
+                                        }
+                                    });
                                 egui_ui.target_volume_ul = inspected.map(|(cell, block)| {
                                     if block == BlockId::Water {
                                         world.water_microlitres(cell)
@@ -6286,7 +6398,7 @@ fn main() -> Result<()> {
                                     day_night.lighting_under(planet::solar_time(planet_eye, planet_tick), local_clouds)
                                 } else { day_night.lighting_under(day_night.time_of_day(), local_clouds) };
                                 if world.sample_config().is_planet() { planet::lighting(&mut scene_lighting, planet_eye, planet_tick); }
-                                if world.world_type == WorldType::Nether { world::portals::realm::lighting(&mut scene_lighting, world.sample_config().is_hell()); }
+                                if world.world_type == WorldType::Nether { world::portals::realm::lighting(&mut scene_lighting, world.sample_config().is_hell()); world::portals::realm::hell_weather(&mut scene_lighting, world.sample_config(), world.adventure.time, eye_m); }
                                 if !world.sample_config().is_hell() && !scene_lighting.hell
                                     && let Some(reading) = environment {
                                     world::sky_air::apply_region(&mut scene_lighting, reading.regional_air[0], reading.regional_air[1]);
@@ -6297,7 +6409,7 @@ fn main() -> Result<()> {
                                 let underground = eye_m.y < ground_m - 3.0;
                                 scene_lighting.cave_darkness = ((ground_m-eye_m.y-3.0)/9.0).clamp(0.0,1.0) * (1.0-cosmos_smooth);
                                 // The Lightless is closed rock: never any sky, wherever the column top is.
-                                if let Some(kind) = world.world_type.realm() { world::portals::realm::realm_lighting(kind, &mut scene_lighting); scene_lighting.cave_darkness = 1.0; }
+                                if let Some(kind) = world.world_type.realm() { world::portals::realm::realm_lighting(kind, eye_m, world.seed, &mut scene_lighting); if !kind.has_sky() { scene_lighting.cave_darkness = 1.0; } }
                                 location_ambience.apply(world, &mut scene_lighting, player.underwater,
                                     local_clouds.cumulonimbus, day_night.sky_event(), gameplay_dt);
                                 if !underground && world.adventure.hell_ashfall_at(world, player.pos * world.voxel_scale.meters()) {
@@ -6537,7 +6649,7 @@ fn main() -> Result<()> {
                                     day_night.lighting_under(planet::solar_time(planet_eye, planet_tick), local_clouds)
                                 } else { day_night.lighting_under(day_night.time_of_day(), local_clouds) };
                                 if world.sample_config().is_planet() { planet::lighting(&mut scene_lighting, planet_eye, planet_tick); }
-                                if world.world_type == WorldType::Nether { world::portals::realm::lighting(&mut scene_lighting, world.sample_config().is_hell()); }
+                                if world.world_type == WorldType::Nether { world::portals::realm::lighting(&mut scene_lighting, world.sample_config().is_hell()); world::portals::realm::hell_weather(&mut scene_lighting, world.sample_config(), world.adventure.time, eye_m); }
                                 world::sky_air::apply_region_at(&mut scene_lighting, &world.sample_config(), eye_m);
                                 scene_lighting.mood[0] = if cosmos_smooth > 0.002 { cosmos_smooth } else { 0.0 };
                                 // Living air and the sky-event grade only exist above ground.
@@ -6548,7 +6660,7 @@ fn main() -> Result<()> {
                                 let underground = eye_m.y < ground_m - 3.0;
                                 scene_lighting.cave_darkness = ((ground_m-eye_m.y-3.0)/9.0).clamp(0.0,1.0) * (1.0-cosmos_smooth);
                                 // The Lightless is closed rock: never any sky, wherever the column top is.
-                                if let Some(kind) = world.world_type.realm() { world::portals::realm::realm_lighting(kind, &mut scene_lighting); scene_lighting.cave_darkness = 1.0; }
+                                if let Some(kind) = world.world_type.realm() { world::portals::realm::realm_lighting(kind, eye_m, world.seed, &mut scene_lighting); if !kind.has_sky() { scene_lighting.cave_darkness = 1.0; } }
                                 world::ambience::refresh(world, &player);
                                 location_ambience.apply(world, &mut scene_lighting, player.underwater,
                                     local_clouds.cumulonimbus, day_night.sky_event(), gameplay_dt);
@@ -7243,7 +7355,6 @@ fn main() -> Result<()> {
                                     WorldType::Nether => "The Nether",
                                     WorldType::Hall => "Hall of the Crimson King",
                                     WorldType::Manyfold => "Manyfold",
-                                    WorldType::Realm(kind) => kind.title(),
                                     WorldType::Realm(kind) => kind.title(),
                                     _ => "Returned",
                                 });

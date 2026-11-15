@@ -7,6 +7,9 @@ const format = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 });
 const num = value => format.format(value);
 const stat = (label, value) => el("div", { className: "craft-stat" }, el("span", {}, label), el("strong", {}, String(value)));
 const pict = (ui, code) => ui.icon(code) ?? catalogIcon("Items");
+const supplyHeading = "Items to source separately";
+const supplyCoverage = "Recipe plan only. Supplies listed here are assumed available, not verified in game. Gathering, loot, trade and progression are outside this plan.";
+const statusLabel = status => status === "No Recipe" ? "No indexed recipe" : status === "Supply" ? "Source separately" : status;
 
 function stack(ui, code, count) {
   if (!code) return el("span", { className: "item-slot empty-slot", "aria-label": "Empty" }, "·");
@@ -131,10 +134,10 @@ export function recipePlan(index, code, state, ui) {
     if (node.recipe) {
       row.append(el("span", { className: "craft-node-station" }, num(node.batches) + "× " + node.recipe.category),
         button("Open", () => ui.recipe(node.recipe)), button("Edit", () => ui.edit(node.recipe)));
-    } else row.append(el("span", { className: "craft-node-state", "data-status": node.status }, node.status));
+    } else row.append(el("span", { className: "craft-node-state", "data-status": node.status }, statusLabel(node.status)));
     if (node.routes.length && !["Cycle","Limit","Surplus"].includes(node.status)) {
       const choice = el("select", { "aria-label": "Recipe for " + ui.name(node.item) }, node.routes.map(route =>
-        el("option", { value: recipeId(route) }, route.label)), el("option", { value: "supply" }, "External Supply"));
+        el("option", { value: recipeId(route) }, route.label)), el("option", { value: "supply" }, "Source separately"));
       choice.value = node.recipe ? recipeId(node.recipe) : "supply";
       choice.onchange = () => { state.choices.set(node.item, choice.value); render(node.item); };
       row.append(choice);
@@ -173,7 +176,8 @@ export function recipePlan(index, code, state, ui) {
     }
     current = planCraft(index, code, state.count, state.choices);
     content.replaceChildren(el("div", { className: "craft-tree" }, branch(current.root, 0)),
-      list("Required Supply", current.supply), current.loops.size ? list("Circular Requirements", current.loops) : "",
+      list(supplyHeading, current.supply), el("p", { className: "muted" }, supplyCoverage),
+      current.loops.size ? list("Circular Requirements", current.loops) : "",
       current.limited ? el("p", { className: "error" }, "Plan Limit · Partial Totals") : "");
     if (focus) Array.from(content.querySelectorAll("select")).find(control =>
       control.getAttribute("aria-label") === "Recipe for " + ui.name(focus))?.focus({ preventScroll: true });
@@ -186,12 +190,12 @@ export function recipePlan(index, code, state, ui) {
     function walk(node, depth) {
       if (lines.length >= 170) return;
       lines.push("  ".repeat(depth) + "- " + num(node.need) + " × " + ui.name(node.item) +
-        (node.recipe ? " · " + node.recipe.label + " · " + node.recipe.category + " · " + node.recipe.path : " · " + node.status));
+        (node.recipe ? " · " + node.recipe.label + " · " + node.recipe.category + " · " + node.recipe.path : " · " + statusLabel(node.status)));
       node.children.forEach(child => walk(child, depth + 1));
     }
     walk(current.root, 0);
     if (lines.length >= 170 || current.limited) lines.push("Partial branch listing.");
-    lines.push("Required supply:", ...[...current.supply].map(([item, amount]) => "- " + num(amount) + " × " + ui.name(item)));
+    lines.push(supplyHeading + ":", ...[...current.supply].map(([item, amount]) => "- " + num(amount) + " × " + ui.name(item)), supplyCoverage);
     return lines.join("\n");
   }
   function delegate() {

@@ -41,7 +41,7 @@ export function enginePanel(api, note) {
   const undo=button("Undo",act(async()=>{await request({op:"undo",revision});await refresh();}));
   const reset=button("Reset previews",act(async()=>{await request({op:"reset",revision});await refresh();}));
   const captureName=el("input",{placeholder:"Capture name","aria-label":"Capture name"});
-  const sessionWorld=el("select",{"aria-label":"Playtest world"},...["hills","superflat","planet","nether","manyfold"].map(value=>el("option",{value},value)));
+  const sessionWorld=el("select",{"aria-label":"Playtest world"},...["hills","superflat","planet","nether","manyfold","gilded"].map(value=>el("option",{value},value)));
   const sessionSeed=el("input",{type:"number",min:0,max:4294967295,value:74,"aria-label":"World seed"});
   const sessionScale=el("select",{"aria-label":"Voxel size"},...[1,0.5,0.25].map(value=>el("option",{value},value+" m")));
   const scene=el("select",{"aria-label":"Review scene"},el("option",{value:"exploration"},"Exploration"),el("option",{value:"factory"},"Factory models"));

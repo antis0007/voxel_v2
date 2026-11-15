@@ -4,6 +4,7 @@ use super::mechanisms::{CONTROL, LOADER, TRACTION};
 use super::*;
 use boss_look::{pose, tint};
 pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
+    let mark = m.mark();
     let s = &e.engine;
     let p = pose(s.run.as_ref());
     let kind = s.run.as_ref().map(|r| r.kind);
@@ -258,6 +259,8 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
             0.15,
         );
     }
+    // Body only: a dropped module and the floor marks stay on the ground.
+    crate::world::adventure::enemy_presentation::motion::pose_body(e, m, mark);
     if let Some((module, at)) = s.loose {
         m.cuboid(
             at + Vec3::Y * 0.25,

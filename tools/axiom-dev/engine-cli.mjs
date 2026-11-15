@@ -15,7 +15,7 @@ const help = {commands:{
   "wait":"Wait up to 60 seconds for a loaded world using read-only observations",
   "close":"Close this panel's disposable engine world without requesting a save",
   "describe [ambience|materials|models|engine]":"Native schemas, units, bounds, source owners and reload support",
-  "inspect [player location world look tuning models]":"Only requested state; default player + location",
+  "inspect [player location world look tuning models civilization]":"Only requested state; default player + location",
   "survey [radius_m]":"Nine generated surface positions and biomes around the player",
   "tune":"Field/value JSON on stdin; atomic live changes with automatic revision preflight",
   "request":"Exact native JSON on stdin; caller supplies revisions",

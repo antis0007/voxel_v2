@@ -296,7 +296,10 @@ fn library(
             .collect()
     };
     spells.retain(|&spell| spell != adventure::spells::STORM_SURGE || view.spell_log.grants(spell));
-    spells.sort_unstable();
+    // Keep usable choices visible before discovered locks and unknown spells.
+    spells.sort_unstable_by_key(|&spell| (
+        !view.can_wield(spell), !view.spell_log.grants(spell), spell,
+    ));
     spells.dedup();
 
     let usable = spells.iter().filter(|&&spell| view.can_wield(spell)).count();
@@ -305,7 +308,10 @@ fn library(
     } else if channel {
         format!("{usable} available · Hold Cast to sustain a field")
     } else {
-        format!("{usable} available · Shift-click fills an empty slot")
+        let empty = (0..wands::capacity(view.wand))
+            .any(|slot| view.loadout.slot(slot) == wands::EMPTY);
+        let shortcut = if empty { "[Shift-click] Empty Slot" } else { "[Click] Replace Selected" };
+        format!("{usable} available · {shortcut}")
     };
     ui.label(egui::RichText::new(status).size(12.0)
         .color(if channel { style::MANA } else { style::MUTED }));

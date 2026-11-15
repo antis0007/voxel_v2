@@ -28,6 +28,7 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
         28 => 0.30,
         29 => 0.36,
         30 => 0.62,
+        31 => 0.38,
         _ => 0.55,
     };
     let mut seed = 0x7f4a7c15u32
@@ -105,6 +106,8 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
             29 => 62.0 * (-t * 7.0).exp() + 34.0,
             // Bleat: voiced, rising then sagging.
             30 => 290.0 + 40.0 * (std::f32::consts::PI * u).sin() - 30.0 * u,
+            // Boing: a rubbery rise with a decaying wobble, like a stretched gel snapping back.
+            31 => (140.0 + 260.0 * (1.0 - (-t * 9.0).exp())) * (1.0 + 0.09 * (t * 38.0).sin() * (-t * 6.0).exp()),
             _ => 2200.0 - 1700.0 * u,
         };
         phase += std::f32::consts::TAU * pitch / RATE as f32;
@@ -250,6 +253,12 @@ fn render(kind: usize, variant: usize) -> Vec<f32> {
                 let tremolo = 0.55 + 0.45 * (t * std::f32::consts::TAU * 13.0).sin();
                 let voice = tone * 0.45 + (phase * 3.0).sin() * 0.22 + (phase * 5.0).sin() * 0.12;
                 (voice * tremolo + soft_noise * 0.25) * (std::f32::consts::PI * u.sqrt()).sin()
+            }
+            31 => {
+                // Wet slap on contact, then the round wobbling tone with a soft octave.
+                low * 1.2 * (-t * 30.0).exp()
+                    + high * 0.10 * (-t * 55.0).exp()
+                    + (tone * 0.55 + (phase * 2.0).sin() * 0.12) * (-t * 7.0).exp()
             }
             _ => low * 0.8 + tone * 0.3,
         };

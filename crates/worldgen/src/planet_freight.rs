@@ -1,4 +1,4 @@
-use crate::{BlockId as B, ColumnSample, WorldSampleConfig, WorldType};
+use crate::{BlockId as B, ColumnSample, WorldSampleConfig};
 use glam::{IVec3, Vec3};
 use std::cell::Cell;
 
@@ -41,7 +41,7 @@ thread_local! {
 }
 
 pub fn site(cfg: &WorldSampleConfig) -> Option<Site> {
-    if !cfg.civilization_enabled() || cfg.world_type != WorldType::Planet
+    if !cfg.civilization_enabled() || !crate::features::enabled(cfg, crate::features::Feature::Freight)
         || cfg.generator_version < engine_voxel::PLANET_FREIGHT_GENERATOR
     {
         return None;
@@ -51,7 +51,11 @@ pub fn site(cfg: &WorldSampleConfig) -> Option<Site> {
     {
         return result;
     }
-    let spawn = crate::planetary::spawn_point(cfg);
+    let spawn = if crate::planetary::active(cfg) {
+        crate::planetary::spawn_point(cfg)
+    } else {
+        glam::DVec3::ZERO
+    };
     let mut best = None;
     // Search outwards when the landing is surrounded by steep or wet terrain.
     for radius in [0.0_f32, 96.0, 192.0, 288.0] {
@@ -74,9 +78,8 @@ pub fn site(cfg: &WorldSampleConfig) -> Option<Site> {
                 let (_, local) =
                     engine_core::cube_sphere::atlas::split(Vec3::new(x, 0.0, z).as_dvec3());
                 let half = engine_core::cube_sphere::atlas::HALF_M;
-                if local.x < -half + 8.0
-                    || local.x > half - 58.0
-                    || local.z.abs() > half - 15.0
+                if (crate::planetary::active(cfg)
+                    && (local.x < -half + 8.0 || local.x > half - 58.0 || local.z.abs() > half - 15.0))
                     || crate::planetary::reserves_volcanic_summit(cfg, x + 25.0, z, 38.0)
                     || crate::planetary::trail_reserves(cfg, x + 25.0, z, 38.0)
                 {
@@ -86,7 +89,7 @@ pub fn site(cfg: &WorldSampleConfig) -> Option<Site> {
                 let mut high = f32::NEG_INFINITY;
                 for sx in [-5.0, 0.0, 11.0, 16.0, 24.0, 30.0, 36.0, 43.0, 51.0, 56.0] {
                     for sz in [-12.0, -4.0, 0.0, 4.0, 12.0] {
-                        let g = crate::planetary::ground(cfg, x + sx, z + sz, cfg.voxel_meters());
+                        let g = crate::geo::ground(cfg, x + sx, z + sz, cfg.voxel_meters());
                         low = low.min(g.top_m);
                         high = high.max(if g.water_m.is_some() {
                             f32::INFINITY

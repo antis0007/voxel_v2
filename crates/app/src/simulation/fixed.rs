@@ -39,6 +39,10 @@ fn movement_sounds(world: &mut World, player: &mut Player) {
         // Wall run reuses the gritty slide bed, pitched up into a skid.
         (mv::EVENT_WALLRUN, Cue::Slide, 0.45, 1.35),
         (mv::EVENT_WALLJUMP, Cue::AirJump, 0.65, 0.85),
+        // Slime gear: a wobbling gel boing; the sling's is tighter and higher.
+        // A snap release also sets the air-jump bit, layering a puff over the boing.
+        (mv::EVENT_BOUNCE, Cue::Boing, 0.60, 1.0),
+        (mv::EVENT_SLING, Cue::Boing, 0.55, 1.35),
     ] {
         if events & bit != 0 && world.adventure.sounds.len() < 64 {
             world.adventure.sounds.push(Event { cue, pos: None, gain, pitch });
@@ -185,6 +189,11 @@ pub fn finish(
     world.sandbox.climate.sync(world.sample_config(), local, day.cloud_controls().coverage);
     if world.ca_view.is_none() {
         let eye = player.eye(world.voxel_scale) * world.voxel_scale.meters();
+        #[cfg(feature = "multiplayer")]
+        let hosted = world.network_host;
+        #[cfg(not(feature = "multiplayer"))]
+        let hosted = false;
+        if !hosted { world::fittings::step(world, player, blocks, chunks); }
         world::block_data::tnt::tick(world, eye, blocks, chunks, budget);
         world::stations::brewing::tick(world);
         world::volcanism::tick(world, eye, day, blocks, chunks, budget);

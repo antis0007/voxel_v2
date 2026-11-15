@@ -1,0 +1,8 @@
+{ "id": "crusher-pulverize", "parity": ["L029"],
+  "note": "A crusher grinds one ingot to one dust; ore still doubles. Ingot to dust to furnace is loop-neutral.",
+  "steps": [
+  { "op": "machine_test", "position": [0, 40, 0], "kind": "Crusher", "set": { "energy": 5000, "input": { "Tin ingots": 64 } }, "ticks": 600,
+    "expect": { "end.out.Tin dust": 64, "end.in.Tin ingots": { "absent": true } } },
+  { "op": "machine_test", "position": [0, 40, 10], "kind": "Crusher", "set": { "energy": 5000, "input": { "Iron ore": 64 } }, "ticks": 600,
+    "expect": { "end.out.Iron dust": 128 } }
+] }

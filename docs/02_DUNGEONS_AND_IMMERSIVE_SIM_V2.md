@@ -219,3 +219,24 @@ Based on the user's supplied `voxel_dungeon_quality_overhaul(3).txt`, including 
 The science/electronics brief supplies the future path for true power isolation, controller modules, salvage and shared state. Its absence must not block D1 or D2: use existing verified machines and world features, then integrate incrementally.
 
 External design lessons: Noita official site https://noitagame.com ; Factorio developer article on bounded creature collision/path work https://www.factorio.com/blog/post/fff-425 ; official Minecraft Warden design https://www.minecraft.net/en-us/article/meet-warden ; FTL game description https://store.steampowered.com/app/212680/FTL_Faster_Than_Light/ . These are comparative principles, not claims of shared implementation algorithms or copied character IP.
+
+## Hidden encounters and mechanical annexes
+
+Generator 310 is available for new Planet worlds launched with
+`--dungeon-mechanisms` and dungeon reviews with `-GeneratorVersion 310`.
+The opt-in leaves the default terrain and saved layouts alone.
+
+- Vault Droplets use the shared awareness and gravity rules. Watch for shaking
+  stone under a ceiling. Veil Stalkers reveal when enough placed light reaches
+  them and there is a clear sightline. Both use the regular encounter slots
+  and defeat records.
+- In tiled store-room annexes, carved stone marks a false wall. Sneak-use or
+  dispel it with magic to leave the discovery visible on the next visit.
+- Levers, buttons and pressure plates drive doors and hatches on the same
+  metre grid within three metres. Buttons toggle on use. Pressure plates
+  latch when stepped on and reset on use. The annex uses the same hatch as
+  a floor trap and the same button behind its false wall to open a cache
+  door. Switches and outputs are saved as voxel edits.
+
+Keep future variants on the shared encounter, fitting and mirage paths so the
+rules learned in a dungeon carry over to player builds and other locations.

@@ -7,7 +7,9 @@
 //! - `Burrow` swims through rock and falls ballistically across open caves;
 //! - `Breach` does the same but launches out of the ground in tall arcs;
 //! - `Slither` crawls along floors and climbs single steps;
-//! - `Swim` stays inside liquid and leaps out of it to strike.
+//! - `Swim` stays inside liquid and leaps out of it to strike;
+//! - `Dig` stays inside its host soil just under the surface like a mole,
+//!   ploughing a ridge of kicked-up earth, and pops out to bite.
 //!
 //! Strains (element, palette, size ranges, motion, ornament, trail) are rows in
 //! `assets/burrowers.ron`. Each body rolls its proportions from a positional
@@ -16,7 +18,10 @@
 //!
 //! Burrowers grinding through rock publish a camera tremor (`shake`), knock
 //! grit off nearby cave surfaces and shake dust from the ceiling over the
-//! player. Rock is never edited: tunnels close behind them.
+//! player. Strains with a `carve` girth really dig: near the player they
+//! remove the cells around their neck (spell-carve guards and budget apply),
+//! spray the spoil outward and leave open tunnels; a breach blows a crater.
+//! Other strains swim through rock without editing it.
 use super::{Adventure, Cue, Enemy, MAX_ENEMIES, World, difficulty::Difficulty, sound_pitched};
 use crate::mesh::models::Model;
 use crate::world::{BlockId, chunk_coord_from_world_block};
@@ -49,6 +54,7 @@ pub(super) enum Motion {
     Breach,
     Slither,
     Swim,
+    Dig,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
@@ -59,6 +65,8 @@ pub(super) enum Ornament {
     Caps,
     Frills,
     Spines,
+    /// Spade forepaws, hind feet and a snout: a digging mammal's body.
+    Claws,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
@@ -118,6 +126,10 @@ pub(super) struct Strain {
     /// groan) before the head can hurt.
     #[serde(default = "default_tell_s")]
     pub tell_s: f32,
+    /// Tunnel girth as a multiple of body radius; 0 (default) leaves the
+    /// ground untouched. Near the player a carving body removes real cells.
+    #[serde(default)]
+    pub carve: f32,
 }
 
 fn default_tell_s() -> f32 {
@@ -192,6 +204,10 @@ pub(crate) struct Body {
     look: f32,
     /// The player stands under open sky (refreshed twice a second).
     exposed: bool,
+    /// Neck position of the last carve pass (carving strains only).
+    last_carve: Option<Vec3>,
+    /// Seconds until a digger kicks up the next puff of its surface ridge.
+    ridge: f32,
 }
 
 /// A wary body turns on a player this close.
@@ -200,6 +216,8 @@ const WARY_REACH_M: f32 = 4.0;
 const WARY_SHARE: f32 = 0.85;
 /// Spawn passes (seconds) after a session starts before any body rises.
 const SPAWN_GRACE_PASSES: u32 = 20;
+/// Seconds a district stays free of its resident after the player kills it.
+const RESIDENT_QUIET_S: f32 = 300.0;
 
 /// Quietest the player can be to a hearing strain: standing still in reach
 /// is still heard at this fraction of the sense range.
@@ -213,6 +231,12 @@ pub(super) enum Fx {
     Trail { at: Vec3, trail: Trail, glow: [f32; 3] },
     Burst { at: Vec3, color: [f32; 3], count: usize },
     Sound { cue: Cue, at: Vec3, gain: f32, pitch: f32 },
+    /// Remove the ground inside a sphere and throw the spoil along `out`.
+    Carve { at: Vec3, radius: f32, out: Vec3, budget: usize, spray: usize },
+    /// A thrower tears a chunk of ground loose (see `hurled`).
+    Heave { key: super::hurled::Key, at: Vec3, radius: f32 },
+    /// A thrower lets its held chunk fly from `from` to land on `to`.
+    Hurl { key: super::hurled::Key, from: Vec3, to: Vec3, flight_s: f32, damage: f32, kind: u32 },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -221,8 +245,12 @@ pub(crate) struct State {
     /// Loud player acts (casting, mining, blasts) heard by `hears` strains;
     /// 0..1, decays over about two seconds.
     pub(crate) ruckus: f32,
+    /// Per Undercrown district: adventure time before a slain resident can
+    /// rise again, so a kill buys a calm stretch instead of a respawn loop.
+    quiet_until: [f32; 8],
     rumble_clock: f32,
     dust_clock: f32,
+    carve_credit: f32,
 }
 
 impl State {
@@ -256,14 +284,28 @@ fn block(world: &World, p: Vec3) -> Option<BlockId> {
     world.chunks.contains_key(&chunk_coord_from_world_block(cell)).then(|| world.get(cell))
 }
 
-/// True when `b` is the medium this motion travels inside.
-fn inside(motion: Motion, b: BlockId) -> bool {
-    match motion {
+/// True when `b` is the medium this strain travels inside. Diggers keep to
+/// their host soils.
+fn inside(st: &Strain, b: BlockId) -> bool {
+    match st.motion {
         Motion::Swim => b.is_liquid(),
         Motion::Burrow | Motion::Breach => b.is_solid() || b.is_liquid(),
+        Motion::Dig => st.hosts.contains(&b),
         Motion::Slither => false,
     }
 }
+
+/// Bodies further than this from the player never edit terrain.
+const CARVE_RANGE_M: f32 = 40.0;
+/// Most cells one carve pass removes; bounds edits per body per tick.
+const CARVE_BUDGET: usize = 96;
+/// Shared excavation allowance, measured in cubic metres.
+const CARVE_BURST_M3: f32 = 24.0;
+const CARVE_RATE_M3: f32 = 8.0;
+/// A breach crater may remove this many cells in one go.
+const CRATER_BUDGET: usize = 48;
+/// Diggers travel this far under the surface.
+const DIG_DEPTH_M: f32 = 0.85;
 
 fn rock(b: BlockId) -> bool {
     b.is_solid() && !b.is_liquid()
@@ -376,14 +418,17 @@ pub(super) fn spawn(adv: &mut Adventure, world: &World, feet: Vec3) {
     // Underground, a body rises every few passes; in the open only surface
     // hunters (breachers in sand, swimmers in ponds) and rarely.
     let district = district_at(world, feet);
-    let lair_strain = district.and_then(|d| STRAINS.iter().find(|st| st.district == Some(d)));
+    let calm = district.is_some_and(|d| adv.time < adv.burrowers.quiet_until.get(usize::from(d)).copied().unwrap_or(0.0))
+        || in_refuge(world, feet);
+    let lair_strain = if calm { None } else { district.and_then(|d| STRAINS.iter().find(|st| st.district == Some(d))) };
     let hunter_alive = lair_strain.is_some_and(|st| adv.enemies.iter().any(|e| is_burrow_body(e) && e.kind == st.kind));
     // A district with a resident hunter calls it up readily until it is out.
-    let chance = if lair_strain.is_some() && !hunter_alive { 0.6 } else if roofed { 0.30 } else { 0.12 };
+    let chance = if lair_strain.is_some() && !hunter_alive { 0.6 } else if roofed { 0.30 } else { 0.25 };
     if roll(pass, 1) > chance {
         return;
     }
     for attempt in 0..SPAWN_ATTEMPTS {
+        let wary = !roofed && roll(hash_u32(pass ^ attempt.wrapping_mul(0x27d4_eb2f)), 7) < WARY_SHARE;
         let h = hash_u32(pass ^ attempt.wrapping_mul(0x27d4_eb2f));
         let angle = roll(h, 2) * TAU;
         let distance = lerp(RING_MIN_M, RING_MAX_M, roll(h, 3));
@@ -394,10 +439,12 @@ pub(super) fn spawn(adv: &mut Adventure, world: &World, feet: Vec3) {
         let candidates: Vec<&Strain> = STRAINS
             .iter()
             .filter(|st| cover >= st.min_cover_m)
-            .filter(|st| st.hosts.contains(&host) && (roofed || matches!(st.motion, Motion::Breach | Motion::Swim)))
+            // In the open a wary grazer may be any strain the ground hosts;
+            // only breachers and swimmers rise there to hunt.
+            .filter(|st| st.hosts.contains(&host) && (roofed || wary || matches!(st.motion, Motion::Breach | Motion::Swim | Motion::Dig)))
             .filter(|st| match st.district {
                 None => true,
-                Some(d) => !hunter_alive && district == Some(d) && district_at(world, at) == Some(d),
+                Some(d) => !calm && !hunter_alive && district == Some(d) && district_at(world, at) == Some(d),
             })
             .collect();
         let total: f32 = candidates.iter().map(|st| st.weight.max(0.0)).sum();
@@ -409,13 +456,17 @@ pub(super) fn spawn(adv: &mut Adventure, world: &World, feet: Vec3) {
             pick -= st.weight.max(0.0);
             pick <= 0.0
         }).or(candidates.last()) else { continue };
-        // In the open a weight is also an absolute chance: a strain that is
-        // the only candidate under grass must not rise at full rate.
-        if !roofed && st.district.is_none() && roll(h, 6) > st.weight.min(1.0) {
+        // An open-ground hunter also rolls its weight as an absolute chance: a
+        // strain that is the only candidate under grass must not rise at full rate.
+        if !roofed && !wary && st.district.is_none() && roll(h, 6) > st.weight.min(1.0) {
             continue;
         }
         let head = match st.motion {
             Motion::Slither => match floor_above(world, at, 6.0) {
+                Some(p) => p,
+                None => continue,
+            },
+            Motion::Dig => match shallow_below(world, at, st) {
                 Some(p) => p,
                 None => continue,
             },
@@ -426,9 +477,13 @@ pub(super) fn spawn(adv: &mut Adventure, world: &World, feet: Vec3) {
         let mut e = Enemy::new(site, adv.burrowers.passes, st.kind, head, menace);
         let toward = Vec3::new(feet.x - head.x, 0.0, feet.z - head.z);
         e.burrow = Body::new(st, h, head, toward.normalize_or(Vec3::X).rotate_axis(Vec3::Y, 1.2));
-        e.burrow.wary = !roofed && st.district.is_none() && roll(h, 7) < WARY_SHARE;
+        e.burrow.wary = wary && st.district.is_none();
         e.home = head;
         adv.enemies.push(e);
+        if st.district.is_some() {
+            // A resident announces itself: a low call from the walls.
+            sound_pitched(&mut adv.sounds, Cue::Warning, Some(head), 0.8, 0.4);
+        }
         return;
     }
 }
@@ -458,6 +513,13 @@ fn cover_above(world: &World, p: Vec3, span: f32) -> f32 {
     solid as f32 * s
 }
 
+/// True when `m` lies in an Undercrown refuge room (v2 layout).
+fn in_refuge(world: &World, m: Vec3) -> bool {
+    let plan = engine_worldgen::undercrown::plan(&world.sample_config());
+    plan.v2.is_some()
+        && plan.room_at(m).is_some_and(|room| room.kind == engine_worldgen::undercrown::RoomKind::Refuge)
+}
+
 fn underground(world: &World, eye: Vec3) -> bool {
     let s = world.voxel_scale.meters();
     let steps = (20.0 / s).ceil() as i32;
@@ -482,6 +544,31 @@ fn floor_above(world: &World, from: Vec3, span: f32) -> Option<Vec3> {
         let here = below + Vec3::Y * s;
         if block(world, below).is_some_and(rock) && block(world, here).is_some_and(|b| !b.is_solid() && !b.is_liquid()) {
             return Some(here + Vec3::new(s * 0.5, 0.0, s * 0.5));
+        }
+    }
+    None
+}
+
+/// A digger's spawn point: `DIG_DEPTH_M` under the top of the soil column
+/// at `at`, inside one of the strain's hosts.
+fn shallow_below(world: &World, at: Vec3, st: &Strain) -> Option<Vec3> {
+    let s = world.voxel_scale.meters();
+    let top = surface_above(world, at, 10.0)?;
+    let p = Vec3::new(at.x, top - DIG_DEPTH_M, at.z);
+    let soil = |q: Vec3| block(world, q).is_some_and(|b| st.hosts.contains(&b));
+    (soil(p) && soil(p + Vec3::Y * s)).then_some(p)
+}
+
+/// Height of the open surface above a buried point: the top face of the last
+/// solid cell before air, scanning up at most `span` metres.
+fn surface_above(world: &World, p: Vec3, span: f32) -> Option<f32> {
+    let s = world.voxel_scale.meters();
+    let steps = (span / s).ceil() as i32;
+    for i in 0..steps {
+        let q = p + Vec3::Y * (i as f32 * s);
+        let b = block(world, q)?;
+        if !b.is_solid() {
+            return (i > 0).then(|| (q.y / s).floor() * s);
         }
     }
     None
@@ -561,13 +648,15 @@ pub(super) fn tick(
         sense *= b.noise;
     }
     b.last_feet = Some(feet);
+    // Refuge rooms are safe: a resident never follows the player into one.
+    let sanctuary = st.district.is_some() && in_refuge(world, feet);
     if st.patience_s > 0.0 {
         if matches!(b.mode, Mode::Stalk | Mode::Lunge | Mode::Dive) {
             b.pressure += dt;
         } else {
             b.pressure = (b.pressure - dt * 0.5).max(0.0);
         }
-        if b.mode == Mode::Stalk && b.pressure >= st.patience_s {
+        if b.mode == Mode::Stalk && (b.pressure >= st.patience_s || sanctuary) {
             b.mode = Mode::Withdraw;
             b.timer = st.rest_s.max(1.0);
             fx.push(Fx::Sound { cue: Cue::Splash, at: head, gain: 0.35, pitch: 0.45 });
@@ -577,13 +666,18 @@ pub(super) fn tick(
     // Decide where to go.
     match b.mode {
         Mode::Roam => {
-            if hunt && hostile && distance < sense {
+            if hunt && hostile && distance < sense && !sanctuary {
                 b.mode = Mode::Stalk;
                 b.cooldown = b.cooldown.max(1.0 + b.rng(11) * 1.5);
             } else if b.timer <= 0.0 || (b.goal - head).length() < 2.5 {
                 let a = b.rng(12) * TAU;
                 let r = 4.0 + b.rng(13) * 10.0;
-                let y = if st.motion == Motion::Slither { 0.0 } else { (b.rng(14) * 2.0 - 1.0) * 5.0 };
+                let y = match st.motion {
+                    Motion::Slither => 0.0,
+                    // Diggers wander level, just under the turf.
+                    Motion::Dig => (b.rng(14) * 2.0 - 1.0) * 0.3,
+                    _ => (b.rng(14) * 2.0 - 1.0) * 5.0,
+                };
                 b.goal = e.home + Vec3::new(a.cos() * r, y, a.sin() * r);
                 b.timer = 5.0 + b.rng(15) * 4.0;
             }
@@ -603,11 +697,12 @@ pub(super) fn tick(
                     Motion::Burrow => (3.0, 5.0),
                     Motion::Swim => (1.5, 3.0),
                     Motion::Slither => (0.0, 3.5),
+                    Motion::Dig => (DIG_DEPTH_M, 2.5),
                 };
                 b.goal = feet + Vec3::new(orbit.cos() * ring, -depth, orbit.sin() * ring);
                 let reach = match st.motion {
                     Motion::Breach => 11.0,
-                    Motion::Slither => 4.5,
+                    Motion::Slither | Motion::Dig => 4.5,
                     _ => 8.0,
                 };
                 if b.cooldown <= 0.0 && distance < reach {
@@ -631,7 +726,7 @@ pub(super) fn tick(
         }
         Mode::Withdraw => {
             // Back to the lair, deep, until the rest runs out.
-            b.goal = e.home - Vec3::Y * if st.motion == Motion::Slither { 0.0 } else { 2.0 };
+            b.goal = e.home - Vec3::Y * match st.motion { Motion::Slither => 0.0, Motion::Dig => 0.4, _ => 2.0 };
             if b.timer <= 0.0 {
                 b.mode = Mode::Roam;
                 b.pressure = 0.0;
@@ -640,7 +735,7 @@ pub(super) fn tick(
         }
         Mode::Dive => {
             let away = Vec3::new(head.x - feet.x, 0.0, head.z - feet.z).normalize_or(Vec3::X);
-            b.goal = head + away * 6.0 - Vec3::Y * if st.motion == Motion::Slither { 0.0 } else { 7.0 };
+            b.goal = head + away * 6.0 - Vec3::Y * match st.motion { Motion::Slither => 0.0, Motion::Dig => 1.2, _ => 7.0 };
             if b.timer <= 0.0 {
                 b.mode = Mode::Stalk;
                 b.cooldown = 2.5 + b.rng(17) * 2.5;
@@ -673,12 +768,19 @@ pub(super) fn tick(
     let now = block(world, new_head);
 
     // Breach and re-entry: a jolt, a burst of the host material, a thud.
-    let medium = |x: Option<BlockId>| x.is_some_and(|x| inside(st.motion, x));
+    let medium = |x: Option<BlockId>| x.is_some_and(|x| inside(st, x));
     if st.motion != Motion::Slither {
-        if medium(here) && !medium(now) && now.is_some() {
+        // A carver turning back into its own fresh tunnel is not a breach.
+        let own_tunnel = st.carve > 0.0 && b.last_carve.is_some_and(|c| c.distance(new_head) < b.radius * st.carve * 2.0);
+        if medium(here) && !medium(now) && now.is_some() && !own_tunnel {
             let color = here.map_or(st.body, |h| h.color(world_cell(world, head)));
             b.jolt = 1.0;
             fx.push(Fx::Burst { at: new_head, color, count: 14 });
+            if st.carve > 0.0 && st.motion != Motion::Swim && head.distance(feet) < CARVE_RANGE_M {
+                // Bursting out of the ground blows a crater and hurls the spoil up.
+                let out = (b.heading + Vec3::Y).normalize_or(Vec3::Y);
+                fx.push(Fx::Carve { at: head, radius: b.radius * st.carve * 1.6, out, budget: CRATER_BUDGET, spray: 22 });
+            }
             let cue = if st.motion == Motion::Swim { Cue::Splash } else { Cue::ForgeSlam };
             fx.push(Fx::Sound { cue, at: new_head, gain: 0.8, pitch: 0.38 + b.rng(18) * 0.12 });
         } else if !medium(here) && medium(now) && previous_air > 0.2 {
@@ -694,6 +796,37 @@ pub(super) fn tick(
     let grinding = st.motion != Motion::Swim && now.is_some_and(rock);
     let want = if grinding { (speed / st.speed.max(0.1)).clamp(0.3, 1.6) } else { 0.0 };
     b.grind += (want - b.grind) * (1.0 - (-dt * 4.0).exp());
+
+    // Carving: the neck reams out a tunnel behind the grinding head, so the
+    // head itself stays in rock and keeps steering while the body rides open
+    // ground. Only near the player, and only every half cell of travel.
+    let s = world.voxel_scale.meters();
+    // A tunnel narrower than a cell would only nick single voxels: skip it.
+    if st.carve > 0.0 && grinding && b.radius * st.carve >= s * 0.75 && new_head.distance(feet) < CARVE_RANGE_M {
+        let neck = b.segs.get(1).copied().unwrap_or(new_head);
+        if b.last_carve.is_none_or(|last| last.distance(neck) >= s * 0.5) {
+            b.last_carve = Some(neck);
+            // Enough cells for one slice of the bore, so a giant's tunnel
+            // opens to full girth rather than a thin core.
+            let cells_r = b.radius * st.carve / s;
+            let budget = ((std::f32::consts::PI * cells_r * cells_r) as usize + 8).min(CARVE_BUDGET);
+            fx.push(Fx::Carve { at: neck, radius: b.radius * st.carve, out: b.heading, budget, spray: 3 });
+        }
+    }
+    // A digger's ridge: earth heaves and kicks up from the turf over its head.
+    if st.motion == Motion::Dig && medium(now) {
+        b.ridge -= dt * (speed / st.speed.max(0.1)).clamp(0.4, 2.0);
+        if b.ridge <= 0.0 {
+            b.ridge = 0.12 + b.rng(22) * 0.1;
+            if let Some(top) = surface_above(world, new_head, 2.0) {
+                let cell = world_cell(world, Vec3::new(new_head.x, top - 0.01, new_head.z));
+                let color = world.get(cell).color(cell);
+                let a = b.rng(23) * TAU;
+                let out = Vec3::new(a.cos() * 0.5, 1.0, a.sin() * 0.5).normalize_or(Vec3::Y);
+                fx.push(Fx::Chip { at: Vec3::new(new_head.x, top + 0.04, new_head.z), out, color });
+            }
+        }
+    }
 
     // Particles: grit off nearby cave surfaces and the element's trail.
     b.fx_clock += dt * if grinding { 14.0 } else { 9.0 };
@@ -758,7 +891,9 @@ fn tunnel(b: &mut Body, st: &Strain, motion: Motion, world: &World, head: Vec3, 
         b.heading = -b.heading;
         return;
     };
-    let in_medium = inside(motion, here);
+    let in_medium = inside(st, here);
+    // Diggers and swimmers keep to their medium; everything else bores on.
+    let keeps_inside = matches!(motion, Motion::Swim | Motion::Dig);
     if in_medium {
         let want = b.goal - head;
         let rate = st.turn * if b.mode == Mode::Lunge { 1.6 } else { 1.0 };
@@ -777,10 +912,11 @@ fn tunnel(b: &mut Body, st: &Strain, motion: Motion, world: &World, head: Vec3, 
         b.vel += flat * speed * 0.25 * dt;
         b.heading = b.vel.normalize_or(b.heading);
     }
-    // Swimmers turn back before leaving water unless striking.
-    if motion == Motion::Swim && in_medium && b.mode != Mode::Lunge {
+    // Swimmers turn back before leaving water unless striking; diggers turn
+    // back down before breaking the surface or meeting hard rock.
+    if keeps_inside && in_medium && b.mode != Mode::Lunge {
         let ahead = head + b.heading * (b.radius + 0.6);
-        if block(world, ahead).is_some_and(|x| !x.is_liquid()) {
+        if block(world, ahead).is_some_and(|x| !inside(st, x)) {
             b.heading = turn_toward(b.heading, Vec3::new(-b.heading.x, -b.heading.y.abs() - 0.5, -b.heading.z), st.turn * 2.0 * dt);
             b.vel = b.heading * speed;
         }
@@ -794,7 +930,7 @@ fn tunnel(b: &mut Body, st: &Strain, motion: Motion, world: &World, head: Vec3, 
     let next = head + step;
     match block(world, next) {
         None => b.heading = -b.heading,
-        Some(x) if motion == Motion::Swim && rock(x) => {
+        Some(x) if keeps_inside && rock(x) && !inside(st, x) => {
             b.vel = -b.vel * 0.3;
             b.heading = b.vel.normalize_or(-b.heading);
         }
@@ -885,7 +1021,14 @@ pub(super) fn melee_point(e: &Enemy, eye: Vec3, forward: Vec3) -> Vec3 {
 }
 
 /// Emits queued effects, then the shared tremor, rumble and ceiling dust.
-pub(super) fn after_tick(adv: &mut Adventure, world: &World, feet: Vec3, eye: Vec3, dt: f32, fx: Vec<Fx>) {
+pub(super) fn after_tick(adv: &mut Adventure, world: &mut World, feet: Vec3, eye: Vec3, dt: f32, fx: Vec<Fx>) {
+    let excavation = world.rules.mode.visible_to_mobs() && world.rules.systems.enabled("worm_excavation");
+    let cell_volume = world.voxel_scale.meters().powi(3);
+    adv.burrowers.carve_credit = if excavation {
+        (adv.burrowers.carve_credit + CARVE_RATE_M3 * dt).min(CARVE_BURST_M3)
+    } else {
+        0.0
+    };
     for f in fx {
         match f {
             Fx::Chip { at, out, color } => {
@@ -908,6 +1051,16 @@ pub(super) fn after_tick(adv: &mut Adventure, world: &World, feet: Vec3, eye: Ve
             }
             Fx::Burst { at, color, count } => adv.spawn_voxel_burst(at, color, count, 3.2, 0.05),
             Fx::Sound { cue, at, gain, pitch } => sound_pitched(&mut adv.sounds, cue, Some(at), gain, pitch),
+            Fx::Carve { at, radius, out, budget, spray } => {
+                let allowance = (adv.burrowers.carve_credit / cell_volume) as usize;
+                let budget = budget.min(allowance);
+                if budget > 0 {
+                    let removed = carve(adv, world, at, radius, out, budget, spray);
+                    adv.burrowers.carve_credit -= removed as f32 * cell_volume;
+                }
+            }
+            Fx::Heave { key, at, radius } => super::hurled::heave(adv, world, key, at, radius),
+            Fx::Hurl { key, from, to, flight_s, damage, kind } => super::hurled::hurl(adv, key, from, to, flight_s, damage, kind),
         }
     }
 
@@ -978,11 +1131,88 @@ pub(super) fn after_tick(adv: &mut Adventure, world: &World, feet: Vec3, eye: Ve
     }
 }
 
+/// Removes ground cells inside the sphere (`radius` metres around `at`) under
+/// the spell-carve guards, at most `budget` of them, and throws up to `spray`
+/// chunks of spoil along `out`. Nonresident chunks are never touched.
+fn carve(adv: &mut Adventure, world: &mut World, at: Vec3, radius: f32, out: Vec3, budget: usize, spray: usize) -> usize {
+    let s = world.voxel_scale.meters();
+    let cfg = world.sample_config();
+    let c = (at / s).floor().as_ivec3();
+    let r = (radius / s).ceil().clamp(1.0, 8.0) as i32;
+    let r_sq = (radius / s) * (radius / s);
+    // Nearest cells first, so a truncated pass still opens the core.
+    let mut cells: Vec<(i32, IVec3)> = Vec::new();
+    for dy in -r..=r {
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let d = dx * dx + dy * dy + dz * dz;
+                if d as f32 <= r_sq {
+                    cells.push((d, c + IVec3::new(dx, dy, dz)));
+                }
+            }
+        }
+    }
+    cells.sort_unstable_by_key(|(d, _)| *d);
+    let mut removed: Vec<(Vec3, [f32; 3])> = Vec::new();
+    for (_, cell) in cells {
+        if removed.len() >= budget {
+            break;
+        }
+        if !world.chunks.contains_key(&chunk_coord_from_world_block(cell)) {
+            continue;
+        }
+        let block = world.get(cell);
+        if !matches!(
+            block,
+            BlockId::Stone | BlockId::Limestone | BlockId::Sand | BlockId::Dirt
+                | BlockId::Grass | BlockId::Clay | BlockId::Mud | BlockId::FungalSoil
+        )
+            || block != engine_worldgen::sample_block(&cfg, cell)
+        {
+            continue;
+        }
+        if let Some(old) = adv.carve_cell_with(world, cell, false, false) {
+            removed.push(((cell.as_vec3() + Vec3::splat(0.5)) * s, old.color(cell)));
+        }
+    }
+    let out = out.normalize_or(Vec3::Y);
+    for (i, (p, color)) in removed.iter().take(spray).enumerate() {
+        let k = hash_u32(p.x.to_bits() ^ p.y.to_bits().rotate_left(7) ^ p.z.to_bits().rotate_left(15) ^ i as u32);
+        let jitter = Vec3::new(unit(k) - 0.5, unit(k >> 6) * 0.8, unit(k >> 12) - 0.5);
+        let away = (*p - at).normalize_or(out);
+        let v = out * (2.5 + unit(k >> 18) * 3.5) + away * 1.6 + jitter * 2.0 + Vec3::Y * 1.4;
+        let size = (s * 0.45).clamp(0.05, 0.16) * (0.7 + unit(k >> 3) * 0.6);
+        adv.spawn_voxel_particle(*p, v, *color, size, 0.0, 1.0, 9.8, 1.0 + unit(k >> 9) * 0.6);
+    }
+    if !removed.is_empty() && spray > 6 {
+        sound_pitched(&mut adv.sounds, Cue::ForgeSlam, Some(at), 0.75, 0.35);
+    }
+    removed.len()
+}
+
 /// Dead burrowers crumble into their colours; no record, no site completion.
-pub(super) fn fall(adv: &mut Adventure) {
+pub(super) fn fall(adv: &mut Adventure, world: &mut World) {
+    use crate::world::inventory::{DroppedStack, ItemStack};
+    let now = adv.time;
+    let mut quiet = adv.burrowers.quiet_until;
     let mut bursts = Vec::new();
     for e in adv.enemies.iter().filter(|e| is_burrow_body(e) && e.health <= 0.0) {
         let Some(st) = strain(e.kind) else { continue };
+        if let Some(slot) = st.district.and_then(|d| quiet.get_mut(usize::from(d))) {
+            *slot = now + RESIDENT_QUIET_S;
+        }
+        // Resident hunters leave a trophy: bestiary drops at the head,
+        // counts from the body's slot so a reload rolls the same.
+        let at = e.burrow.segs.first().copied().unwrap_or(e.pos);
+        if let Some(species) = super::bestiary::species(e.kind) {
+            for (i, drop) in species.drops.iter().enumerate() {
+                let h = hash_u32(world.seed ^ e.slot ^ (i as u32).wrapping_mul(0x9e37_79b9));
+                let count = drop.min + h % (drop.max.saturating_sub(drop.min) + 1);
+                if count > 0 && world.inventory.dropped.len() < 1024 {
+                    world.inventory.dropped.push(DroppedStack { pos: at, stack: ItemStack::new(drop.item, count) });
+                }
+            }
+        }
         let tint = e.burrow.tint;
         let color = [st.body[0] * tint[0], st.body[1] * tint[1], st.body[2] * tint[2]];
         if e.burrow.segs.is_empty() {
@@ -998,6 +1228,7 @@ pub(super) fn fall(adv: &mut Adventure) {
             super::sound(&mut adv.sounds, Cue::Defeat, Some(at), 0.7);
         }
     }
+    adv.burrowers.quiet_until = quiet;
     adv.enemies.retain(|e| !is_burrow_body(e) || e.health > 0.0);
 }
 
@@ -1091,6 +1322,28 @@ pub(super) fn model(e: &Enemy, m: &mut Model, time: f32) {
                         tinted(st.glow, tint, 0.8), glow * 0.4);
                 }
             }
+            Ornament::Claws if i == 1 || i + 1 == n => {
+                // Spade forepaws behind the head, small hind feet at the tail;
+                // they paddle while the body moves.
+                let fore = i == 1;
+                let stroke = (b.phase * 2.0 + if fore { 0.0 } else { 1.6 }).sin();
+                let paw = tinted(st.glow, tint, 1.0);
+                let z = q * Vec3::Z;
+                for side in [-1.0f32, 1.0] {
+                    let root = p + x * side * r * 0.95 - y * r * 0.35;
+                    let sweep = Quat::from_axis_angle(x, stroke * side * 0.5) * Quat::from_axis_angle(y, side * 0.6);
+                    let (w, l) = if fore { (0.9 * r, 0.75 * r) } else { (0.45 * r, 0.4 * r) };
+                    let c = root + (sweep * (x * side + z * 0.4)).normalize_or(x * side) * l * 0.5;
+                    m.material_box(c, Vec3::new(w, 0.18 * r, l), sweep * q, paw, 70.0, 0.0);
+                    if fore {
+                        // Three pale claws on the spade's edge.
+                        for k in 0..3 {
+                            let tip = c + (sweep * q) * Vec3::new((k as f32 - 1.0) * w * 0.32, -0.05 * r, l * 0.62);
+                            m.cuboid(tip, Vec3::new(0.1 * r, 0.08 * r, 0.32 * r), sweep * q, [0.86, 0.82, 0.70], 0.0);
+                        }
+                    }
+                }
+            }
             Ornament::Spines if i % 2 == 0 => {
                 m.material_box(p + y * r * 1.05, Vec3::new(0.14 * r, 0.75 * r, 0.45 * r), q * Quat::from_rotation_x(-0.5),
                     tinted(st.body, tint, 0.7), 70.0, 0.0);
@@ -1125,6 +1378,13 @@ fn head(e: &Enemy, st: &Strain, m: &mut Model, p: Vec3, q: Quat, r: f32, tint: [
                 let reach = (swing * z) * r * 1.3;
                 m.material_beam(pivot, pivot + reach, r * 0.14, tinted(st.head, tint, 0.55), 70.0);
                 m.material_beam(pivot + reach, pivot + reach - x * side * r * 0.5, r * 0.11, tinted(st.head, tint, 0.45), 70.0);
+            }
+        }
+        Ornament::Claws => {
+            // A blunt pink snout over the maw and tiny dark eyes.
+            m.material_box(p + z * r * 0.95 + y * r * 0.2, Vec3::new(0.7 * r, 0.55 * r, 0.6 * r), q, tinted(st.glow, tint, 1.05), 70.0, 0.0);
+            for side in [-1.0f32, 1.0] {
+                m.cuboid(p + z * r * 0.5 + x * side * r * 0.55 + y * r * 0.55, Vec3::splat(0.12 * r), q, [0.03, 0.02, 0.02], 0.0);
             }
         }
         _ => {

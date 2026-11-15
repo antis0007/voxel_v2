@@ -381,6 +381,9 @@ block_ids! {
     GildedGate, OchreSandstone, GrottoStone, GoldCoins, JeweledGold,
     ZigzagTile, LozengeTile, StarTile, LapisBrick, GildedRelief,
     InlaidMarble, CarvedSandstone, ScaleTile, Sunstone,
+    // The Highfold and the Gloaming (save 76): their gates and the dusk forest.
+    HighfoldGate, GloamingGate, GloamingMoss, GloamingLog, GloamingLeaves,
+    MechanicalButton, MechanicalButtonOn, PressurePlate, PressurePlateOn,
 }
 
 // Packed material IDs consumed by the recovered industrial WGSL finishes.
@@ -513,13 +516,13 @@ impl BlockId {
             Self::Smoke => 43,
             Self::Steam => 44,
             Self::Ash => terrain_family::ASH,
-            Self::Grass => 1,
+            Self::Grass | Self::GloamingMoss => 1,
             Self::Dirt | Self::Mud | Self::Clay => 2,
             Self::Stone | Self::Basalt | Self::Hellstone | Self::LightlessStone | Self::LightlessShaft => 3,
             Self::Gravel | Self::Paydirt => terrain_family::GRAVEL,
             Self::Sand | Self::Sandstone => 4,
-            Self::Log => 5,
-            Self::Leaves | Self::Bush | Self::PineLeaves => 6,
+            Self::Log | Self::GloamingLog => 5,
+            Self::Leaves | Self::Bush | Self::PineLeaves | Self::GloamingLeaves => 6,
             Self::Vines | Self::VinesSouth | Self::VinesWest | Self::VinesEast | Self::Sapling => 6,
             Self::Ladder | Self::LadderSouth | Self::LadderWest | Self::LadderEast => 11,
             Self::SnowGrass => 7,
@@ -635,7 +638,7 @@ impl BlockId {
     /// Blocks kept in `ChunkData::torches`, the index the local light list reads.
     pub fn is_light_source(self) -> bool {
         self.is_torch() || matches!(self, BlockId::AmberCap | BlockId::GlowBerries | BlockId::FoxfireMoss | BlockId::LightlessShaft
-            | BlockId::GildedGate | BlockId::Sunstone)
+            | BlockId::GildedGate | BlockId::Sunstone | BlockId::HighfoldGate | BlockId::GloamingGate)
     }
 
     pub fn is_ray_pickable(self) -> bool {

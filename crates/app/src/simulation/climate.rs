@@ -72,6 +72,16 @@ impl Climate {
 
     /// Air or ground temperature at `p`, °C.
     pub fn ambient_c(&self, p: IVec3) -> f32 {
+        self.ambient_parts(p, true)
+    }
+
+    /// `ambient_c` without the day/night swing: the day's mean at `p`, °C.
+    /// Weather reads it so one cold night does not snow over a mild meadow.
+    pub fn mean_c(&self, p: IVec3) -> f32 {
+        self.ambient_parts(p, false)
+    }
+
+    fn ambient_parts(&self, p: IVec3, diurnal: bool) -> f32 {
         let Some(cfg) = self.cfg else { return self.flat_c };
         let column = self.column(&cfg, p.x, p.z);
         let y = cfg.world_y(p.y);
@@ -84,7 +94,8 @@ impl Climate {
         // midway through its second season. Deep ground damps seasonal swings.
         let year = ((self.day_index % 20) as f32 + self.time_of_day - 7.5) / 20.0;
         let seasonal = column.season_c * (std::f32::consts::TAU * year).cos() * (-depth / 8.0).exp();
-        ecology::heat_celsius(heat) + seasonal + GEOTHERMAL_C_PER_M * depth + swing * day * (-depth / SKIN_M).exp()
+        let diurnal = if diurnal { swing * day * (-depth / SKIN_M).exp() } else { 0.0 };
+        ecology::heat_celsius(heat) + seasonal + GEOTHERMAL_C_PER_M * depth + diurnal
     }
 
     /// `ambient_c` as seen by `block`: liquid water does not sit below its floor.

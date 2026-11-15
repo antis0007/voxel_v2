@@ -6,7 +6,7 @@
 //! No lamps: the Surveyors left nothing that needs tending. Density comes from
 //! the seed's planet profile, so some planets carry one every few kilometres
 //! and others almost none.
-use crate::{BlockId, ColumnSample, WorldSampleConfig, WorldType, hash2, planet_profile, sample_column};
+use crate::{BlockId, ColumnSample, WorldSampleConfig, hash2, planet_profile, sample_column};
 use glam::IVec3;
 
 pub const VERSION: u32 = crate::gates::SURVEYOR_SITES_GENERATOR;
@@ -60,7 +60,7 @@ thread_local! {
 }
 
 pub fn enabled(cfg: &WorldSampleConfig) -> bool {
-    cfg.generator_version >= VERSION && cfg.world_type == WorldType::Planet
+    cfg.generator_version >= VERSION && crate::features::enabled(cfg, crate::features::Feature::Surveyor)
 }
 
 fn site(cfg: &WorldSampleConfig, cx: i32, cz: i32) -> Option<Site> {
@@ -186,6 +186,7 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample) -> Option<
 mod tests {
     use super::*;
     use engine_core::VoxelScalePreset;
+    use engine_voxel::WorldType;
 
     fn cfg(version: u32, seed: u32) -> WorldSampleConfig {
         WorldSampleConfig { planet: None, generator_version: version, seed, world_type: WorldType::Planet, voxel_scale: VoxelScalePreset::OneMeter }

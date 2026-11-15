@@ -58,7 +58,7 @@ impl Route {
 }
 
 pub(crate) fn active(cfg: &WorldSampleConfig) -> bool {
-    cfg.world_type == WorldType::Hills && fernwake::freight::active(cfg)
+    engine_worldgen::features::enabled(cfg, engine_worldgen::features::Feature::Nursery) && fernwake::freight::active(cfg)
 }
 
 pub(crate) fn bench_cell(cfg: &WorldSampleConfig) -> IVec3 {

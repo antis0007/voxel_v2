@@ -19,12 +19,13 @@ pub(super) fn home(
     let ctx = owner.ctx.clone();
     if owner.home_page == HomePage::Title {
         let recent = owner.library_entries.iter().filter(|e|e.saved > 0).max_by_key(|e|e.saved);
-        return match super::main_menu::draw(root, recent.map(|e|e.name.as_str()), owner.library_loading,
+        let summary = recent.map(super::world_browser::summary);
+        return match super::main_menu::draw(root, recent.map(|e|e.name.as_str()).zip(summary.as_deref()), owner.library_loading,
             owner.library_status.as_deref().or(owner.persistence_status.as_deref())) {
             super::main_menu::Intent::Continue => recent.map_or(UiAction::None,|e|UiAction::OpenWorld(e.id.clone())),
             super::main_menu::Intent::Load => { owner.home_page = HomePage::Library; UiAction::None },
             super::main_menu::Intent::New => {
-                *world = WorldType::Hills;
+                *world = WorldType::Planet;
                 owner.home_page = HomePage::Create;
                 UiAction::None
             },
@@ -38,7 +39,7 @@ pub(super) fn home(
     let mut result = UiAction::None;
     if let Some(page) = home_nav(root, &ctx, owner.home_page, &mut result) {
         if page == HomePage::Create && owner.home_page != page {
-            *world = WorldType::Hills;
+            *world = WorldType::Planet;
         }
         owner.home_page = page;
     }
@@ -140,7 +141,7 @@ pub(super) fn preview(root: &mut egui::Ui, page: &str, settings_tab: u8) {
     };
     match current {
         HomePage::Create => {
-            let mut world = WorldType::Hills;
+            let mut world = WorldType::Planet;
             let mut scale = VoxelScalePreset::OneMeter;
             let mut seed = 1;
             let mut name = String::from("New world");
@@ -392,9 +393,6 @@ pub(super) fn landscape(p: &egui::Painter, r: Rect, seed: u32, kind: WorldType) 
                 (h as f32 / u32::MAX as f32 - 0.5) * r.height() * 0.085
             };
             let mut height = baseline + hash(segment) * (1.0 - frac) + hash(segment + 1) * frac;
-            if kind == WorldType::Ridged {
-                height -= height.rem_euclid(tile * 3.0) * 0.28;
-            }
             if kind == WorldType::Superflat {
                 height = baseline;
             }
@@ -525,16 +523,14 @@ fn new_world(
                         heading(ui,"New world","");
                         ui.add(egui::TextEdit::singleline(name).hint_text("World name").char_limit(64).desired_width(f32::INFINITY));
                         let kinds = [
-                            (WorldType::Hills,"Default","Forests, rivers and caves."),
-                            (WorldType::Ridged,"Highlands","Mountains and deep valleys."),
-                            (WorldType::Superflat,"Flat","Flat building ground."),
                             (WorldType::Planet,"Planet","Continents, climate and caves"),
+                            (WorldType::Superflat,"Flat","Flat building ground."),
                             (WorldType::Manyfold,"Manyfold","Shell maze"),
                             (WorldType::Hall,"Hall","Hanging precinct · two wardens"),
                         ];
                         ui.horizontal_wrapped(|ui| {
                             let selected_world = *world;
-                            for (kind, title, _) in kinds.into_iter().filter(|k| !matches!(k.0, WorldType::Planet | WorldType::Manyfold | WorldType::Hall) || selected_world == k.0) {
+                            for (kind, title, _) in kinds.into_iter().filter(|k| !matches!(k.0, WorldType::Manyfold | WorldType::Hall) || selected_world == k.0) {
                                 if tab(ui, title, *world == kind).clicked() { *world = kind; }
                             }
                         });

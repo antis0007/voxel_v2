@@ -5,7 +5,7 @@
 // and raise menace (tougher bodies, better drops).
 (
     // Metres from the realm spawn point where tiers 1, 2 and 3 begin.
-    ring_m: [350.0, 1200.0, 3000.0],
+    ring_m: (350.0, 1200.0, 3000.0),
     // Tier at which open-ground daylight no longer keeps hostiles away.
     day_tier: 2,
     // Extra tiers from the landscape itself, by Biome variant name.
@@ -22,4 +22,7 @@
         "LastShore": 2,
         "Alpine": 1,
     },
+    // Metres below the surface where each extra tier begins, for spawns under
+    // cover. Deep dungeons and caves grow deadlier than the land above them.
+    depth_m: [24.0, 64.0],
 )

@@ -6,6 +6,8 @@ pub const ARC_MODE: u32 = 3;
 pub const ARC_RECIPES: std::ops::Range<usize> = 12..16;
 pub const GOLD_RECIPE: usize = 22;
 pub const QUARTZ_RECIPE: usize = 3;
+/// Crusher recipe ids that grind an ingot back to dust.
+const INGOT_PULVERIZE: std::ops::Range<usize> = 4..7;
 pub const CONCENTRATE_PER_INGOT: u32 = 16 * 64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -150,7 +152,7 @@ impl Kind {
             Self::InductionPort => &super::induction::PORT_MODES,
             Self::Cultivator => &[
                 "Biomass: 1 reusable culture + 0.25 fibre → 2 biomass",
-                "Lumen: 2 biomass → 1 fibre",
+                "Lumen: 32 biomass → 3 fibre",
                 "Fermenter: 2 biomass + 0.25 fibre → 1 bio-ethanol",
                 "Grass Press",
                 "Wet Fermentation",
@@ -253,7 +255,9 @@ impl Node {
         let (start, end) = match self.kind {
             Kind::Furnace if self.mode == GOLD_MODE => (GOLD_RECIPE, GOLD_RECIPE + 1),
             Kind::Washer if super::placer::sluice(self) => return 0..0,
-            Kind::Crusher | Kind::Washer => (0, QUARTZ_RECIPE + 1),
+            // Ids 4..7 are ingot pulverizing, crusher only.
+            Kind::Crusher => (0, INGOT_PULVERIZE.end),
+            Kind::Washer => (0, QUARTZ_RECIPE + 1),
             Kind::Furnace if self.mode == 1 => (0, 3),
             Kind::Furnace if self.mode == ARC_MODE => (ARC_RECIPES.start, ARC_RECIPES.end),
             Kind::Furnace => (9, 12),

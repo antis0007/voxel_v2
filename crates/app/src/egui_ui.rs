@@ -24,7 +24,7 @@ mod description_copy;
 mod factory;
 mod habitats;
 mod hud_style;
-mod hud_layout;
+pub(crate) mod hud_layout;
 mod front_end;
 mod grimoire;
 pub(crate) mod held_art;
@@ -33,7 +33,8 @@ mod icons_spells;
 mod inventory;
 pub(crate) mod workshop;
 pub(crate) use inventory::creative_items;
-mod look_at;
+pub(crate) mod look_at;
+mod pickup_feed;
 mod loading_screen;
 mod planet_loading;
 mod planet_editor;
@@ -69,6 +70,12 @@ mod production;
 mod magic_guide;
 mod recipe_book;
 pub(crate) use recipe_book::{open_magic_guide, publish_study};
+
+/// Points the inventory's recipe browser at `item` (its uses when `uses`), as
+/// JEI's R and U do; the caller opens the inventory, which takes the request.
+pub(crate) fn show_recipe(ctx: &egui::Context, item: crate::world::inventory::Item, uses: bool) {
+    recipe_book::request(ctx, item, uses);
+}
 mod relics;
 mod resonance;
 mod settings;
@@ -148,6 +155,8 @@ pub enum UiAction {
     BackToWorldSelect,
     SaveWorld,
     OpenWorld(String),
+    /// Open a saved world and host it for friends once it has spawned.
+    HostWorld(String),
     RefreshWorlds,
     /// Confirmed in the world browser; clears the player's save folder.
     DeleteAllWorlds,
@@ -653,37 +662,6 @@ fn draw_held_tool_overlay(
             painter.add(egui::Shape::mesh(mesh));
         }
     }
-}
-
-fn draw_held_weapon_overlay(
-    ctx: &egui::Context,
-    tier: u32,
-    head_material: u8,
-    pose: &HeldToolPoseState,
-) {
-    if tier == 0 {
-        return;
-    }
-    let screen = ctx.content_rect();
-    let attack = if pose.action_phase > 0.0 {
-        (1.0 - pose.action_phase).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    let swing = (attack * std::f32::consts::PI).sin();
-    let size = egui::vec2(84.0, 84.0);
-    let origin = screen.right_bottom() - egui::vec2(size.x + 18.0, size.y + 88.0)
-        + egui::vec2(-swing * 26.0, swing * 18.0);
-    let rect = egui::Rect::from_min_size(origin, size);
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Background,
-        egui::Id::new("held_pixel_sword"),
-    ));
-    let accent = (head_material != 0).then(|| {
-        let [r, g, b] = crate::world::adventure::tinkering::material_color(head_material);
-        Color32::from_rgb(r, g, b)
-    });
-    icons::paint_tinted(&painter, rect, icons::Icon::Sword(tier), accent);
 }
 
 fn add_3d_box(
@@ -1658,6 +1636,10 @@ pub struct EguiUi {
     /// The factory assembly under the crosshair, for the look-at panel.
     pub target_machine: Option<crate::world::factory::Probe>,
     pub target_cell_temp_c: Option<f32>,
+    /// Climate temperature at the target, so the look-at panel shows only departures from it.
+    pub target_ambient_c: Option<f32>,
+    /// Survival harvest facts for the target with the held tool.
+    pub target_harvest: Option<look_at::Harvest>,
     pub target_volume_ul: Option<u64>,
     pub target_water: Option<crate::world::water_tools::Reading>,
     pub manyfold_hint: Option<&'static str>,
@@ -1711,7 +1693,7 @@ pub struct EguiUi {
 }
 
 impl EguiUi {
-    #[cfg(feature = "multiplayer-sdr")]
+    #[cfg(feature = "multiplayer")]
     pub fn show_friends(&mut self) {
         self.home_page = front_end::HomePage::Online;
         self.pause_page = front_end::PausePage::Online;
@@ -1781,6 +1763,8 @@ impl EguiUi {
             target_block: None,
             target_machine: None,
             target_cell_temp_c: None,
+            target_ambient_c: None,
+            target_harvest: None,
             target_volume_ul: None,
             target_water: None,
             manyfold_hint: None,
@@ -1791,7 +1775,7 @@ impl EguiUi {
             mouse_sensitivity: 0.0025,
             invert_mouse: false,
             ui_scale: crate::preferences::UI_SCALE_DEFAULT,
-            hotbar_scale: 1.0,
+            hotbar_scale: crate::preferences::HOTBAR_SCALE_DEFAULT,
             offhand_right: false,
             persistence_status: None,
             quality_notice: None,
@@ -2943,6 +2927,8 @@ impl EguiUi {
                             &look_at::LookAt {
                                 block,
                                 temperature_c: self.target_cell_temp_c,
+                                ambient_c: self.target_ambient_c,
+                                harvest: self.target_harvest,
                                 volume_ul: self.target_volume_ul,
                                 water: self.target_water,
                                 bucket_ul: self.survival.hotbar[creative_state.selected_slot].and_then(|s| match s.item {
@@ -3051,50 +3037,11 @@ impl EguiUi {
                         );
                     }
 
-                    // Minimal pickup / overflow badge right beside the hotbar
-                    if let Some(pickup) = self.survival.pickup_notice.as_ref().filter(|p| {
-                        inventory::unlocks::pickup_toast_open(p.item, &self.adventure, creative_state.locked())
-                    }) {
-                        egui::Area::new(egui::Id::new("survival_pickup_toast"))
-                            .anchor(
-                                Align2::LEFT_BOTTOM,
-                                [
-                                    (hotbar.response.rect.right() + 10.0)
-                                        .min(self.ctx.content_rect().right() - 150.0),
-                                    -12.0,
-                                ],
-                            )
-                            .interactable(false)
-                            .show(&self.ctx, |ui| {
-                                presentation::hud_frame(ui.ctx()).show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        let (r, _) = ui.allocate_exact_size(
-                                            egui::vec2(18.0, 18.0),
-                                            egui::Sense::hover(),
-                                        );
-                                        inventory::draw_item_icon(ui.painter(), r, pickup.item);
-                                        if pickup.overflow {
-                                            ui.label(
-                                                RichText::new("PACK FULL")
-                                                    .size(11.5)
-                                                    .strong()
-                                                    .color(presentation::AMBER),
-                                            );
-                                        } else {
-                                            ui.label(
-                                                RichText::new(format!(
-                                                    "+{} {}",
-                                                    pickup.count,
-                                                    pickup.item.name()
-                                                ))
-                                                .size(9.0)
-                                                .color(presentation::JADE),
-                                            );
-                                        }
-                                    });
-                                });
-                            });
-                    }
+                    // Pickup feed, bottom right above the subtitles; a badge beside
+                    // the hotbar read as a tenth slot.
+                    pickup_feed::draw(&self.ctx, self.survival.pickup_notice.as_ref().filter(|p| {
+                        inventory::unlocks::pickup_toast_open(&self.ctx, p.item, &self.adventure, creative_state.locked())
+                    }));
                 }
             }
         }
@@ -3227,9 +3174,11 @@ impl EguiUi {
                             let center = rect.center();
                             let painter = ui.painter();
 
+                            // A firmer dark rim: at 1.5 pt over a 120-alpha shadow the
+                            // cross vanished on pale stone and overcast sky.
                             let shadow = egui::Stroke::new(
-                                3.0,
-                                Color32::from_rgba_premultiplied(0, 0, 0, 120),
+                                4.0,
+                                Color32::from_rgba_premultiplied(0, 0, 0, 170),
                             );
                             painter.line_segment(
                                 [center - egui::vec2(8.0, 0.0), center + egui::vec2(8.0, 0.0)],
@@ -3240,7 +3189,7 @@ impl EguiUi {
                                 shadow,
                             );
 
-                            let stroke = egui::Stroke::new(1.5, self.tool_feedback.color());
+                            let stroke = egui::Stroke::new(2.0, self.tool_feedback.color());
                             painter.line_segment(
                                 [center - egui::vec2(7.0, 0.0), center + egui::vec2(7.0, 0.0)],
                                 stroke,
@@ -3262,22 +3211,11 @@ impl EguiUi {
                             creative_state.tool,
                         );
                     }
-                    // Survival draws the held weapon in the 3D viewmodel; the flat copy
-                    // here doubled it in the corner of the screen.
-                    if creative_state.tool == ToolKind::Hand
-                        && !rig_owns_hand
-                        && !creative_state.locked()
-                        && self.survival.hotbar[creative_state.selected_slot].is_some_and(|s| {
-                            matches!(s.item, crate::world::inventory::Item::Weapon(_))
-                        })
-                    {
-                        draw_held_weapon_overlay(
-                            &self.ctx,
-                            self.adventure.weapon,
-                            self.adventure.tool_head,
-                            &self.held_tool_pose,
-                        );
-                    }
+                    // The held weapon is drawn by the 3D viewmodel in every mode
+                    // (`held_item`); the flat corner copy that used to sit here
+                    // duplicated it bottom right.
+                    // Last, so every element has claimed its rect this pass.
+                    hud_layout::editor(&self.ctx);
                 }
             }
             UiMode::Paused | UiMode::WorldSelect | UiMode::Loading => {}

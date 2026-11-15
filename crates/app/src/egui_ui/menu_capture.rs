@@ -199,7 +199,7 @@ pub(crate) async fn run(root: &Path) -> Result<()> {
                         let recent = if label == "title-fresh" { None }
                             else if label == "title-long-world" { Some("The Copper Valley — Northern Observatory and Riverside Workshop") }
                             else { Some("Workshop") };
-                        super::main_menu::draw(root, recent, label == "title-busy", None);
+                        super::main_menu::draw(root, recent.map(|name| (name, "Wildlands · 2 h ago")), label == "title-busy", None);
                     }
                 },
             );

@@ -104,9 +104,11 @@ pub enum Cue {
     Land,
     /// Grazing animal call; pitch scales with body size.
     Bleat,
+    /// Slime gel rebound: a wet slap under a wobbling rising tone.
+    Boing,
 }
 impl Cue {
-    const COUNT: usize = 31;
+    const COUNT: usize = 32;
 }
 #[derive(Clone, Copy)]
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -145,7 +147,7 @@ pub(crate) fn reverb_send(cue: Cue) -> f32 {
         | Cue::CinderStrike => 0.22,
         Cue::Spark | Cue::Frost | Cue::Swing | Cue::Ward => 0.08,
         // Movement is constant and close to the ear: keep it dry.
-        Cue::Dash | Cue::Slide | Cue::AirJump => 0.06,
+        Cue::Dash | Cue::Slide | Cue::AirJump | Cue::Boing => 0.06,
         Cue::Land => 0.12,
         _ => 0.24,
     }

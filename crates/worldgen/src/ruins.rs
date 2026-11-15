@@ -54,6 +54,11 @@ impl CacheLoot {
 pub(crate) fn enabled(cfg: &WorldSampleConfig) -> bool {
     cfg.generator_version >= VERSION && matches!(cfg.world_type, crate::WorldType::Hills | crate::WorldType::Ridged | crate::WorldType::Planet)
 }
+fn outskirts_enabled(cfg: &WorldSampleConfig) -> bool {
+    crate::features::legacy_preview(cfg.generator_version, outskirts::VERSION)
+        || cfg.generator_version >= engine_voxel::REGIONAL_CIVILIZATION_GENERATOR
+}
+
 pub(crate) const CELL: f32 = 1024.0;
 const BUCKET: f32 = 8.0;
 const CORNER: f32 = 14.0;
@@ -100,6 +105,8 @@ pub struct District {
 pub const POST_ID_Y: i32 = 20_000;
 
 impl District {
+    pub fn is_city(&self) -> bool { self.urban.is_some_and(|urban| urban.city) }
+
     /// Positions from the same station kit that produces the voxel geometry.
     /// Consumers must still survey track continuity before offering travel.
     pub fn stations(&self) -> Vec<crate::public_works::Station> {
@@ -239,7 +246,7 @@ fn plan(cfg: &WorldSampleConfig, ix: i32, iz: i32) -> Slot {
         }
     }
     let top = datum + plan.parts.iter().map(|p| p.hi.y).fold(0.0, f32::max);
-    let outskirts = urban.filter(|u| u.city && cfg.generator_version >= outskirts::VERSION).map(|urban| {
+    let outskirts = urban.filter(|u| u.city && outskirts_enabled(cfg)).map(|urban| {
         let ramps: Vec<_> = approaches.iter().map(|ramp| ramp.span()).collect();
         outskirts::Outskirts::plan(urban, seed, &ramps, |lo, hi| {
             plan.parts.iter().any(|p| p.lo.x < hi.x && p.hi.x > lo.x && p.lo.z < hi.y && p.hi.z > lo.y)
@@ -327,7 +334,7 @@ pub fn block(cfg: &WorldSampleConfig, p: IVec3, m: Vec3, terrain_top: f32) -> Op
         return Some(block);
     }
     // Outskirts sit on the ground: only the band around the terrain top can hold them.
-    if cfg.generator_version < outskirts::VERSION || m.y < terrain_top - 4.0 || m.y > terrain_top + 8.0 {
+    if !outskirts_enabled(cfg) || m.y < terrain_top - 4.0 || m.y > terrain_top + 8.0 {
         return None;
     }
     sprawl(cfg, m.x, m.z).into_iter().flatten().find_map(|d| d.outskirt(cfg, p, m, terrain_top))
@@ -400,7 +407,7 @@ pub fn clears_vegetation(cfg: &WorldSampleConfig, x: f32, z: f32) -> bool {
     district_at(cfg, x, z).is_some_and(|d| {
         let q = d.local(Vec3::new(x, d.datum, z));
         d.inside(q) > -3.0 || d.on_approach(q, 1.0)
-    }) || (cfg.generator_version >= outskirts::VERSION
+    }) || (outskirts_enabled(cfg)
         && sprawl(cfg, x, z).into_iter().flatten().any(|d| d.sprawl_clears(x, z, 0.5)))
 }
 
@@ -411,7 +418,7 @@ pub(crate) fn tree_conflicts(cfg: &WorldSampleConfig, x: f32, z: f32, reach: f32
             let q = d.local(Vec3::new(x, d.datum, z));
             d.inside(q) > -reach - 3.0 || d.on_approach(q, reach + 1.0)
         })
-        || (cfg.generator_version >= outskirts::VERSION && enabled(cfg)
+        || (outskirts_enabled(cfg) && enabled(cfg)
             && sprawl(cfg, x, z).into_iter().flatten().any(|d| d.sprawl_clears(x, z, reach)))
 }
 

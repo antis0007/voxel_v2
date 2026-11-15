@@ -2,9 +2,10 @@
 // `id` is saved in goals.vxg: lowercase, digits and underscores; never rename a shipped id.
 // Conditions: HasItem(item, count), Placed(block), Machine(kind), Event(Ate | Slept |
 // NightSurvived | GateAttuned | GatesLinked | HedronCaptured | CircleDrawn | WorkshopEntered |
-// SpellCast | LiftBoarded | CrownReached), Stocked(source_machine, sink_machine), GuardianDefeated.
-// The track is one spine of nine acts: Workshop, Survival, Base, Machine, Power, Magic, Guardian,
-// Portal, Orbit. Rows the starting kit already meets are credited silently when a world begins;
+// SpellCast | LiftBoarded | CrownReached | DrillDelivered | FieldSmelted | FurnaceIngot), GuardianDefeated.
+// Optional rows can be completed at any time and never hold up the tracker.
+// Goal tiers group Workshop, Survival, Base, Machine, Power, Magic, Guardian, Portal and Orbit.
+// Rows the starting kit already meets are credited silently when a world begins;
 // a world without a starter workshop skips WorkshopEntered. Order is the order offered; ids are
 // saved, so reorder or retitle freely but never rename an id.
 // `cargo test goals_ron_round_trips` checks the format.
@@ -43,6 +44,7 @@
         title: "Wooden Axe",
         action: "Place the bench. Craft with four planks.",
         condition: HasItem(Tool(12), 1),
+        optional: true,
     ),
     (
         id: "timber",
@@ -50,6 +52,7 @@
         title: "Timber",
         action: "Axe the trunk base. Collect fallen logs.",
         condition: HasItem(Block(Log), 8),
+        optional: true,
     ),
     (
         id: "ration",
@@ -57,6 +60,7 @@
         title: "Fungal Ration",
         action: "[Inventory] Eat a ration when hunger runs low.",
         condition: HasItem(Food(FungalRation), 1),
+        optional: true,
     ),
     (
         id: "meal",
@@ -64,12 +68,13 @@
         title: "Meal",
         action: "Hold a food and use it. Eating also heals slowly.",
         condition: Event(Ate),
+        optional: true,
     ),
     (
         id: "torches",
         tier: Base,
         title: "Torches",
-        action: "[Inventory] Torches light a base and keep monsters off.",
+        action: "[Inventory] Craft torches. Light a room with walls and a roof, or use the workshop.",
         condition: HasItem(Block(Torch), 4),
     ),
     (
@@ -78,6 +83,7 @@
         title: "Bed",
         action: "Place a bed, or use the one in the workshop. Sleeping sets the respawn point.",
         condition: Placed(Bed),
+        optional: true,
     ),
     (
         id: "first_night",
@@ -85,6 +91,7 @@
         title: "First Night",
         action: "Stay near light until dawn. Sleeping in a bed also counts.",
         condition: Event(NightSurvived),
+        optional: true,
     ),
     (
         id: "sleep",
@@ -92,62 +99,98 @@
         title: "Sleep",
         action: "Use a bed at night to skip to morning.",
         condition: Event(Slept),
+        optional: true,
+    ),
+    (
+        id: "wooden_pickaxe",
+        tier: Survival,
+        title: "Wooden Pickaxe",
+        action: "[F] Open a placed workbench and craft a pickaxe from planks.",
+        condition: HasItem(Tool(6), 1),
     ),
     (
         id: "cobblestone",
         tier: Machine,
         title: "Cobblestone",
-        action: "[Break] Mine stone. Cobblestone smelts and builds.",
+        action: "[Break] Mine exposed stone with a pickaxe. Craft the stone into cobblestone.",
         condition: HasItem(Block(Cobblestone), 4),
+    ),
+    (
+        id: "stone_pickaxe",
+        tier: Machine,
+        title: "Stone Pickaxe",
+        action: "[F] Use a workbench to upgrade to stone. Take it underground for ore.",
+        condition: HasItem(Tool(7), 1),
     ),
     (
         id: "ore_processor",
         tier: Machine,
-        title: "Ore Processor",
-        action: "[Inventory] Craft an Ore Processor and place it. Feed it ore and coal.",
-        condition: Placed(Smelter),
+        title: "Field smelter",
+        action: "Carry copper ore and coal from exposed rock or a cave. Place a Field smelter and use [F].",
+        condition: Event(FieldSmelted),
+        recipe: Some(Block(Smelter)),
     ),
     (
         id: "copper_ingots",
         tier: Machine,
         title: "Copper Ingots",
-        action: "Put copper ore and coal in the Ore Processor, then take the ingots.",
+        action: "[F] Use a Field smelter with ore and coal in your pack. Each ingot takes 1 ore and ¼ coal.",
         condition: HasItem(Resource(6), 2),
+        optional: true,
     ),
     (
         id: "iron_ingots",
         tier: Power,
         title: "Iron Ingots",
-        action: "Smelt iron ore the same way. Iron makes tools and machines.",
-        condition: HasItem(Resource(8), 2),
+        action: "[F] Smelt iron ore from underground. Save three ingots for a pickaxe.",
+        condition: HasItem(Resource(8), 3),
+    ),
+    (
+        id: "iron_pickaxe",
+        tier: Power,
+        title: "Iron Pickaxe",
+        action: "[F] Craft at a workbench. Take it into deeper caves.",
+        condition: HasItem(Tool(8), 1),
     ),
     (
         id: "coal_generator",
         tier: Power,
         title: "Coal Generator",
-        action: "[Inventory] Craft a Coal Generator and place it. Feed it coal.",
+        action: "Place a Coal Generator outdoors. Open it with [F] and select Load All Fuel.",
         condition: Machine(Generator),
+    ),
+    (
+        id: "first_powered_ingot",
+        tier: Power,
+        title: "Power Your First Furnace",
+        action: "Cable the generator to an Electric furnace. Open it with [F], select Ore mode and supply raw ore.",
+        condition: Event(FurnaceIngot),
+        recipe: Some(Block(ElectricFurnace)),
     ),
     (
         id: "mining_drill",
         tier: Power,
         title: "Mining Drill",
-        action: "[Inventory] Craft a Mining Drill, place it on ore and power it.",
+        action: "Place a Mining Drill over an exposed ore vein. Link it to the generator with power cable.",
         condition: Machine(MiningDrill),
+        optional: true,
     ),
     (
         id: "ore_line",
         tier: Power,
         title: "Ore Line",
-        action: "Run an item pipe from the drill to an output crate and let ore arrive.",
-        condition: Stocked(MiningDrill, Storage),
+        action: "Connect the drill to an Output crate with Item pipe. Check both ports, then wait for ore to arrive.",
+        condition: Event(DrillDelivered),
+        recipe: Some(Block(ItemPipe)),
+        optional: true,
     ),
     (
         id: "cast_spell",
         tier: Magic,
         title: "Cast a Spell",
-        action: "The first wand sits in the hotbar. Select it and hold the cast key.",
+        action: "Select your starter wand and use [Cast].",
         condition: Event(SpellCast),
+        optional: true,
     ),
     (
         id: "ritual_circle",
@@ -155,6 +198,7 @@
         title: "Ritual Circle",
         action: "[Inventory] Wand page: write a RING phrase, then Draw Circle.",
         condition: Event(CircleDrawn),
+        optional: true,
     ),
     (
         id: "guardian_cleared",
@@ -162,6 +206,7 @@
         title: "Defeat a Guardian",
         action: "Take a wand or sword down the workshop mine and defeat the guardian in the vault.",
         condition: GuardianDefeated,
+        optional: true,
     ),
     (
         id: "crystal_blocks",

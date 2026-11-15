@@ -1,8 +1,10 @@
 use engine_core::VoxelScalePreset;
 
-/// Default generator and upper bound for general-purpose generators.
-/// Realm-specific versions are also accepted by world storage.
-pub const CURRENT_GENERATOR_VERSION: u32 = WORKSHOP_SUPPLY_GENERATOR;
+/// First shared default for Hills, Ridged and Planet.
+pub const SHARED_SURFACE_GENERATOR: u32 = 321;
+/// Shared regional civilization and Anchor outskirts.
+pub const REGIONAL_CIVILIZATION_GENERATOR: u32 = 322;
+pub const CURRENT_GENERATOR_VERSION: u32 = REGIONAL_CIVILIZATION_GENERATOR;
 /// The starter workshop has a flooded supply gallery off its mine decline.
 pub const WORKSHOP_SUPPLY_GENERATOR: u32 = 241;
 /// Regional landmarks follow their habitats and farmhouses cluster in villages.
@@ -169,9 +171,11 @@ pub const DIKE_SWARM_GENERATOR: u32 = 298;
 pub const ANCHOR_OUTSKIRTS_GENERATOR: u32 = 299;
 /// Generator 298 terrain and 296 lowland rivers plus slope-aligned gullies, rock benches and terracettes (opt-in).
 pub const CARVED_SURFACE_GENERATOR: u32 = 300;
+/// Dungeon tilework, false-wall caches and shared mechanical fittings.
+pub const DUNGEON_MECHANISMS_GENERATOR: u32 = 310;
 /// Generator 300 terrain plus rock relief: solved bed resistance raises risers and caprock benches (opt-in).
 pub const ROCK_RELIEF_GENERATOR: u32 = 304;
-pub const PLANET_GENERATOR_VERSION: u32 = CLEAN_RIVERBED_GENERATOR;
+pub const PLANET_GENERATOR_VERSION: u32 = CURRENT_GENERATOR_VERSION;
 pub const WORLD_MIN_Y_METERS: f32 = -16.0;
 pub const WORLD_MAX_Y_METERS: f32 = 512.0;
 pub const WATER_LEVEL_METERS: f32 = 12.0;
@@ -179,7 +183,9 @@ pub const WATER_LEVEL_METERS: f32 = 12.0;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize)]
 pub enum WorldType {
     Superflat,
+    /// Legacy surface terrain retained for existing saves and generation reviews.
     Hills,
+    /// Legacy highlands retained for existing saves and generation reviews.
     Ridged,
     /// A planet's region in the shared Nether dimension; seed is the parent planet seed.
     Nether,
@@ -195,6 +201,18 @@ pub enum WorldType {
 }
 
 /// Pocket dimensions sharing one crossing and one save slot scheme.
+///
+/// Adding a realm (each step is one arm or one file; the compiler lists the
+/// exhaustive matches that need an arm):
+/// 1. A variant here, appended, with `code`, `title`, `short`, `has_sky`.
+/// 2. A pure generator `engine_worldgen::<realm>` with `column`, `block`,
+///    `spawn`, and its dispatch lines in `engine_worldgen::sample_column_uncached`
+///    and `sample_block_in_world`. No gate is needed for a realm's first layout.
+/// 3. A gate block and its arm in `app::world::lightless_gate::{gate_realm, file, arrival}`.
+/// 4. Presentation: `portals::realm::realm_lighting`, motes in
+///    `mesh::models::realm_air::families`, spawns via `habitat::Context::at`.
+/// 5. Optional life: a module like `app::world::lightless_life` (sidecar state,
+///    seeded steps, away-time replay from the day clock).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, serde::Deserialize)]
 pub enum RealmKind {
     /// Lightless caverns under every world. Dense ore; the dark is lethal.
@@ -203,16 +221,19 @@ pub enum RealmKind {
     Gilded,
     /// The Highfold: islands hanging over a shallow sea, reached from high open ground.
     Highfold,
+    /// The Gloaming: a dusk forest of giant trees, reached from deep woods.
+    Gloaming,
 }
 
 impl RealmKind {
-    pub const ALL: [RealmKind; 3] = [RealmKind::Lightless, RealmKind::Gilded, RealmKind::Highfold];
+    pub const ALL: [RealmKind; 4] = [RealmKind::Lightless, RealmKind::Gilded, RealmKind::Highfold, RealmKind::Gloaming];
     /// Save and checkpoint code; append new kinds, never reorder.
     pub const fn code(self) -> u8 {
         match self {
             RealmKind::Lightless => 7,
             RealmKind::Gilded => 8,
             RealmKind::Highfold => 9,
+            RealmKind::Gloaming => 10,
         }
     }
     pub fn from_code(code: u8) -> Option<Self> {
@@ -224,6 +245,7 @@ impl RealmKind {
             RealmKind::Lightless => "The Lightless",
             RealmKind::Gilded => "The Gilded Cave",
             RealmKind::Highfold => "The Highfold",
+            RealmKind::Gloaming => "The Gloaming",
         }
     }
     /// One-word label for world lists.
@@ -232,11 +254,12 @@ impl RealmKind {
             RealmKind::Lightless => "Lightless",
             RealmKind::Gilded => "Gilded Cave",
             RealmKind::Highfold => "Highfold",
+            RealmKind::Gloaming => "Gloaming",
         }
     }
     /// Open sky: daylight, weather-free air and surface streaming bands.
     pub const fn has_sky(self) -> bool {
-        matches!(self, RealmKind::Highfold)
+        matches!(self, RealmKind::Highfold | RealmKind::Gloaming)
     }
 }
 

@@ -17,7 +17,7 @@ struct Nursery {
 
 fn site(world: &World) -> Option<Nursery> {
     let cfg = world.sample_config();
-    if cfg.world_type != engine_worldgen::WorldType::Hills {
+    if !engine_worldgen::features::enabled(&cfg, engine_worldgen::features::Feature::Nursery) {
         return None;
     }
     let p = engine_worldgen::fernwake::nursery(&cfg)?;

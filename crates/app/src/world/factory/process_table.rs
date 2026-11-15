@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn the_shipped_table_loads_and_keeps_the_ids_code_refers_to() {
         let table = build(include_str!("../../../../../assets/processes.ron")).unwrap();
-        assert_eq!(table.len(), 26);
+        assert_eq!(table.len(), 29);
         assert_eq!(get(Kind::Furnace, GOLD_RECIPE).unwrap().output, (crate::world::factory::GOLD_INGOT, 64));
         for kind in [Kind::Crusher, Kind::Washer] {
             let quartz = get(kind, QUARTZ_RECIPE).unwrap();

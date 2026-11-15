@@ -195,12 +195,15 @@ pub(super) fn codex(ui: &mut egui::Ui, view: &View) {
 
 pub(super) fn encounter(ctx: &egui::Context, view: &View) {
     if let Some(boss) = &view.boss {
-        egui::Area::new(egui::Id::new("guardian_health"))
-            .anchor(Align2::LEFT_TOP, [12.0, 82.0])
+        // Boss bars own the top of the screen, as in every pack: the compass and
+        // look-at stack below it (`boss_bar` in assets/hud_layout.ron).
+        let slot = super::hud_layout::place(ctx, "boss_bar");
+        let shown = egui::Area::new(egui::Id::new("guardian_health"))
+            .anchor(slot.align, slot.offset)
             .interactable(false)
             .show(ctx, |ui| {
                 style::hud_frame(ui.ctx()).show(ui, |ui| {
-                    ui.set_width((ctx.content_rect().width() - 48.0).clamp(100.0, 220.0));
+                    ui.set_width(slot.width.unwrap_or(320.0).min(ctx.content_rect().width() - 48.0).max(100.0));
                     ui.vertical_centered(|ui| {
                         ui.label(RichText::new(boss.name).color(style::AMBER).size(12.0));
                         ui.label(
@@ -231,6 +234,7 @@ pub(super) fn encounter(ctx: &egui::Context, view: &View) {
                     });
                 });
             });
+        super::hud_layout::claim(ctx, "boss_bar", shown.response.rect);
     }
     if let Some(biome) = view.hell_biome {
         egui::Area::new(egui::Id::new("hell_biome"))

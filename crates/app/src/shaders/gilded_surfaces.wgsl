@@ -161,7 +161,7 @@ fn gvein(x: vec2<f32>, scale_m: f32, width: f32) -> f32 {
     return 1.0 - smoothstep(width * 0.5, width, d);
 }
 
-// Teal grotto rock: cool mottled limestone, pale calcite veins, flowstone runs
+// Cobalt grotto rock: cool mottled limestone, pale calcite veins, flowstone runs
 // down the walls and a wet film that tightens the highlight.
 fn gilded_grotto(base: vec3<f32>, p: vec3<f32>, n: vec3<f32>, uv: vec2<f32>, fp: f32) -> vec3<f32> {
     let t = floor(uv * PIXEL_RES);
@@ -170,23 +170,24 @@ fn gilded_grotto(base: vec3<f32>, p: vec3<f32>, n: vec3<f32>, uv: vec2<f32>, fp:
     let r = vec2<f32>(q.x * 0.80 - q.y * 0.60, q.x * 0.60 + q.y * 0.80);
     let tw = surface_detail_weight(fp * PIXEL_RES);
     let vein_w = surface_detail_weight(fp * PIXEL_RES / 2.0);
-    let deep = gc(14.0, 40.0, 62.0);
-    let mid = gc(38.0, 124.0, 142.0);
-    let pale = gc(100.0, 182.0, 186.0);
+    // Cobalt to indigo rock: the cold grotto of the colour keys, lit cyan by the pool.
+    let deep = gc(14.0, 22.0, 64.0);
+    let mid = gc(40.0, 72.0, 156.0);
+    let pale = gc(104.0, 150.0, 214.0);
     let mottle = surface_noise_filtered(r / 0.9 + vec2<f32>(7.0, 2.0), fp / 0.9) * 0.6
         + surface_noise_filtered(r / 0.31 + vec2<f32>(-3.0, 8.0), fp / 0.31) * 0.4;
     var col = mix(deep, mid, smoothstep(0.28, 0.62, mottle));
     col = mix(col, pale, smoothstep(0.64, 0.84, mottle) * 0.5);
     let vein = max(gvein(r / 1.3 + vec2<f32>(31.0, 17.0), 1.3, 1.6),
         gvein(vec2<f32>(r.y, -r.x) / 0.5 + vec2<f32>(-13.0, 5.0), 0.5, 1.1) * 0.6);
-    col = mix(col, gc(206.0, 240.0, 236.0), vein * vein_w * 0.8);
+    col = mix(col, gc(200.0, 224.0, 246.0), vein * vein_w * 0.35);
     var wet = 0.0;
     if abs(n.y) < 0.5 {
         // Flowstone: soft vertical curtains, lighter and glossy.
         let bend = surface_noise_filtered(q * vec2<f32>(1.3, 0.6) + vec2<f32>(5.0, 1.0), fp * 1.3) * 1.6;
         let run = surface_noise_filtered(vec2<f32>(q.x * 3.6 + bend, q.y * 0.45) + vec2<f32>(9.0, 2.0), fp * 3.6);
         let flow = smoothstep(0.56, 0.82, run);
-        col = mix(col, gc(148.0, 212.0, 204.0), flow * 0.38);
+        col = mix(col, gc(120.0, 162.0, 228.0), flow * 0.45);
         wet = flow;
     } else if n.y > 0.5 {
         wet = smoothstep(0.55, 0.75, surface_noise_filtered(r / 1.3 + vec2<f32>(3.0, 3.0), fp / 1.3));
@@ -315,15 +316,22 @@ fn gilded_jeweled(base: vec3<f32>, p: vec3<f32>, n: vec3<f32>, uv: vec2<f32>, fp
     var metal = 1.0;
     var rough = 0.55;
     gtilt(n, vec2<f32>(cos(local.x * 0.9), sin(local.y * 0.8)) * scroll, 0.06 * tw);
+    // Stones vary in size; some settings hold a plain gold boss instead.
+    let gem_r = 2.1 + 0.9 * fract(id * 3.1);
+    let boss = id < 0.16;
     // Beaded bezel: a ring of 1-texel pearls of gold.
-    let bezel = r > 3.0 && r < 4.3;
+    let bezel = r > gem_r && r < gem_r + 1.3;
     if bezel {
         let bead = gmod(floor(atan2(d.y, d.x) * 3.2), 2.0);
         col = mix(mid, hi, 0.3 + bead * 0.6) * select(0.85, 1.15, d.x < 0.0 && d.y > 0.0);
         rough = 0.35;
         gtilt(n, d / max(r, 0.5), 0.18 * tw);
     }
-    if r <= 3.0 {
+    if boss && r <= gem_r {
+        col = mix(mid, hi, clamp(0.55 - d.x * 0.12 + d.y * 0.12, 0.0, 1.0));
+        rough = 0.30;
+        gtilt(n, d / max(gem_r, 1.0), 0.25 * tw);
+    } else if r <= gem_r {
         // Cabochon: deep colour, a hot highlight up-left, light pooled low-right.
         let k = fract(id * 13.7);
         var gem = gc(206.0, 24.0, 52.0);
@@ -331,17 +339,17 @@ fn gilded_jeweled(base: vec3<f32>, p: vec3<f32>, n: vec3<f32>, uv: vec2<f32>, fp
         if k > 0.55 { gem = gc(30.0, 70.0, 200.0); }
         if k > 0.78 { gem = gc(128.0, 52.0, 170.0); }
         if k > 0.93 { gem = gc(236.0, 230.0, 214.0); }
-        let dome = 1.0 - r / 3.0;
+        let dome = 1.0 - r / gem_r;
         var c = gem * (0.55 + dome * 0.55);
         let glint = select(0.0, 1.0, d.x < -0.5 && d.x > -2.0 && d.y > 0.5 && d.y < 2.0);
-        let pool = select(0.0, 1.0, d.x > 0.5 && d.y < -0.5 && r < 2.6);
+        let pool = select(0.0, 1.0, d.x > 0.5 && d.y < -0.5 && r < gem_r - 0.4);
         c = mix(c, c * 1.8 + vec3<f32>(0.10), pool * 0.45);
         c = mix(c, vec3<f32>(1.0, 0.97, 0.90), glint * 0.75);
         col = c;
         metal = 0.0;
         rough = 0.12;
         gilded_glow = gem * pool * 0.012;
-        gtilt(n, d / 3.0, 0.30 * tw);
+        gtilt(n, d / gem_r, 0.30 * tw);
     }
     col *= 1.0 + gmacro(p, fp, 4.0) * 0.08;
     gilded_metal = mix(0.55, metal * 0.62, cell_w);

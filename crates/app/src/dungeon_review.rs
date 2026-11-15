@@ -51,18 +51,7 @@ pub fn camera(player: &mut Player, cfg: &WorldSampleConfig, elapsed: f32) -> boo
 fn view(mode: &str, cfg: &WorldSampleConfig) -> Option<(Vec3, Vec3)> {
     // `gilded:<view>`: authored Gilded Cave set pieces, in realm metres.
     if let Some(name) = mode.strip_prefix("gilded:") {
-        return Some(match name {
-            "arrival" => (Vec3::new(0.5, 1.7, -3.5), Vec3::new(0.0, -7.0, 14.0)),
-            "gallery" => (Vec3::new(0.0, -10.2, 18.5), Vec3::new(0.0, -8.0, 44.0)),
-            "vault" => (Vec3::new(-3.0, -10.2, 25.5), Vec3::new(13.0, -10.5, 25.5)),
-            "wall" => (Vec3::new(1.5, -10.0, 30.0), Vec3::new(5.0, -9.6, 31.5)),
-            "hoard" => (Vec3::new(0.0, -7.5, 74.0), Vec3::new(0.0, -10.5, 112.0)),
-            "dunes" => (Vec3::new(-14.0, -6.0, 90.0), Vec3::new(8.0, -11.0, 106.0)),
-            "grotto" => (Vec3::new(0.0, -17.3, 149.0), Vec3::new(0.0, 2.0, 172.0)),
-            "stair" => (Vec3::new(12.0, -14.0, 158.0), Vec3::new(0.0, -4.0, 172.0)),
-            "summit" => (Vec3::new(7.0, 9.0, 165.0), Vec3::new(0.0, 6.5, 172.0)),
-            _ => return None,
-        });
+        return engine_worldgen::gilded::review_view(cfg.seed, name);
     }
     if let Some(name) = mode.strip_prefix("anchor:") {
         use engine_worldgen::ruins::{Kind, near};
@@ -171,6 +160,10 @@ fn place(player: &mut Player, cfg: &WorldSampleConfig, mode: &str, eye: Vec3, ta
     player.yaw = direction.x.atan2(-direction.z);
     player.pitch = direction.y.asin();
     player.underwater = false;
+    static PLAN_RECEIPT: OnceLock<()> = OnceLock::new();
+    if mode.starts_with("gilded:") {
+        PLAN_RECEIPT.get_or_init(|| println!("[gilded-plan] {}", engine_worldgen::gilded::plan_summary(cfg.seed)));
+    }
     static RECEIPT: OnceLock<()> = OnceLock::new();
     RECEIPT.get_or_init(|| println!("[dungeon-review] mode={mode} generator={} voxel_m={scale} eye_m={eye:?} target_m={target:?} camera_only=true", cfg.generator_version));
     true

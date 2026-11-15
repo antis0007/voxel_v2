@@ -340,13 +340,17 @@ fn vitals_plate(ui: &egui::Ui, backdrop: egui::layers::ShapeIdx, view: &View, ma
     shapes.push(super::hud_style::plate(ui.ctx(), panel, accent));
     ui.painter().set(backdrop, egui::Shape::Vec(shapes));
     let numeral = if view.mana_poison > 0.0 { POISON } else if low { style::DANGER } else { style::PAPER };
-    ui.painter().text(
-        egui::pos2(panel.left() - 6.0, panel.bottom()),
-        Align2::RIGHT_BOTTOM,
-        format!("{:.0}", view.health.max(0.0).ceil()),
-        FontId::monospace(22.0),
-        numeral,
-    );
+    // The hearts already carry health; a bare number beside them read as an
+    // unlabelled stat. It shows on request, or when the exact value matters.
+    if low || view.mana_poison > 0.0 || ui.input(|i| i.modifiers.alt) {
+        ui.painter().text(
+            egui::pos2(panel.left() - 6.0, panel.bottom()),
+            Align2::RIGHT_BOTTOM,
+            format!("{:.0}", view.health.max(0.0).ceil()),
+            FontId::monospace(22.0),
+            numeral,
+        );
+    }
     if view.absorption > 0.0 {
         // Absorption reads as a gold shield segment under the hearts, sized
         // against full health, with its amount above the health numeral.
@@ -373,28 +377,47 @@ fn vitals_plate(ui: &egui::Ui, backdrop: egui::layers::ShapeIdx, view: &View, ma
     }
 }
 
-/// Recovery and density are separate quantities: lush ground is safe at 6x recovery.
-fn mana_affinity(ui: &mut egui::Ui, view: &View) {
+/// Mana at a glance: a thin bar across the vitals width with the recovery rate
+/// at its end, like the experience bar it sits beside. The bar was only inside
+/// the wand instrument (cooldown or Alt), so a player holding a sword saw a line
+/// of text instead of a gauge, and that text wrapped at 1440p. The state word
+/// appears only off neutral ground. Recovery and density are separate
+/// quantities: lush ground is safe at 6x recovery.
+fn mana_strip(ui: &mut egui::Ui, view: &View, max_mana: f32, width: f32) {
     use crate::world::adventure::affinity::{BLIGHT_BELOW, POISON_AT};
     let m = view.affinity;
     let (state, color) = if m >= POISON_AT {
-        ("  ·  Mana poisoning", POISON)
+        (Some("Poisoning"), POISON)
     } else if m < BLIGHT_BELOW {
-        ("  ·  Blight", Color32::from_rgb(150, 138, 120))
+        (Some("Blight"), Color32::from_rgb(150, 138, 120))
     } else if m >= 1.25 {
-        ("  ·  Affinity", style::MANA)
+        (Some("Affinity"), style::MANA)
     } else {
-        ("", style::MUTED)
+        (None, style::MUTED)
     };
     let recovery = crate::world::ambience::mana_recovery(m);
     let health = crate::world::ambience::health_recovery(m);
-    ui.label(
-        egui::RichText::new(format!("Mana regen {recovery:.1}x{state}"))
-            .monospace()
-            .size(12.0)
-            .color(color),
-    ).on_hover_text(format!("{}\nMana density: {m:.2}x\nHealth regen: {health:.1}x · Well-fed",
-        view.location.unwrap_or("Still air")));
+    let label = match state {
+        Some(word) => format!("{recovery:.1}× · {word}"),
+        None => format!("{recovery:.1}×"),
+    };
+    let galley = ui.painter().layout_no_wrap(label, FontId::monospace(11.0), color);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, galley.size().y.max(9.0)), egui::Sense::hover());
+    let bar_w = (width - galley.size().x - 6.0).max(24.0).floor();
+    let bar = super::grimoire::snap(Rect::from_min_size(
+        egui::pos2(rect.left(), (rect.center().y - 2.5).round()),
+        vec2(bar_w, 5.0),
+    ));
+    let p = ui.painter();
+    p.rect_filled(bar, 0, Color32::from_rgb(14, 12, 16));
+    let mut fill = bar.shrink(1.0);
+    fill.set_width((fill.width() * (view.mana / max_mana.max(1.0)).clamp(0.0, 1.0)).floor());
+    p.rect_filled(fill, 0, if m >= POISON_AT { POISON } else { style::MANA });
+    p.rect_stroke(bar, 0, Stroke::new(1.0, style::EDGE), egui::StrokeKind::Inside);
+    p.galley(egui::pos2(bar.right() + 6.0, rect.top()), galley, color);
+    response.on_hover_text(format!(
+        "Mana: {:.0} / {:.0}\n{}\nMana density: {m:.2}x\nMana regen: {recovery:.1}x\nHealth regen: {health:.1}x · Well-fed",
+        view.mana, max_mana, view.location.unwrap_or("Still air")));
 }
 
 /// One instrument: a fixed mana field, cast-cost marker and recharge rail.
@@ -688,10 +711,11 @@ pub(super) fn hud(
             }
 
             if super::inventory::unlocks::mana_line_open(
+                ui.ctx(),
                 view,
                 view.affinity >= crate::world::adventure::affinity::POISON_AT,
             ) {
-                mana_affinity(ui, view);
+                mana_strip(ui, view, max_mana, bar_width);
             }
 
             if armor_points > 0 || (view.respawn_point.is_some() && ui.input(|i| i.modifiers.alt)) {

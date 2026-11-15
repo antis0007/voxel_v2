@@ -8,7 +8,7 @@ pub(super) struct Out<'a> {
 }
 
 impl Out<'_> {
-    fn quad(&mut self, corners: [Vec3; 4], normal: Vec3, color: [f32; 3], glow: f32) {
+    pub(super) fn quad(&mut self, corners: [Vec3; 4], normal: Vec3, color: [f32; 3], glow: f32) {
         let surface = if glow > 0.0 { [0.48, 0.42, GLOW_KIND, glow] } else { [0.48, 0.42, KIND, 0.2] };
         self.face(corners, normal, color, surface);
     }
@@ -267,6 +267,8 @@ pub(super) fn sprite(out: &mut Out, icon: Icon, grip: &SpriteGrip) {
             has_haft = true;
         }
     }
+    drop_specks(w, h, &mut texels);
+    soften_ink(w, h, &mut texels);
     // Authored sockets can land in a transparent pixel on another material
     // variant. Keep the socket when it already touches art or the modeled haft.
     let mut socket = grip.socket;
@@ -286,19 +288,23 @@ pub(super) fn sprite(out: &mut Out, icon: Icon, grip: &SpriteGrip) {
     let rotation = out.rotation * Quat::from_rotation_z(grip.align);
     let centre = out.centre - rotation * (socket * s);
     let mut out = Out { m: out.m, centre, rotation };
-    let half_depth = grip.half_depth;
     let at = |x: i32, y: i32| (x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h).then(|| texels[y as usize * w + x as usize]).flatten();
+    let depth = pillow_depths(w, h, &texels, grip.half_depth);
+    let depth_at = |x: i32, y: i32| if at(x, y).is_some() { depth[y as usize * w + x as usize] } else { 0.0 };
     let point = |x: f32, y: f32, z: f32| Vec3::new((x - w as f32 * 0.5) * s, (h as f32 * 0.5 - y) * s, z * s);
     for y in 0..h as i32 {
         for x in 0..w as i32 {
             let Some((_, rgb)) = at(x, y) else { continue };
             let color = rgb.map(srgb);
+            let half_depth = depth_at(x, y);
             let (x0, x1, y0, y1) = (x as f32, x as f32 + 1.0, y as f32, y as f32 + 1.0);
             for z in [half_depth, -half_depth] {
                 out.quad([point(x0, y1, z), point(x1, y1, z), point(x1, y0, z), point(x0, y0, z)], Vec3::Z * z.signum(), color, 0.0);
             }
             for (dx, dy, n) in [(-1, 0, Vec3::NEG_X), (1, 0, Vec3::X), (0, -1, Vec3::Y), (0, 1, Vec3::NEG_Y)] {
-                if at(x + dx, y + dy).is_some() { continue; }
+                // Wall from the neighbour's depth out to this texel's, on both faces.
+                let inner = depth_at(x + dx, y + dy);
+                if inner >= half_depth { continue; }
                 let (a, b) = if dx != 0 {
                     let ex = if dx > 0 { x1 } else { x0 };
                     ((ex, y0), (ex, y1))
@@ -307,8 +313,74 @@ pub(super) fn sprite(out: &mut Out, icon: Icon, grip: &SpriteGrip) {
                     ((x0, ey), (x1, ey))
                 };
                 let edge_color = color.map(|channel| channel * 0.90);
-                out.quad([point(a.0, a.1, -half_depth), point(b.0, b.1, -half_depth), point(b.0, b.1, half_depth), point(a.0, a.1, half_depth)], n, edge_color, 0.0);
+                let spans: &[(f32, f32)] = if inner > 0.0 { &[(inner, half_depth), (-half_depth, -inner)] } else { &[(-half_depth, half_depth)] };
+                for &(lo, hi) in spans {
+                    out.quad([point(a.0, a.1, lo), point(b.0, b.1, lo), point(b.0, b.1, hi), point(a.0, a.1, hi)], n, edge_color, 0.0);
+                }
             }
         }
     }
+}
+
+/// Lone texels (glints, motes, spores drawn beside an icon) read as sparkle
+/// at icon size but as loose cubes floating by the hand once extruded.
+pub(super) fn drop_specks(w: usize, h: usize, texels: &mut [Option<(u8, [u8; 3])>]) {
+    let filled = |x: i32, y: i32| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && texels[y as usize * w + x as usize].is_some();
+    let lone: Vec<usize> = (0..w * h).filter(|&i| {
+        let (x, y) = ((i % w) as i32, (i / w) as i32);
+        filled(x, y) && !(-1..=1).any(|dy| (-1..=1).any(|dx| (dx, dy) != (0, 0) && filled(x + dx, y + dy)))
+    }).collect();
+    for i in lone {
+        texels[i] = None;
+    }
+}
+
+/// Slot-outline ink (key 0) extruded as near-black material reads as a heavy
+/// rim around the held item. Shade each ink texel from its painted neighbours
+/// instead, so the silhouette and thin inked details stay but the rim matches
+/// the item's own colour.
+pub(super) fn soften_ink(w: usize, h: usize, texels: &mut [Option<(u8, [u8; 3])>]) {
+    const SHADE: f32 = 0.5;
+    let source = texels.to_vec();
+    for (i, texel) in texels.iter_mut().enumerate() {
+        let Some((0, ink)) = *texel else { continue };
+        let (x, y) = ((i % w) as i32, (i / w) as i32);
+        let (mut sum, mut n) = ([0.0f32; 3], 0.0);
+        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if nx < 0 || ny < 0 || nx as usize >= w || ny as usize >= h { continue; }
+            if let Some((key, rgb)) = source[ny as usize * w + nx as usize] && key != 0 {
+                for c in 0..3 { sum[c] += rgb[c] as f32; }
+                n += 1.0;
+            }
+        }
+        if n > 0.0 {
+            let rgb = std::array::from_fn(|c| (sum[c] / n * SHADE).max(ink[c] as f32).round() as u8);
+            *texel = Some((0, rgb));
+        }
+    }
+}
+
+/// Texel half-depths that swell with distance from the sprite's edge, so broad
+/// shapes (gems, food, coils) read as rounded solids while one- and two-texel
+/// strokes such as hafts keep the authored `edge` depth.
+pub(super) fn pillow_depths(w: usize, h: usize, texels: &[Option<(u8, [u8; 3])>], edge: f32) -> Vec<f32> {
+    const SWELL: f32 = 0.38;
+    const STEPS: u8 = 2;
+    // Manhattan distance to the nearest empty texel; outside the sheet is empty.
+    let mut dist: Vec<u8> = texels.iter().map(|t| if t.is_some() { u8::MAX } else { 0 }).collect();
+    for pass in 0..2 {
+        let order: Box<dyn Iterator<Item = usize>> = if pass == 0 { Box::new(0..w * h) } else { Box::new((0..w * h).rev()) };
+        for i in order {
+            if dist[i] == 0 { continue; }
+            let (x, y) = (i % w, i / w);
+            let near = |dx: i32, dy: i32| {
+                let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                if nx < 0 || ny < 0 || nx as usize >= w || ny as usize >= h { 0 } else { dist[ny as usize * w + nx as usize] }
+            };
+            let best = if pass == 0 { near(-1, 0).min(near(0, -1)) } else { near(1, 0).min(near(0, 1)) };
+            dist[i] = dist[i].min(best.saturating_add(1));
+        }
+    }
+    dist.iter().map(|&d| edge + SWELL * d.saturating_sub(1).min(STEPS) as f32).collect()
 }

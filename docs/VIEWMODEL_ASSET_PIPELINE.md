@@ -64,6 +64,20 @@ GLB parsing, texture creation or GPU buffer recreation after capacity warmup.
 This is bounded CPU skinning, not a GPU skinning implementation. The scene stream
 still uploads posed vertices every frame.
 
+## Grips and finger placement
+
+The hand is bound as a closed fist; the `open` clip's end pose defines one unit of
+finger opening. A grip is five per-finger multiples of that unit (thumb, index,
+middle, ring, little; `0` fist, `1` authored open, `<0` squeeze) applied joint by
+joint in `wayfarer::relaxed`. Presets (`bare`, `torch`, `block`, `shaft`, `blade`,
+`sprite`, `handle`) live in `assets/runtime/viewmodels/grips.ron`;
+`held_item::grip(item)` picks one and `player::viewmodel::tick` eases the main
+hand's `fingers` toward it (fixed-step, partition independent), so a hotbar swap
+unwraps and re-wraps rather than snapping. Review captures tune a grip without a
+rebuild with `VOXEL_REVIEW_FINGERS=t,i,m,r,l` (or one number for all) together
+with `VOXEL_REVIEW_HELD=<item|empty>`. `cargo test ... fingertip_table -- --ignored
+--nocapture` prints fingertip reach from the grip socket per opening.
+
 `assets/runtime/viewmodels/presentation.ron` controls scale, dominant hand, held
 FOV, offsets, axis/roll and pose offsets. Default held FOV is 72 degrees and is
 independent of sprint FOV. Mirroring reverses triangle winding. Existing reverse-Z

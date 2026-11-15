@@ -105,11 +105,15 @@ pub fn panel(ui: &mut egui::Ui, pos: IVec3, n: &Node, view: &View, action: &mut 
 
 pub(super) fn gas_slots(ui: &mut egui::Ui, n: &Node) {
     let mass = n.exhaust.iter().sum::<u32>();
+    let capacity = machines::gas_capacity(n);
+    if n.kind == Kind::GasTank {
+        ui.small(format!("{} tank", machines::tank_tier_name(n.upgrade)));
+    }
     ui.add(
-        egui::ProgressBar::new(mass as f32 / machines::GAS_CAPACITY as f32).text(format!(
+        egui::ProgressBar::new(mass as f32 / capacity as f32).text(format!(
             "Gas  {:.1} / {:.1} g",
             mass as f32 / 1000.0,
-            machines::GAS_CAPACITY as f32 / 1000.0
+            capacity as f32 / 1000.0
         )),
     );
     for (i, &amount) in n.exhaust.iter().enumerate() {

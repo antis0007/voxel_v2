@@ -8,6 +8,14 @@ use egui::{Color32, RichText, Sense, vec2};
 const SPELL_INDEX: usize = 7;
 const CIRCLE: usize = 2;
 const GATES: usize = 3;
+
+pub(super) fn open_circle(ctx: &egui::Context) {
+    recipe_book::open_magic_guide(ctx);
+    ctx.data_mut(|d| {
+        d.insert_temp(egui::Id::new("magic_guide_entry"), CIRCLE);
+        d.remove::<String>(egui::Id::new("magic_guide_query"));
+    });
+}
 const ENTRIES: [(&str, &str, &str); SPELL_INDEX + 1] = [
     ("Start here", "Early game", "craft wand workbench components materials copper crystal fibre"),
     ("Casting and decks", "Early game", "spell cards cast equip gear slots modifiers triggers mana recharge"),
@@ -147,7 +155,7 @@ fn gate_diagram(ui: &mut egui::Ui, cells_per_metre: i32) {
     let width = 2 * cells_per_metre;
     let height = 3 * cells_per_metre;
     let cell_size = (84.0 / (width + 2) as f32).clamp(9.0, 20.0);
-    egui::Grid::new("field_guide_crystal_frame").spacing([1.0, 1.0]).show(ui, |ui| {
+    egui::Grid::new("field_guide_crystal_frame").spacing([1.0, 1.0]).min_col_width(cell_size).min_row_height(cell_size).show(ui, |ui| {
         for y in 0..height + 2 {
             for x in 0..width + 2 {
                 let (r, response) = ui.allocate_exact_size(vec2(cell_size, cell_size), Sense::hover());
@@ -228,6 +236,9 @@ fn article(ui: &mut egui::Ui, entry: usize, cells_per_metre: i32) -> Option<usiz
             ui.weak("Sneak-cast elsewhere to move the far end. Sneak-cast inside to clear.");
             ui.strong("Quick Return");
             ui.label(format!("Outside a link, tap [{cast}] to mark. Release and cast again to return."));
+            ui.strong("Home Escape");
+            ui.label(format!("Hold [{cast}] 3 s anywhere in the realm to return to the home circle."));
+            ui.weak("One way · A hit restarts the hold");
             ui.weak(card.stats);
             if ui.link("Start here · Craft a wand").clicked() { next = Some(0); }
             if ui.link("Walk-through portals · Crystal Gates").clicked() { next = Some(GATES); }

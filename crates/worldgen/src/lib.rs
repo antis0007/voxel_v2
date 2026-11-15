@@ -44,6 +44,7 @@ pub mod station;
 pub mod hall;
 pub mod lightless;
 pub mod highfold;
+pub mod gloaming;
 pub mod gilded;
 pub mod anchor_studio;
 pub mod architecture;
@@ -75,6 +76,7 @@ pub mod landscape;
 pub mod ecology;
 pub mod drainage;
 pub mod gates;
+pub mod features;
 pub mod geo;
 pub mod sphere;
 pub mod lakes;
@@ -576,6 +578,7 @@ pub fn sample_column_uncached(cfg: &WorldSampleConfig, x: i32, z: i32) -> Column
     if cfg.world_type == WorldType::Realm(RealmKind::Lightless) { return lightless::column(cfg, x, z); }
     if cfg.world_type == WorldType::Realm(RealmKind::Gilded) { return gilded::column(cfg, x, z); }
     if cfg.world_type == WorldType::Realm(RealmKind::Highfold) { return highfold::column(cfg, x, z); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Gloaming) { return gloaming::column(cfg, x, z); }
     if cfg.world_type == WorldType::Manyfold { return manyfold::column(cfg, x, z); }
     if cfg.world_type == WorldType::Planet { return planet::column(cfg, x, z); }
     if cfg.world_type == WorldType::Nether { return nether::column(cfg,x,z); }
@@ -872,7 +875,7 @@ pub fn tree_profile_evaluated(cfg: &WorldSampleConfig, cell_x: i32, cell_z: i32,
     let (anchor_x, anchor_z) = tree_anchor(cfg, cell_x, cell_z);
 
     let column_at = |x, z| footprint.map_or_else(|| sample_column(cfg, x, z), |step| landscape::preview_column_lod(cfg, x, z, step));
-    if cfg.world_type != WorldType::Planet && trees::giant::candidate(cfg, cell_x, cell_z)
+    if features::enabled(cfg, features::Feature::GiantTrees) && trees::giant::candidate(cfg, cell_x, cell_z)
         && !(cfg.generator_version >= 54 && sites::tree_reserved(cfg,cfg.world_x(anchor_x),cfg.world_z(anchor_z)))
         && let Some(giant) = trees::giant::profile(cfg, (cell_x, cell_z), (anchor_x, anchor_z))
     {
@@ -1625,6 +1628,23 @@ pub fn generate_padded(
     Some(terrain)
 }
 
+/// Freight market, surveyor sites, rebuilt ruins and generated settlements, in
+/// that order. Each module's `features` gate decides which surfaces see it.
+fn settlement_block(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample, freight: bool, with_ruins: bool) -> Option<BlockId> {
+    if freight && let Some(block) = planet_freight::block(cfg, p, column) {
+        return Some(block);
+    }
+    if let Some(block) = surveyor::block(cfg, p, column) {
+        return Some(block);
+    }
+    if with_ruins && cfg.generator_version >= ruins::REBUILT_VERSION
+        && let Some(block) = ruins::block(cfg, p, (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters(), cfg.world_y(column.height + 1))
+    {
+        return Some(block);
+    }
+    civilization::block(cfg, p, column)
+}
+
 /// Hand-placed sites in hills order; `cavern` adds the underground site pass.
 pub(crate) fn authored_block(cfg: &WorldSampleConfig, p: IVec3, column: ColumnSample, cavern: bool) -> Option<BlockId> {
     let m = (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters();
@@ -1663,6 +1683,7 @@ fn sample_block_in_world(
     if cfg.world_type == WorldType::Realm(RealmKind::Lightless) { return lightless::block(cfg, p); }
     if cfg.world_type == WorldType::Realm(RealmKind::Gilded) { return gilded::block(cfg, p); }
     if cfg.world_type == WorldType::Realm(RealmKind::Highfold) { return highfold::block(cfg, p); }
+    if cfg.world_type == WorldType::Realm(RealmKind::Gloaming) { return gloaming::block(cfg, p); }
     if let Some(block) = hell_gate::block(cfg, p, column) { return block; }
     if cfg.world_type == WorldType::Nether { return nether::block_with(cfg, p, column, profiles); }
     if cfg.world_type == WorldType::Manyfold { return manyfold::block(cfg,p); }
@@ -1685,20 +1706,7 @@ fn sample_block_in_world(
     let planetary = cfg.world_type == WorldType::Planet;
     let crater_lake = planetary && planet::is_crater_lake(cfg, &column);
     if planetary && (!basin || crater_lake) {
-        if !crater_lake
-            && let Some(block) = planet_freight::block(cfg, p, column)
-        {
-            return block;
-        }
-        if let Some(block) = surveyor::block(cfg, p, column) {
-            return block;
-        }
-        if cfg.generator_version >= ruins::REBUILT_VERSION
-            && let Some(block) = ruins::block(cfg, p, (p.as_vec3() + Vec3::splat(0.5)) * cfg.voxel_meters(), cfg.world_y(column.height + 1))
-        {
-            return block;
-        }
-        if let Some(block) = civilization::block(cfg, p, column) {
+        if let Some(block) = settlement_block(cfg, p, column, !crater_lake, true) {
             return block;
         }
         let block = planet::block_with(cfg, p, column, profiles);
@@ -1741,6 +1749,12 @@ fn sample_block_in_world(
         if let Some(block) = authored_block(cfg, p, column, true) {
             return block;
         }
+    }
+    // Flat ruins already come through the site chain above.
+    if !basin && features::shared_line(cfg)
+        && let Some(block) = settlement_block(cfg, p, column, true, false)
+    {
+        return block;
     }
 
     if p.y > column.height {

@@ -90,8 +90,83 @@ Block light (torches, the gate, sunstone, foxfire) does the rest.
 Exact room dimensions, trap density, palette hex tuning (the inferred hexes in the reference
 brief are a starting point), and capture poses.
 
+## As built (2026-11-14)
+
+- `crates/worldgen/src/gilded.rs`: landing at the origin (return gate in the floor), a 45° stair to
+  the 12 m-deep gallery (6 m domed bays, columns, lapis/gilded/carved wall bands, scale-tile vaults),
+  eight side vaults at z 25/37/49/61 (treasury, mirage-floored pit trap with a cache below, coin
+  store, collapse), a grand arch into the coin cavern (60 x 56 m, dunes climbing to the walls, a
+  causeway trench with torch kerbs, rock pillars, half-buried caches, gold-block stacks, jeweled
+  crusts, sunstone clusters in the roof), a stepped passage down to the grotto (pool, shore,
+  stepping stones, pillar with a 3-turn spiral stair, marble and jewel summit, pedestal cache, a
+  second return gate, sunstone boss overhead, foxfire at the waterline).
+- Stairs step 0.25 m at fine scales and one voxel at 1 m; the plan is identical at both.
+- Lighting: `portals::realm::gilded_lighting` (warm low ambient and haze). The Hush darkness
+  hazard is now Lightless-only.
+- Caches in the realm pay through `containers::dungeon_treasure`.
+- Gate travel is shared with the Lightless (`lightless_gate.rs`): one chart file per realm.
+- Review cameras: `VOXEL_REVIEW_DUNGEON=gilded:<arrival|gallery|vault|wall|hoard|dunes|grotto|stair|summit>`.
+
+## Needs owner sign-off
+
+Player-visible names: "Gilded Cave", "Gilded Gate", and the 13 block names in the table above.
+
 ## Verification
 
 - `art_refiner` sheets at `--dist 1` and `--dist 6` for every new block.
 - `cargo check` for app and worldgen.
 - In-game captures of each set piece (new area: no before frame exists; evidence is the frames).
+
+## Water and light pass (2026-11-14)
+
+Owner request: glowing blue water with caustics on the surface, under clear water and on the walls;
+the blue stair grotto and the red treasure areas matched to the reference stills.
+
+- Grotto layout: fluted walls (radius ribbed by angle, noise stretched vertically), stalactites on a
+  2.6 m grid clear of the shaft, a boulder-stack pillar (2.1 m courses) on a ragged islet, one and a
+  half sweeping stair turns with headroom cut through the capital, round stepping stones, a 4 m pool
+  over a boulder bed. Stair and summit torches removed: the pool and the shaft light the scene.
+- Treasure hall: pointed coin heaps on a 12 m grid; two reflecting pools flank the causeway (coins and
+  jewels on the bottom, carved coping).
+- `engine_worldgen::gilded::{glow_pools, light_shaft}` export the geometry; `portals::realm::gilded_rig`
+  packs it with colours into `LightingState::realm` (words 0..10).
+- `shaders/realm_light.wgsl`: glow-pool emission (bed through clear water lit by a caustic web,
+  luminous column, surface filaments), caustics thrown on walls, ceilings and submerged faces, a
+  sky-free fill (underground the sky ambient is zero), red cavern and blue grotto air, the volumetric
+  shaft and its spot, and the submerged view. Caustics snap to the shared texel lattice.
+- GrottoStone palette moved from teal to cobalt and indigo.
+- Captures: `target/reviews/gilded-water-20261114/v1..v4`; views `lake`, `pool`, `underwater`,
+  `shaft`, `hoardpool` added to `gilded:<view>`.
+
+## Per-seed plan (2026-11-14)
+
+Owner request: no Gilded Cave should feel like the same copied location. The procession stays fixed
+(landing, gallery, coin cavern, grotto); `gilded::Plan`, made from the world seed with a full
+avalanche mix (`hash3` on a raw seed gave near-identical caves for seeds 11, 22, 33), picks:
+
+- Grotto: radius 22-29 m, height 36-45 m, two or three outline lobes (faded at the passage mouth).
+- Pillar: off-centre axis; boulder stack or rounded-square monolith with strata ledges.
+- Stair: hugging spiral (1.25-1.75 turns) or a flying sweep (0.75-0.95 turns at 7-8.5 m) over open
+  water, hung with calcite drips, rising from a landing rock and ending in a bridge to the summit.
+- Up to three rock islets with stalagmite spires, clear of the stair and the stone path; the path
+  bends per seed.
+- Coin cavern: heap grid 10-14 m, density and height; twin channels or one round basin crossed on a
+  dyke; a free-standing portal (stepped jambs, lapis band, marble reveal, gilded frieze, cornice) at a
+  per-seed place and size on the causeway.
+
+The light rig and review poses read the plan: `glow_pools(seed)`, `light_shaft(seed)`,
+`review_view(seed, name)`; `realm_lighting` takes the seed. Review receipts print `[gilded-plan]`.
+New view `door`. Evidence: `target/reviews/gilded-water-20261114/v5..v9` (contact sheets v5, v6, v7).
+
+## Editable layout (2026-11-14)
+
+Owner request: every room and structure customisable from the dev tools. `gilded::Layout` (77
+fields, schema `LAYOUT_FIELDS`, declared once by the `layout!` macro) replaces the room constants:
+gallery, coin cavern, passage, grotto and light rig colours (packed sRGB). The room chain (gallery
+end, cavern centre, passage, grotto) is derived from the lengths. `default_layout(seed)` is the
+per-seed default; `set_layout_override(seed, ..)` holds a dev edit or a saved `gilded_layout.ron`
+sidecar (loaded with the world). New morphology: banded sandstone ledges in the cavern walls and
+pillars, slumped heap skirts with spill ripples, beaded stalactites and stalagmites, rimstone
+terraces along the grotto shore; wall caustics streak upward from the water.
+Editor: Playtest > Realm layout editor (`tools/axiom-dev/layout-editor.mjs`), engine op `layout`.
+End-to-end check: `target/reviews/gilded-water-20261114/editor-e2e`.

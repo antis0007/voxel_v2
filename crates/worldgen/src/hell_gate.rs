@@ -14,7 +14,7 @@ pub fn enabled(cfg: &WorldSampleConfig) -> bool {
     // Historical sanctuary links have a different saved destination and must
     // not appear as unusable Return gates in this world.
     if cfg.is_hell() { return false; }
-    cfg.generator_version >= VERSION && matches!(cfg.world_type, WorldType::Hills | WorldType::Nether)
+    cfg.generator_version >= VERSION && crate::features::enabled(cfg, crate::features::Feature::HellGate)
 }
 /// One sanctuary per square kilometre, with repeatable seed offsets.
 pub fn center(cfg: &WorldSampleConfig, p: Vec3) -> Vec3 {

@@ -120,6 +120,8 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
     m.rotate_since(mark, e.pos, Quat::from_rotation_y(e.yaw));
     m.scale_since(mark, e.pos, Vec3::splat(boss_look::scale(e)));
     m.set_surface_kind(41.0);
+    // Body only: the floor rings below mark fixed ground.
+    crate::world::adventure::enemy_presentation::motion::pose_body(e, m, mark);
     if let Some(r) = run {
         if r.kind == Action::Stamp && r.phase() == Phase::Prepare {
             tactics::ring(m, e.pos, 3.4, PALETTE_CORAL, 0.2);

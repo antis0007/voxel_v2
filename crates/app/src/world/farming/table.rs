@@ -42,6 +42,13 @@ pub struct Crop {
     /// Work a mature plant does around it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aura: Option<Aura>,
+    /// A mature working flower plants a copy on free soil beside it, this chance per 2 s beat.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub spread_per_mille: u32,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 /// Placement of the plant cell; `soil` is the block it rests on or hangs from.

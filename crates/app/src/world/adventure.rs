@@ -88,6 +88,7 @@ pub mod affinity;
 pub mod buffs;
 mod night;
 mod burrowers;
+mod hurled;
 mod spawn_safety;
 mod field_foes;
 mod food_chain;
@@ -301,6 +302,9 @@ pub struct Enemy {
     recovery: f32,
     #[cfg_attr(feature = "multiplayer", serde(default))]
     reaction: enemy_presentation::Reaction,
+    /// Lean, bank, turn follow-through and landing squash; measured from travel.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    motion: enemy_presentation::BodyMotion,
     encounter: encounters::State,
     cooldown: f32,
     sight: f32,
@@ -398,6 +402,7 @@ impl Enemy {
             gait: 0.0,
             recovery: 0.0,
             reaction: enemy_presentation::Reaction::default(),
+            motion: enemy_presentation::BodyMotion::default(),
             encounter: encounters::State::new(site, slot, kind, pos),
             cooldown: 2.0,
             sight: 0.0,
@@ -953,6 +958,9 @@ pub struct Adventure {
     night: night::State,
     #[cfg_attr(feature = "multiplayer", serde(skip))]
     burrowers: burrowers::State,
+    /// Chunks of ground held or thrown by creatures. Runtime only.
+    #[cfg_attr(feature = "multiplayer", serde(skip))]
+    hurled: hurled::State,
     #[cfg_attr(feature = "multiplayer", serde(skip))]
     safety: spawn_safety::State,
     /// Last unseen attacker: (bestiary kind, health fraction). Runtime only.
@@ -1125,6 +1133,7 @@ impl Default for Adventure {
             difficulty: difficulty::Difficulty::default(),
             night: night::State::default(),
             burrowers: burrowers::State::default(),
+            hurled: hurled::State::default(),
             safety: spawn_safety::State::default(),
             damage_source: None,
             damage_source_t: 0.0,
@@ -1524,6 +1533,7 @@ impl Adventure {
         let shared_tick=true;
         if shared_tick {
             world.undercrown.tick(dt);
+            super::undercrown::announce_room(world, player.pos * world.voxel_scale.meters());
             self.manyfold_phase = (self.manyfold_phase + dt).rem_euclid(9.0);
         }
         for (item, amount) in world.factory.take_refunds() {
@@ -2071,6 +2081,7 @@ impl Adventure {
                 });
             }
             e.reaction.advance(e.flash, e.knock, e.yaw, dt);
+            enemy_presentation::motion::advance(e, dt);
             e.flash = (e.flash - dt).max(0.0);
             e.poise = (e.poise - dt).max(0.0);
             water_contact::update(e, world);
@@ -2096,7 +2107,8 @@ impl Adventure {
                 continue;
             }
             let started = std::time::Instant::now();
-            if !is_boss(e.kind) { navigation::gravity(e, world, dt); }
+            let hanging = e.encounter.concealed && e.encounter.mechanic() == encounters::Mechanic::CeilingDrop;
+            if !is_boss(e.kind) && !hanging { navigation::gravity(e, world, dt); }
             crate::gameplay_trace::note("nav.gravity", started.elapsed().as_secs_f64() * 1000.0);
             if wildlife::vehicle::hostile_campaign(e) && visible_to_mobs {
                 let offset = eye - e.center();
@@ -2435,7 +2447,10 @@ impl Adventure {
                 } else {
                     direction.normalize_or_zero() * speed * e.affixes.speed_mul() * dt
                 };
-            let facing = if e.visible { d } else { movement };
+            // A tree that turns to watch you is no disguise: tree ropers hold
+            // still until the player is inside their reach.
+            let facing = if aberrations::tree_roper(e.kind) && distance > 7.5 { Vec3::ZERO }
+                else if e.visible { d } else { movement };
             let up = e.up;
             let flat_facing = if up.dot(Vec3::Y) > 0.999 {
                 Vec3::new(facing.x, 0.0, facing.z)
@@ -2538,6 +2553,14 @@ impl Adventure {
         }
         food_chain::hunt(&mut self.enemies, world, feet, dt, &mut burrow_fx);
         burrowers::after_tick(self, world, feet, eye, dt, burrow_fx);
+        let (thrown, thrown_direction, thrower) = hurled::tick(self, world, feet, eye, dt);
+        if thrown > 0.0 {
+            incoming += thrown;
+            incoming_direction += thrown_direction;
+            if let Some(kind) = thrower {
+                incoming_source = Some((kind, 1.0));
+            }
+        }
         update_trace.mark("adventure-navigation");
         self.tick_hazards(world, feet, eye, dt);
         if let Some((index, direction)) = vault_contact && visible_to_mobs {
@@ -3298,7 +3321,7 @@ impl Adventure {
         modifiers::reap(&mut self.enemies);
         night::fall(self, world);
         night::reap(&mut self.enemies);
-        burrowers::fall(self);
+        burrowers::fall(self, world);
         self.wildlife.remember(&self.enemies);
         let mut death_blasts: Vec<Vec3> = Vec::new();
         let mut resonance_kills = Vec::new();

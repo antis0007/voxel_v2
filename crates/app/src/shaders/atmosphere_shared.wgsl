@@ -422,6 +422,14 @@ fn atmosphere_color(dir: vec3<f32>) -> vec3<f32> {
     let night      = 1.0 - daylight;
     let sun_height = sun_dir.y;
 
+    if light.realm[11].w > 0.0 {
+        let horizon = light.fog_color_density.rgb;
+        let zenith = light.sky_top_saturation.rgb;
+        let upper = mix(horizon, zenith, smoothstep(0.0, 0.8, dir.y));
+        let sunset = pow(max(dot(dir, sun_dir), 0.0), 10.0);
+        return upper + light.sun_color_daylight.rgb * sunset * 0.11;
+    }
+
     if atmosphere_mode() == ATMOSPHERE_MODE_SKY_VIEW_LUT {
         return runtime_sky_view_atmosphere_color(dir, sun_dir, daylight);
     }

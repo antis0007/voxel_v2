@@ -44,4 +44,10 @@
         tabs: [8],
         parity: ["A05"],
     ),
+    (
+        bit: 4,
+        id: "worm_excavation",
+        label: "Worm Excavation",
+        hint: "Let large worms and burrowing animals cut tunnels in natural terrain",
+    ),
 ]

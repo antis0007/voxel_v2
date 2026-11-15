@@ -580,6 +580,10 @@ pub struct Session {
 pub fn run_headless() -> Result<bool> {
     let args: Vec<_> = std::env::args().collect();
     if !args.iter().any(|a| a == "--multiplayer-headless") { return Ok(false); }
+    if args.iter().any(|arg| arg == "--realm-review-sky-and-forest") {
+        realm_review::sky_and_forest()?;
+        return Ok(true);
+    }
     if args.iter().any(|arg| arg == "--multiplayer-realm-fixture") {
         realm_review::fixture()?;
         return Ok(true);
@@ -919,7 +923,7 @@ fn scale_from_code(code: u8) -> Result<VoxelScalePreset> {
 }
 /// The host's world as a joiner builds it. The generator comes from the lobby, so the identity matches.
 fn world_for_join(params: engine_net::lobby::wire::WorldParams, generator: u32) -> Result<World> {
-    ensure!((37..=engine_voxel::CURRENT_GENERATOR_VERSION).contains(&generator)
+    ensure!(multiplayer_general_generator(generator)
         || params.kind == 4 && (generator == engine_voxel::CUSTOM_PLANET_VERSION
             || multiplayer_planet_generator(generator)
             || generator == 137)
@@ -929,9 +933,13 @@ fn world_for_join(params: engine_net::lobby::wire::WorldParams, generator: u32) 
     Ok(world)
 }
 
+fn multiplayer_general_generator(generator: u32) -> bool {
+    (37..=engine_voxel::WORKSHOP_SUPPLY_GENERATOR).contains(&generator)
+        || (engine_voxel::SHARED_SURFACE_GENERATOR..=engine_voxel::CURRENT_GENERATOR_VERSION).contains(&generator)
+}
+
 fn multiplayer_planet_generator(generator: u32) -> bool {
     (engine_voxel::COASTAL_PLANET_GENERATOR..=engine_voxel::PLANET_FREIGHT_DETOUR_GENERATOR).contains(&generator)
-        || generator == engine_voxel::PLANET_GENERATOR_VERSION
         || (engine_voxel::WATERSHED_EROSION_GENERATOR..=engine_voxel::BRANCHING_WATERSHEDS_GENERATOR).contains(&generator)
         || generator == engine_voxel::LANDSCAPE_CYCLES_GENERATOR
         || generator == engine_voxel::DEEP_TIME_GENERATOR
@@ -945,6 +953,7 @@ fn multiplayer_planet_generator(generator: u32) -> bool {
         || generator == engine_voxel::DIKE_SWARM_GENERATOR
         || generator == engine_voxel::CARVED_SURFACE_GENERATOR
         || generator == engine_voxel::ROCK_RELIEF_GENERATOR
+        || generator == engine_voxel::DUNGEON_MECHANISMS_GENERATOR
         || matches!(generator, engine_worldgen::planetary::EVOLVING_DELTA_GENERATOR
             | engine_worldgen::planetary::LANDSCAPE_HISTORY_GENERATOR
             | engine_worldgen::planetary::MAPPED_CANYON_GENERATOR
@@ -1082,7 +1091,7 @@ impl Session {
                 let mut world = World::with_seed(kind, scale, seed);
                 if let Some(version) = args.iter().find_map(|a| a.strip_prefix("--multiplayer-generator=")) {
                     let version: u32 = version.parse().context("invalid multiplayer generator")?;
-                    ensure!((37..=engine_voxel::CURRENT_GENERATOR_VERSION).contains(&version)
+                    ensure!(multiplayer_general_generator(version)
                         || kind == WorldType::Planet && multiplayer_planet_generator(version),
                         "unsupported multiplayer generator");
                     world.generator_version = version;
@@ -1207,7 +1216,7 @@ impl Session {
             ensure!(
                 (1..=2).contains(&saved.format)
                     && saved.seed == seed
-                    && (37..=engine_voxel::CURRENT_GENERATOR_VERSION).contains(&saved.generator)
+                    && multiplayer_general_generator(saved.generator)
                     && saved.cell_mm == 500,
                 "building save configuration mismatch"
             );

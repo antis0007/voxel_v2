@@ -120,6 +120,11 @@ pub const EVENT_AIR_JUMP: u8 = 4;
 pub const EVENT_LAND: u8 = 8;
 pub const EVENT_WALLRUN: u8 = 16;
 pub const EVENT_WALLJUMP: u8 = 32;
+/// Slime rebound off a floor or wall.
+pub const EVENT_BOUNCE: u8 = 64;
+/// Slime sling release; the snap variant is a release in the full-stretch window.
+pub const EVENT_SLING: u8 = 128;
+pub const EVENT_SLING_SNAP: u8 = EVENT_SLING | EVENT_AIR_JUMP;
 /// Downward speed (m/s) above which a landing is heavy enough to thump.
 pub const HARD_LANDING_SPEED: f32 = 11.0;
 
@@ -134,7 +139,7 @@ impl Movement {
         [self.slide_time, self.slide_cooldown, self.dash_time, self.dash_cooldown,
             self.fov_kick, self.roll, self.fall_speed, self.wallrun_time,
             self.wallrun_cooldown].into_iter().all(f32::is_finite)
-            && self.wall_normal.is_finite() && self.events & !63 == 0
+            && self.wall_normal.is_finite()
     }
     pub fn new() -> Self {
         Self {

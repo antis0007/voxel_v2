@@ -21,6 +21,7 @@ import { dragSource, dropTarget } from "./slot-tools.mjs";
 import { mountAgent, sourceFromDocument } from "./agent-panel.mjs";
 import { canAssist } from "./agent-contract.mjs";
 import { createFood } from "./food-creator.mjs";
+import { foodPaths } from "./food-item.mjs";
 import { advancementPath, field, textOf, recipePath } from "./idea-data.mjs";
 import { address, resolve } from "./targets.mjs";
 import { mountRecipeWiring } from "./recipe-wiring.mjs";
@@ -969,6 +970,8 @@ async function playRecipe(recipe) {
     const doc = await loadDocument(recipePath);
     const art = [...drafts.values()].find(candidate => editableSprite(candidate.path) && dirty(candidate));
     if (art) throw new Error("Review and save the sprite draft before trying it in Axiom.");
+    const food = [...drafts.values()].find(candidate => foodPaths.includes(candidate.path) && dirty(candidate));
+    if (food) throw new Error("Review and save food changes before trying them in Axiom. Open Drafts to review or undo them; only the recipe is previewed without saving.");
     await api("/api/start-recipe", undefined, { text: doc.text, rebuild: true, recipe: recipe?.label });
     selectTab("playtest");
   } catch (error) { note(error.message, true); }

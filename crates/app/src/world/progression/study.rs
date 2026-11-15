@@ -192,7 +192,7 @@ pub(crate) fn view(world: &World, player: &Player) -> View {
     // The porter's record teaches the survey method for finding another sanctuary.
     let sanctuary = (Lesson::Thresholds.learned(lessons, false)
         && world.progression.lore & (1 << 12) != 0
-        && cfg.world_type == crate::world::WorldType::Hills
+        && engine_worldgen::features::surface(&cfg).is_some()
         && engine_worldgen::hell_gate::enabled(&cfg))
         .then(|| {
             let center = engine_worldgen::hell_gate::center(&cfg, player.pos * cfg.voxel_meters());

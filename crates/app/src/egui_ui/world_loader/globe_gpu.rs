@@ -40,9 +40,12 @@ struct Resources {
     key: Option<u64>,
     swapped_at: f32,
     bind: Option<wgpu::BindGroup>,
-    /// Newer history frame's plate per texel (R16Uint) and plate rotations.
+    /// Newer history frame's plate per texel (R16Uint), seam tint (Rgba8)
+    /// and plate rotations.
     plates: wgpu::Texture,
     plates_view: wgpu::TextureView,
+    seam_tint: wgpu::Texture,
+    seam_tint_view: wgpu::TextureView,
     axes: wgpu::Buffer,
     motion_key: Option<u64>,
     backdrop: wgpu::RenderPipeline,
@@ -177,6 +180,7 @@ impl Resources {
                 self.layers.push(layer);
             }
         }
+        let probe_t = std::time::Instant::now(); // PROBE
         let texels = s.rgba16();
         self.layers[slot].key = s.key;
         queue.write_texture(
@@ -201,6 +205,7 @@ impl Resources {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
             wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 6 },
         );
+        eprintln!("[geology-probe] upload n={} {:.2} ms", n, probe_t.elapsed().as_secs_f64() * 1e3); // PROBE
         // The first map has nothing to fade from.
         self.swapped_at = if self.key.is_none() { f32::NEG_INFINITY } else { seconds };
         self.current = slot;
@@ -227,6 +232,7 @@ impl Resources {
                 wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&before.ice_view) },
                 wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&self.plates_view) },
                 wgpu::BindGroupEntry { binding: 7, resource: self.axes.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&self.seam_tint_view) },
             ],
         }));
     }
@@ -235,11 +241,8 @@ impl Resources {
     fn upload_motion(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, m: &Motion) {
         let n = m.n as u32;
         if self.plates.width() != n {
-            self.plates = plate_texture(device, n);
-            self.plates_view = self.plates.create_view(&wgpu::TextureViewDescriptor {
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                ..Default::default()
-            });
+            (self.plates, self.plates_view) = plate_texture(device, n, wgpu::TextureFormat::R16Uint);
+            (self.seam_tint, self.seam_tint_view) = plate_texture(device, n, wgpu::TextureFormat::Rgba8Unorm);
         }
         queue.write_texture(
             self.plates.as_image_copy(),
@@ -247,6 +250,14 @@ impl Resources {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 2), rows_per_image: Some(n) },
             wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 6 },
         );
+        if m.tint.len() == m.plates.len() {
+            queue.write_texture(
+                self.seam_tint.as_image_copy(),
+                bytemuck::cast_slice(&m.tint),
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(n * 4), rows_per_image: Some(n) },
+                wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 6 },
+            );
+        }
         let mut axes = [0.0f32; MAX_PLATES * 4];
         for (k, a) in m.axes.iter().take(MAX_PLATES).enumerate() {
             axes[k * 4..k * 4 + 3].copy_from_slice(a);
@@ -257,17 +268,23 @@ impl Resources {
     }
 }
 
-fn plate_texture(device: &wgpu::Device, n: u32) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+/// One per-interval history texture (plate ids or seam tint) and its array view.
+fn plate_texture(device: &wgpu::Device, n: u32, format: wgpu::TextureFormat) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Loading globe plates"),
         size: wgpu::Extent3d { width: n, height: n, depth_or_array_layers: 6 },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::R16Uint,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
-    })
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    (texture, view)
 }
 
 pub(in crate::egui_ui) fn install(renderer: &mut egui_wgpu::Renderer, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -304,6 +321,7 @@ pub(in crate::egui_ui) fn install(renderer: &mut egui_wgpu::Renderer, device: &w
             texture_entry(2),
             texture_entry(4),
             texture_entry(5),
+            texture_entry(8),
             wgpu::BindGroupLayoutEntry {
                 binding: 6,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -417,11 +435,8 @@ pub(in crate::egui_ui) fn install(renderer: &mut egui_wgpu::Renderer, device: &w
         multiview_mask: None,
         cache: None,
     });
-    let plates = plate_texture(device, 1);
-    let plates_view = plates.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(wgpu::TextureViewDimension::D2Array),
-        ..Default::default()
-    });
+    let (plates, plates_view) = plate_texture(device, 1, wgpu::TextureFormat::R16Uint);
+    let (seam_tint, seam_tint_view) = plate_texture(device, 1, wgpu::TextureFormat::Rgba8Unorm);
     let axes = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Loading globe plate rotations"),
         size: AXES_BYTES,
@@ -440,6 +455,8 @@ pub(in crate::egui_ui) fn install(renderer: &mut egui_wgpu::Renderer, device: &w
         bind: None,
         plates,
         plates_view,
+        seam_tint,
+        seam_tint_view,
         axes,
         motion_key: None,
         backdrop,

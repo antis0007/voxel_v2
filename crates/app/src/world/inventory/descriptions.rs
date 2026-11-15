@@ -23,6 +23,8 @@ impl Item {
             Self::Block(engine_content::BlockId::ClaimStake) => "claim_stake",
             Self::Block(engine_content::BlockId::LightlessShaft) => "lightless_shaft",
             Self::Block(engine_content::BlockId::GildedGate) => "gilded_gate",
+            Self::Block(engine_content::BlockId::HighfoldGate) => "highfold_gate",
+            Self::Block(engine_content::BlockId::GloamingGate) => "gloaming_gate",
             Self::Tool(19) => "slime_sling",
             Self::HOE => return None,
             Self::Tool(1 | 2) => "bore",
@@ -47,6 +49,10 @@ impl Item {
     pub fn stats_line(self) -> String {
         match self {
             Self::Block(block) if block.chest_tier().is_some() => format!("Capacity: {} slots", block.chest_slots()),
+            Self::Block(engine_content::BlockId::LightlessShaft) => format!(
+                "Rock overhead: {:.0} m · Hush notice: {:.1} s unlit",
+                super::super::lightless_gate::DEPTH_M, super::super::lightless_life::NOTICE_S,
+            ),
             Self::Tool(40) => String::new(),
             Self::Tool(41) => "[RMB] Map".into(),
             Self::HOE => "[RMB] Till soil".into(),
@@ -57,9 +63,9 @@ impl Item {
             Self::Armor(_, ArmorTier::Ballast) => format!("Reach: {:.0} m · [Alt+{}] Grip", crate::player::traversal::ARM_REACH, crate::keybinds::hint(crate::keybinds::Action::Jump)),
             Self::Armor(_, ArmorTier::Burner) => format!("Fuel: {:.0} s / Bio-ethanol", crate::player::traversal::BURN_SECONDS),
             Self::Armor(_, ArmorTier::Induction) => format!("Capacity: {:.0} FE · {:.0} FE/s", crate::player::traversal::CHARGE_CAPACITY, crate::player::traversal::POWER_PER_SECOND),
-            Self::Armor(_, ArmorTier::Slime) => format!("Bounce: {:.0} m/s max · Fall damage: 0", crate::player::traversal::BOUNCE_CAP),
+            Self::Armor(_, ArmorTier::Slime) => format!("Bounce: {:.0} m/s max · Walls: Rebound · Fall damage: 0", crate::player::traversal::BOUNCE_CAP),
             Self::Armor(_, ArmorTier::Glider) => format!("Cruise: {:.0} m/s · [{}] Deploy", crate::player::glide::TRIM_SPEED, crate::keybinds::hint(crate::keybinds::Action::Jump)),
-            Self::Tool(19) => format!("Charge: {:.1} s · Launch: {:.0} m/s", crate::player::traversal::SLING_SECONDS, crate::player::traversal::SLING_SPEED),
+            Self::Tool(19) => format!("Charge: {:.1} s · Launch: {:.0} m/s · Air: 1", crate::player::traversal::SLING_SECONDS, crate::player::traversal::SLING_SPEED),
             Self::Armor(_, _) => format!("Defence +{:.0}%", self.armor_reduction() * 100.0),
             Self::Weapon(tier) => format!("Base damage {:.0}", super::weapon_damage(u32::from(tier))),
             Self::Tool(6..=8) => super::super::mining::Tool::of(self).map_or(String::new(), |t| format!("Tier {} · Speed {}×", t.tier, t.speed)),

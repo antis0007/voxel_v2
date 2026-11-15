@@ -87,9 +87,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let edge_band = min(local_y, 1.0 - local_y);
     let up = in.screen_y;
 
-    // Coverage rises with height and along horizontal edges, so the lower half
-    // of a cell breaks into dashes while the top stays nearly continuous.
-    let coverage = clamp(up * 1.10 + edge_band * 0.70 - 0.20, 0.0, 1.0);
+    // Coverage rises with height and along horizontal edges, so cells low in the
+    // view break into dashes while the top stays continuous. The floor keeps the
+    // cell at the crosshair (screen middle) nearly solid: the old ramp left about
+    // 35% of its edge pixels, which vanished on pale stone (HUD_LAYOUT.md).
+    let coverage = clamp(0.45 + up * 0.75 + edge_band * 0.40, 0.0, 1.0);
     let threshold = overlay_bayer(vec2<i32>(in.clip_pos.xy)) * 0.6 + grain * 0.4;
     if coverage < threshold { discard; }
 

@@ -67,7 +67,7 @@ fn main() {
 fn bench(args: &[String]) {
     let x0: i32 = args.first().and_then(|s| s.parse().ok()).unwrap_or(3689);
     let z0: i32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3202);
-    let cfgs: Vec<WorldSampleConfig> = [309u32, wayside::WAYSIDE_GENERATOR].iter().map(|&g| WorldSampleConfig {
+    let cfgs: Vec<WorldSampleConfig> = [wayside::WAYSIDE_GENERATOR, 319u32].iter().map(|&g| WorldSampleConfig {
         planet: None, seed: 2_738_958_700, generator_version: g, world_type: WorldType::Planet,
         voxel_scale: VoxelScalePreset::OneMeter }).collect();
     let floor = engine_worldgen::sample_column(&cfgs[0], x0, z0).height;
@@ -84,5 +84,5 @@ fn bench(args: &[String]) {
             std::hint::black_box(n);
         }
     }
-    println!("band 64x64x8 at ({x0},{z0}): gen309 best {:.1} ms, gen320 best {:.1} ms (+{:.1}%)", best[0], best[1], (best[1] / best[0] - 1.0) * 100.0);
+    println!("band 64x64x8 at ({x0},{z0}): gen320 best {:.1} ms, gen319 best {:.1} ms (320 vs 319 {:+.1}%)", best[0], best[1], (best[0] / best[1] - 1.0) * 100.0);
 }

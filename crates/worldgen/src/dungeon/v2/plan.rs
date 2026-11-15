@@ -293,7 +293,7 @@ pub fn generate(seed: u32, cx: f32, cz: f32, ground: f32, version: u32) -> Compl
     }
 
     // Generator 294: locks on the critical path, keys in caches before them.
-    let quest = if version >= super::quest::VERSION {
+    let quest = if crate::features::legacy_preview(version, super::quest::VERSION) {
         let eligible: Vec<bool> = rooms.iter().enumerate().map(|(i, room)| {
             let special = matches!(room.kind, Kind::Entry | Kind::Reveal | Kind::Core | Kind::Chasm | Kind::Orrery
                 | Kind::Cells | Kind::Cistern | Kind::Sluice | Kind::Scriptorium) || room.kind.is_puzzle();

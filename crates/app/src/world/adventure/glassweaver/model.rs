@@ -124,6 +124,8 @@ pub(in crate::world::adventure) fn model(e: &Enemy, m: &mut Model, time: f32) {
     let k = boss_look::scale(e);
     m.scale_since(mark, e.pos, Vec3::splat(k));
     m.set_surface_kind(41.0);
+    // Body only: the lattice and flying shards below live in world space.
+    crate::world::adventure::enemy_presentation::motion::pose_body(e, m, mark);
     lattice(e, m, time, pal);
     for shard in &s.motion.shards {
         let fade = (shard.life / 0.6).clamp(0.0, 1.0);

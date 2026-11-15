@@ -958,6 +958,150 @@
             ),
         ],
     )),
+    // Pine Rotor (field_foes.rs): a pine crown that shears off its trunk and flies as a rotor.
+    (64, (
+        name: "Pine Rotor",
+        role: Flyer,
+        health: 70.0,
+        body_height: 1.2,
+        body_width: 1.8,
+        center_height: 0.2,
+        tall: false,
+        flying: true,
+        brawler: false,
+        speed: 4.2,
+        attack_range: 5.0,
+        windup: 0.9,
+        cooldown: 0.7,
+        drops: [
+            (
+                item: Resource(2),
+                min: 1,
+                max: 3,
+            ),
+            (
+                item: Resource(18),
+                min: 0,
+                max: 1,
+            ),
+        ],
+    )),
+    // Palm Rotor (field_foes.rs): palm fronds that swing level into blades.
+    (65, (
+        name: "Palm Rotor",
+        role: Flyer,
+        health: 60.0,
+        body_height: 1.2,
+        body_width: 2.0,
+        center_height: 0.2,
+        tall: false,
+        flying: true,
+        brawler: false,
+        speed: 4.6,
+        attack_range: 5.0,
+        windup: 0.9,
+        cooldown: 0.7,
+        drops: [
+            (
+                item: Resource(2),
+                min: 1,
+                max: 3,
+            ),
+            (
+                item: Resource(18),
+                min: 0,
+                max: 1,
+            ),
+        ],
+    )),
+    // Pine Roper (aberrations.rs): a roper grown as a pine; roots are its tendrils, short reach.
+    (66, (
+        name: "Pine Roper",
+        role: Rooted,
+        health: 160.0,
+        body_height: 4.5,
+        body_width: 1.2,
+        center_height: 1.3,
+        tall: true,
+        flying: false,
+        brawler: false,
+        speed: 0.0,
+        attack_range: 6.5,
+        windup: 1.0,
+        cooldown: 4.0,
+        drops: [
+            (
+                item: Resource(13),
+                min: 2,
+                max: 4,
+            ),
+            (
+                item: Resource(18),
+                min: 1,
+                max: 2,
+            ),
+        ],
+    )),
+    // Palm Roper (aberrations.rs): a roper grown as a palm.
+    (67, (
+        name: "Palm Roper",
+        role: Rooted,
+        health: 160.0,
+        body_height: 5.0,
+        body_width: 1.2,
+        center_height: 1.3,
+        tall: true,
+        flying: false,
+        brawler: false,
+        speed: 0.0,
+        attack_range: 6.5,
+        windup: 1.0,
+        cooldown: 4.0,
+        drops: [
+            (
+                item: Resource(13),
+                min: 2,
+                max: 4,
+            ),
+            (
+                item: Resource(18),
+                min: 1,
+                max: 2,
+            ),
+        ],
+    )),
+    // Diggers (kinds 92-93): body and motion live in burrowers.ron.
+    // Names pending owner approval.
+    (92, (
+        name: "Burrow Mole",
+        role: Skirmisher,
+        health: 40.0,
+        body_height: 0.5,
+        body_width: 0.6,
+        center_height: 0.0,
+        tall: false,
+        flying: false,
+        brawler: false,
+        speed: 3.0,
+        attack_range: 1.0,
+        windup: 0.3,
+        cooldown: 1.2,
+    )),
+    (93, (
+        name: "Mud Delver",
+        role: Skirmisher,
+        health: 75.0,
+        body_height: 0.8,
+        body_width: 0.8,
+        center_height: 0.0,
+        tall: false,
+        flying: false,
+        brawler: false,
+        speed: 2.4,
+        attack_range: 1.2,
+        windup: 0.35,
+        cooldown: 1.4,
+    )),
     // Burrowers (kinds 80-86): body, motion and palette live in burrowers.ron.
     (80, (
         name: "Rock Worm",
@@ -1161,6 +1305,10 @@
         attack_range: 1.8,
         windup: 0.45,
         cooldown: 2.0,
+        drops: [
+            (item: Block(CopperBlock), min: 3, max: 6),
+            (item: Block(Crystal), min: 1, max: 2),
+        ],
     )),
     (90, (
         name: "Chasm Breacher",
@@ -1176,6 +1324,10 @@
         attack_range: 2.0,
         windup: 0.4,
         cooldown: 2.0,
+        drops: [
+            (item: Block(Crystal), min: 4, max: 7),
+            (item: Block(StarGlass), min: 2, max: 4),
+        ],
     )),
     (91, (
         name: "Hollow Sea Leviathan",
@@ -1191,6 +1343,11 @@
         attack_range: 2.8,
         windup: 0.6,
         cooldown: 2.0,
+        drops: [
+            (item: Block(GoldBlock), min: 3, max: 5),
+            (item: Block(StarGlass), min: 4, max: 6),
+            (item: Block(MithrilBlock), min: 1, max: 1),
+        ],
     )),
     (88, (
         name: "Drowned Hunter",
@@ -1206,6 +1363,10 @@
         attack_range: 2.2,
         windup: 0.5,
         cooldown: 2.0,
+        drops: [
+            (item: Block(Crystal), min: 3, max: 5),
+            (item: Block(SilverBlock), min: 1, max: 2),
+        ],
     )),
     (87, (
         name: "Great Rock Worm",

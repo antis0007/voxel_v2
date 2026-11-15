@@ -98,12 +98,12 @@ pub fn gear(world: &World, hand_slot: usize) -> Gear {
     hotbar.or_else(|| empty_deck.map(Gear::EmptyDeck)).unwrap_or(Gear::Missing)
 }
 pub fn home(cfg: &WorldSampleConfig) -> Option<Vec3> {
-    if !matches!(cfg.world_type, super::WorldType::Hills | super::WorldType::Ridged) { return None; }
+    if !engine_worldgen::features::enabled(cfg, engine_worldgen::features::Feature::Workshop) { return None; }
     let heart = sites::workshop_heart(cfg)?;
     Some(Vec3::new(-3.5, heart.y + 19.0, -39.5))
 }
 pub fn has_lanterncap(cfg: &WorldSampleConfig) -> bool {
-    cfg.generator_version >= 48 && matches!(cfg.world_type, super::WorldType::Hills | super::WorldType::Ridged)
+    cfg.generator_version >= 48 && engine_worldgen::features::enabled(cfg, engine_worldgen::features::Feature::Workshop)
 }
 
 pub fn marker(a: &Adventure, cfg: &WorldSampleConfig, origin: Vec3, prepared: bool) -> Option<QuestMarker> {
@@ -118,7 +118,17 @@ pub fn marker(a: &Adventure, cfg: &WorldSampleConfig, origin: Vec3, prepared: bo
     } else if !prepared {
         (home, "Workshop: prepare equipment")
     } else {
-        (sites::workshop_mine_entrance(cfg)?, "Mine Entrance")
+        let entrance = sites::workshop_mine_entrance(cfg)?;
+        let vault = sites::workshop_heart(cfg)?;
+        // Once down the decline, guide toward the vault rather than back outside.
+        // Derive this from position so retreating restores the entrance cue.
+        if origin.y < entrance.y - 4.0
+            && origin.distance_squared(vault) < origin.distance_squared(entrance)
+        {
+            (vault, "Guardian Vault")
+        } else {
+            (entrance, "Mine Entrance")
+        }
     };
     let d = pos - origin;
     Some(QuestMarker { pos, label, kind: 0,

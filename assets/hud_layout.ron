@@ -8,9 +8,11 @@
     gap: 6.0,
     slots: {
         // Focus band, top centre: what the player is facing and aiming at.
-        "compass": (anchor: Top, offset: (0.0, 8.0)),
-        "look_at": (anchor: Top, offset: (0.0, 8.0), below: ["compass"]),
-        "enemy_focus": (anchor: Top, offset: (0.0, 8.0), below: ["compass", "look_at"]),
+        // A boss bar, when one is up, takes the top line and pushes the band down.
+        "boss_bar": (anchor: Top, offset: (0.0, 8.0), width: 320.0),
+        "compass": (anchor: Top, offset: (0.0, 8.0), below: ["boss_bar"]),
+        "look_at": (anchor: Top, offset: (0.0, 8.0), below: ["boss_bar", "compass"]),
+        "enemy_focus": (anchor: Top, offset: (0.0, 8.0), below: ["boss_bar", "compass", "look_at"]),
 
         // Navigation column, top right: map, then the pinned goal, then Alt telemetry.
         "goal_tracker": (anchor: TopRight, offset: (-12.0, 12.0), below: ["minimap"], gap: 12.0, width: 224.0),
@@ -18,10 +20,13 @@
 
         // Event notices: a fixed band in the upper third, clear of the crosshair.
         // They only move down when the focus band grows into them.
-        "journey": (anchor: Top, fraction: (0.0, 0.16), below: ["compass", "look_at", "enemy_focus"]),
+        "journey": (anchor: Top, fraction: (0.0, 0.16), below: ["boss_bar", "compass", "look_at", "enemy_focus"]),
         "reward": (anchor: Top, fraction: (0.0, 0.16), below: ["compass", "look_at", "enemy_focus", "journey"]),
         "receiver_notice": (anchor: Top, fraction: (0.0, 0.16), below: ["compass", "look_at", "enemy_focus", "journey", "reward"]),
         "world_border": (anchor: Top, fraction: (0.0, 0.16), below: ["compass", "look_at", "enemy_focus", "journey", "reward", "receiver_notice"]),
         "title_card": (anchor: Top, fraction: (0.0, 0.24), below: ["journey", "reward", "receiver_notice", "world_border"], gap: 10.0),
+
+        // Bottom right: pickups stack above the subtitle column, as in vanilla's corner.
+        "pickup_feed": (anchor: BottomRight, offset: (-16.0, -60.0), above: ["subtitles"]),
     },
 )

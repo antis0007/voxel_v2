@@ -1082,7 +1082,7 @@ pub(super) fn draw(
     let window = egui::Window::new("Inventory")
         .frame(egui::Frame::new().fill(super::themes::current(ctx).panel)
             .stroke(egui::Stroke::new(1.0, super::themes::current(ctx).edge))
-            .inner_margin(egui::Margin::symmetric(14, 10)))
+            .inner_margin(egui::Margin::symmetric(8, 6)))
         .title_bar(false)
         .collapsible(false)
         .resizable(false)
@@ -1102,6 +1102,12 @@ pub(super) fn draw(
         .max_height((screen.height() - 16.0).max(200.0));
     let window_response = window
         .show(ctx, |ui| {
+            if page != 2 {
+                // Dense baseline for every page but the unit-scaled survival layout.
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 3.0);
+                ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+                ui.spacing_mut().interact_size.y = 22.0;
+            }
             if page == 2 {
                 // The survival page has a fixed width: pack and recipe columns.
                 // Without it the tab strip claims the whole screen.
@@ -1123,9 +1129,6 @@ pub(super) fn draw(
                 let catalogue_w = (screen.width() - 80.0).clamp(280.0, 720.0);
                 ui.set_width(catalogue_w);
                 ui.set_max_width(catalogue_w);
-                ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
-                ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
-                ui.spacing_mut().interact_size.y = 28.0;
             } else if page == 1 {
                 ui.set_width(WAND_PAGE_W);
                 ui.set_max_width(WAND_PAGE_W);
@@ -1158,10 +1161,11 @@ pub(super) fn draw(
                 page = 2;
             }
             // Pages open as the player reaches them; the page on screen always stays reachable.
-            let unlocks = unlocks::derive(ctx, creative.catalogue_open(), survival, machines, equipment, expedition.is_some());
+            let unlocks = unlocks::derive(ctx, creative.catalogue_open(), survival, machines, equipment);
+            let has_nav = machines.workshop.is_some() || machines.count > 0;
+            let mut nav_dest = None;
             ui.horizontal(|ui| {
-                if (unlocks.projects_open() || page == 9)
-                    && ui.selectable_label(page == 9, if page == 2 && project_return { "‹ Projects" } else { "Projects" }).clicked()
+                if ui.selectable_label(page == 9, if page == 2 && project_return { "‹ Projects" } else { "Projects" }).clicked()
                 {
                     page = 9;
                     *drag = None;
@@ -1178,45 +1182,49 @@ pub(super) fn draw(
                     }
                     *drag = None;
                 }
-                if (page == 1 || page == 2 && guide_return)
-                    && ui.small_button(if guide_return { "‹ Guide" } else { "Guide" })
-                        .on_hover_text("Field Guide to Magic")
-                        .clicked()
-                {
-                    super::recipe_book::open_magic_guide(ctx);
-                    page = 6;
-                    *drag = None;
-                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("×").on_hover_text("Close [E] [Esc]").clicked() {
                         survival.return_transient_to_pack();
                         creative.show_palette = false;
                         *drag = None;
                     }
-                    if page == 4 && ui.button("Materials").clicked() {
-                        creative.show_material_editor = true;
-                        creative.show_palette = false;
+                    // Right to left: the Guide button sits beside the close control, not under it.
+                    if (page == 1 || page == 2 && guide_return)
+                        && ui.small_button(if guide_return { "‹ Guide" } else { "Guide" })
+                            .on_hover_text("Field Guide to Magic")
+                            .clicked()
+                    {
+                        super::recipe_book::open_magic_guide(ctx);
+                        page = 6;
                         *drag = None;
                     }
                 });
             });
+            if has_nav {
+                // Build / Map / Logistics: one slim row of small text under the tabs.
+                nav_dest = ui
+                    .scope(|ui| {
+                        ui.style_mut().override_text_style = Some(egui::TextStyle::Small);
+                        ui.spacing_mut().interact_size.y = 16.0;
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        super::workshop::navigation(ui, Some(page))
+                    })
+                    .inner;
+            }
             ui.separator();
 
-            if machines.workshop.is_some() || machines.count > 0 {
-                match super::workshop::navigation(ui, Some(page)) {
-                    Some(super::workshop::Destination::Page(next)) => {
-                        page = next;
-                        *drag = None;
-                    }
-                    Some(super::workshop::Destination::Map) => {
-                        survival.return_transient_to_pack();
-                        *drag = None;
-                        *action = UiAction::WorkshopMap(None);
-                        return;
-                    }
-                    None => {}
+            match nav_dest {
+                Some(super::workshop::Destination::Page(next)) => {
+                    page = next;
+                    *drag = None;
                 }
-                ui.separator();
+                Some(super::workshop::Destination::Map) => {
+                    survival.return_transient_to_pack();
+                    *drag = None;
+                    *action = UiAction::WorkshopMap(None);
+                    return;
+                }
+                None => {}
             }
             if page == super::workshop::LOGISTICS {
                 super::workshop::logistics(ui, machines, &mut page, action);
@@ -1290,15 +1298,8 @@ pub(super) fn draw(
             // path used by the torch review capture; equipment selection uses
             // the shared host/local transaction, preserving displaced items.
             if page == 4 {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        RichText::new("Catalogue")
-                            .size(13.0)
-                            .color(presentation::AMBER),
-                    );
-                    if catalogue_mode == 1 {
-                        ui.separator();
-                        ui.label(RichText::new("Quantity").size(13.0).color(presentation::MUTED));
+                if catalogue_mode == 1 {
+                    ui.horizontal_wrapped(|ui| {
                         for amount in [1u32, 8, 64] {
                             if ui
                                 .selectable_label(give_count == amount, format!("×{amount}"))
@@ -1312,11 +1313,28 @@ pub(super) fn draw(
                                 .size(13.0)
                                 .color(presentation::MUTED),
                         );
-                    }
-                });
+                    });
+                }
                 if catalogue::tabs(ui, &mut catalogue_mode, &mut group) { *drag = None; }
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(if group == "All" { if catalogue_mode == 0 { "Blocks" } else { "Items" } } else { &group });
+                ui.horizontal(|ui| {
+                    let hint = if catalogue_mode == 0 {
+                        "Search creative blocks…"
+                    } else {
+                        "Search items, gear and materials…"
+                    };
+                    ui.add(
+                        egui::TextEdit::singleline(&mut creative.palette_search)
+                            .hint_text(hint)
+                            .desired_width((ui.available_width() - 240.0).max(80.0)),
+                    );
+                    if ui.small_button("×").on_hover_text("Clear").clicked() {
+                        creative.palette_search.clear();
+                    }
+                    if ui.small_button("Materials").clicked() {
+                        creative.show_material_editor = true;
+                        creative.show_palette = false;
+                        *drag = None;
+                    }
                     if ui
                         .small_button(if sort_by_name { "A–Z" } else { "ID" })
                         .on_hover_text("Toggle between name and catalogue-ID sorting.")
@@ -1354,21 +1372,6 @@ pub(super) fn draw(
                         *drag = None;
                     }
                 });
-                ui.horizontal(|ui| {
-                    let hint = if catalogue_mode == 0 {
-                        "Search creative blocks…"
-                    } else {
-                        "Search items, gear and materials…"
-                    };
-                    ui.add(
-                        egui::TextEdit::singleline(&mut creative.palette_search)
-                            .hint_text(hint)
-                            .desired_width((ui.available_width() - 52.0).max(80.0)),
-                    );
-                    if ui.button("Clear").clicked() {
-                        creative.palette_search.clear();
-                    }
-                });
             }
 
             egui::ScrollArea::vertical()
@@ -1385,7 +1388,9 @@ pub(super) fn draw(
                         - if page == 4 { 64.0 } else { 48.0 })
                     .clamp(48.0, (screen.height() - 128.0).max(48.0)),
                 )
-                .auto_shrink([false, false])
+                // The catalogue hugs its rows so the hotbar sits right under the
+                // grid, as in the vanilla creative tab, instead of under a blank band.
+                .auto_shrink([false, page == 4])
                 .show(ui, |ui| {
                     if page == 5 {
                         super::tool_station::page(ui, equipment, survival, machines.bench, action);
@@ -1462,8 +1467,9 @@ fn draw_catalogue(
     hovered: &mut Option<BlockId>,
     action: &mut UiAction,
 ) {
-    let edge = if compact { 40.0 } else { 48.0 };
-    let columns = ((ui.available_width() + 4.0) / (edge + 4.0)).floor().max(1.0) as usize;
+    // Gapless 18-unit pitch like the vanilla creative grid; cells share their bevel seams.
+    let edge = if compact { 32.0 } else { 36.0 };
+    let columns = (ui.available_width() / edge).floor().max(1.0) as usize;
     let card = [edge, edge];
     if mode == 0 {
         let mut matches: Vec<_> = material_defs()
@@ -1485,7 +1491,9 @@ fn draw_catalogue(
             return;
         }
         egui::Grid::new("inventory_blocks")
-            .spacing([4.0, 4.0])
+            .spacing([2.0, 2.0])
+            .min_col_width(edge)
+            .min_row_height(edge)
             .show(ui, |ui| {
                 for (index, def) in matches.iter().enumerate() {
                     let response = ui
@@ -1559,7 +1567,9 @@ fn draw_catalogue(
         ui.weak("No Matching Items");
     }
     egui::Grid::new("inventory_items")
-        .spacing([4.0, 4.0])
+        .spacing([2.0, 2.0])
+        .min_col_width(edge)
+        .min_row_height(edge)
         .show(ui, |ui| {
             for (index, item) in items.iter().enumerate() {
                 let response = ui

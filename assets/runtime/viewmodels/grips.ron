@@ -1,0 +1,23 @@
+// Finger openness per grip, as (thumb, index, middle, ring, little).
+// 0 = the hand rig's closed bind fist, 1 = its authored "open" turn, below 0 squeezes.
+// Tune live with VOXEL_REVIEW_FINGERS=t,i,m,r,l in a --benchmark- capture.
+(
+ease_rate:14.0,
+// Loose empty hand; curl deepens toward the little finger like a resting hand.
+bare:(1.6,1.7,1.95,2.15,2.3),
+// Fist around a slim shaft.
+torch:(0.15,0.25,0.25,0.25,0.30),
+// Cube cradled: thumb over the top edge, fingers eased off so they do not bury in the sides.
+block:(1.0,0.55,0.50,0.45,0.40),
+// Authored fist for long tool handles.
+shaft:(0.0,0.0,0.0,0.0,0.0),
+// Sword grip with a light squeeze (the rig's strong_grip pose).
+blade:(-0.1,-0.1,-0.1,-0.1,-0.1),
+// Flat items pinched between thumb and index with the rest eased open.
+sprite:(0.45,0.55,0.20,0.15,0.15),
+// Handle hooked by the fingers.
+handle:(0.2,0.0,0.0,0.0,0.0),
+// Ready stance of a held blade: turn (pitch, yaw, roll) and seat (right, up, forward metres).
+blade_turn:(-0.5,-0.2,0.25),
+blade_seat:(0.0,0.0,0.0),
+)

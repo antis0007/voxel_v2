@@ -316,7 +316,12 @@ impl Adventure {
             };
             // A disguise must not announce its species and health across the room.
             // Its physical seam/glint and player attacks remain valid counterplay.
-            if enemy.encounter.concealed { continue; }
+            if enemy.encounter.concealed
+                || super::field_foes::tree_dormant(enemy)
+                || (super::aberrations::tree_roper(enemy.kind) && !super::aberrations::tree_roused(enemy))
+            {
+                continue;
+            }
             if !(distance_squared > 0.1 * 0.1
                 && distance_squared <= ENEMY_FOCUS_RANGE * ENEMY_FOCUS_RANGE)
             {

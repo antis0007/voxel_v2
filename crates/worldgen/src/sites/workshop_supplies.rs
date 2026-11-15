@@ -1,9 +1,9 @@
 //! A broken mine crossing with a sealed sump. The bridge and the drain use
 //! ordinary blocks, so player edits and water use the existing save path.
-use super::{B, Vec3, WorldSampleConfig, WorldType};
+use super::{B, Vec3, WorldSampleConfig};
 
 pub(super) fn enabled(cfg: &WorldSampleConfig) -> bool {
-    cfg.world_type == WorldType::Hills
+    crate::features::enabled(cfg, crate::features::Feature::WorkshopSupplies)
         && cfg.generator_version >= engine_voxel::WORKSHOP_SUPPLY_GENERATOR
 }
 

@@ -275,10 +275,15 @@ fn construction(w: &mut World, city: &mut Community, pile: IVec3, bread: u32, re
     if city.development.knowledge == 0 || city.development.vacancies.len() >= 2
         || residents == 0 || bread < residents as u32 * 4 { return; }
     let v = w.voxel_scale.meters();
-    let n = city.development.housing_cursor % 121;
-    let x = (n % 11) as f32 * 12.0 - 60.0;
-    let z = (n / 11) as f32 * 12.0 - 60.0;
-    if x*x+z*z > 60.0*60.0 || (x.abs() < 24.0 && z.abs() < 24.0) {
+    let regional = w.generator_version >= engine_voxel::REGIONAL_CIVILIZATION_GENERATOR;
+    let half_width = if regional { 96.0 } else { 60.0 };
+    let side = if regional { 17 } else { 11 };
+    let n = city.development.housing_cursor % (side * side);
+    let x = (n % side) as f32 * 12.0 - half_width;
+    let z = (n / side) as f32 * 12.0 - half_width;
+    // Leave two connected avenues open for the district as housing fills in.
+    let street = regional && (x % 48.0 == 0.0 || z % 48.0 == 0.0);
+    if street || x*x+z*z > half_width*half_width || (x.abs() < 24.0 && z.abs() < 24.0) {
         city.development.housing_cursor = city.development.housing_cursor.wrapping_add(1);
         return;
     }

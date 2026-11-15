@@ -1,6 +1,6 @@
 //! Composed geological destinations: a foreground frame, a crossing and a skyline.
 //! Shapes are metre-space fields shared by columns and physical voxel sampling.
-use crate::{BlockId as B, WorldSampleConfig, WorldType, hash2, smoothstep};
+use crate::{BlockId as B, WorldSampleConfig, hash2, smoothstep};
 use glam::{IVec3, Vec3};
 use std::{cell::RefCell, collections::HashMap};
 
@@ -15,7 +15,7 @@ pub const FLARE_VERSION:u32=98;
 /// Rarer sites, per-peak heights, flank gullies, uneven beds with recessed soft layers.
 pub const FORM_VERSION:u32=134;
 thread_local! {static SITES:RefCell<(Option<WorldSampleConfig>,HashMap<(i32,i32),Option<Site>>)>=RefCell::new((None,HashMap::new()));}
-fn active(cfg:&WorldSampleConfig)->bool {cfg.generator_version>=VERSION&&matches!(cfg.world_type,WorldType::Hills|WorldType::Ridged)}
+fn active(cfg:&WorldSampleConfig)->bool {cfg.generator_version>=VERSION&&crate::features::enabled(cfg, crate::features::Feature::Vistas)}
 fn site(cfg:&WorldSampleConfig,ix:i32,iz:i32)->Option<Site> {
     if !active(cfg){return None;}
     SITES.with(|cache|{

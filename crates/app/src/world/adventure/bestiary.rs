@@ -162,6 +162,7 @@ pub fn name(kind: u32) -> Option<&'static str> {
 
 pub(super) fn has_body(kind: u32) -> bool {
     matches!(kind, 0 | 1 | 4 | 5 | 10..=13 | 15..=32) || super::monsters::is_kind(kind)
+        || super::aberrations::tree_roper(kind)
 }
 
 /// Animated, articulated body. The caller owns health-bar, affix motes,
@@ -183,6 +184,7 @@ pub fn draw_body(e: &Enemy, m: &mut Model, time: f32, wind: f32, hit: [f32; 3]) 
         super::mobs::SKELETON => super::mobs::skeleton_body(e, m, time, wind, hit),
         20..=25 => super::folklore::body(e, m, time, wind),
         26..=31 => super::aberrations::body(e, m, time, wind),
+        super::aberrations::PINE_ROPER | super::aberrations::PALM_ROPER => super::aberrations::body(e, m, time, wind),
         super::monsters::OWLBEAR..=super::monsters::YETI => super::monsters::body(e, m, time, wind),
         32 => security_robot(e, m, time, wind),
         _ => {}

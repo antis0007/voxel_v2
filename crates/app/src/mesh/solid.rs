@@ -395,7 +395,7 @@ impl SolidPlan {
                 let size_m=size*chunk.voxel_meters;
                 let latch=fitting.door && (size_m.y-0.10).abs()<0.002;
                 let local_top=(hi-engine_content::fittings::anchor(p,engine_content::fittings::step(chunk.voxel_meters)).as_vec3())*chunk.voxel_meters;
-                let color=if latch { [0.64,0.42,0.19] } else if fitting.lever && local_top.y<0.141 { [0.36,0.37,0.34] } else { b.color(p) };
+                let color=if latch { [0.64,0.42,0.19] } else if fitting.switch == Some(engine_content::fittings::Switch::Lever) && local_top.y < 0.141 { [0.36,0.37,0.34] } else { b.color(p) };
                 if latch { surface.texture_kind=41; surface.roughness=0.46; }
                 push_box(&mut mesh,lo,hi,color,surface, project);
             }

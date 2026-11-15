@@ -4,6 +4,7 @@ use std::{io::{self, BufRead, Read, Write}, sync::mpsc::{self, Receiver}};
 
 pub mod engine;
 pub mod factory_lab;
+pub mod gilded_layout;
 pub mod machine;
 pub mod wand_lab;
 const MAX_LINE: usize = 32_768;

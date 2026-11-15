@@ -10,6 +10,8 @@ use glam::{IVec3, Mat4, Vec3};
 /// Sign text is drawn within this distance, in metres.
 const LABEL_RANGE_M: f32 = 8.0;
 const SLOT_PX: f32 = 40.0;
+/// Sign ink: near-black brown, dark enough to read on pale boards in daylight.
+const SIGN_INK: egui::Color32 = egui::Color32::from_rgb(10, 6, 4);
 
 /// Draws in-world sign text and, while `open` names a block, its page.
 pub fn draw(ctx: &egui::Context, open: &mut Option<IVec3>, world: &mut World, eye: Vec3, view_proj: Mat4, network: bool) {
@@ -259,7 +261,7 @@ fn labels(ctx: &egui::Context, world: &World, eye: Vec3, view_proj: Mat4) {
         let top = mid.y - size * 1.1 * lines.len() as f32 * 0.5;
         for (i, line) in lines.iter().enumerate() {
             let at = egui::pos2(mid.x, top + size * 1.1 * (i as f32 + 0.5));
-            painter.text(at, egui::Align2::CENTER_CENTER, line, egui::FontId::monospace(size), egui::Color32::from_rgb(40, 28, 18));
+            painter.text(at, egui::Align2::CENTER_CENTER, line, egui::FontId::monospace(size), SIGN_INK);
         }
     }
 }
