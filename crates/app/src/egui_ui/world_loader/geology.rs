@@ -106,7 +106,15 @@ pub(super) fn frame<'a>(
             clock.producer * (0.5 + 0.5 * gap / LAG_MYR) * (gap / 1.5).clamp(0.0, 1.0)
         }.min(base_rate * 1.5);
         clock.rate += (target - clock.rate) * (dt / RATE_SECONDS).min(1.0);
-        clock.myr = if still { latest } else { (clock.myr + dt * clock.rate.max(0.0)).min(latest) };
+        // Keep a little unpublished playback headroom while snapshots are
+        // arriving. Bound the approach speed so the coast eases to a stop
+        // during a slow solve instead of hitting the newest snapshot hard.
+        let rate = if complete {
+            clock.rate.max(0.0)
+        } else {
+            clock.rate.clamp(0.0, gap.max(0.0) / RATE_SECONDS)
+        };
+        clock.myr = if still { latest } else { (clock.myr + dt * rate).min(latest) };
         clock.at = now;
         clock.myr
     });
@@ -166,11 +174,9 @@ pub(super) fn surface(world: u64, frame: &DriftFrame) -> Option<Arc<Surface>> {
             .collect();
         let plates: Vec<u16> = frame.texels.iter().map(|t| t.plate).collect();
         let stress: Vec<[f32; 3]> = frame.texels.iter().map(|t| t.stress).collect();
-        // A frame the shader carries draws its seams itself, at screen
-        // resolution, from the plate map and margin tint in `motion::of`.
-        if frame.motion.is_empty() || dissolve() {
-            seams(n, &mut texels, &plates, &stress, &colours);
-        }
+        // Keep a boundary field at both endpoints. The shader carries and
+        // blends these fields through the snapshot boundary.
+        seams(n, &mut texels, &plates, &stress, &colours);
         eprintln!("[geology-probe] surface n={} {:.2} ms", n, probe_t.elapsed().as_secs_f64() * 1e3); // PROBE
         Some(Surface {
             key,

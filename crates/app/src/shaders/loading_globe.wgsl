@@ -486,9 +486,13 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         let rough = (0.3 + clamp(length(vec2<f32>(gx, gy)) * 5.0, 0.0, 1.0)) * detail;
         let bump = (t1 * grain.x + t2 * grain.y) * 0.45 * rough;
         let n_land = normalize(globe_view(normalize(d - (t1 * gx + t2 * gy) * k - bump)));
-        // Carried history frames draw plate seams here at screen resolution;
-        // other maps have them baked into the albedo and emission.
-        let seam_line = globe_seam_line(ds, texel_px);
+        // History endpoints bake their seams into the albedo and emission.
+        // Refine the moving contour at screen resolution within the interval.
+        // The detailed boundary belongs to the incoming ownership map.
+        // Ease it in and out so replacing that map cannot snap the contour.
+        let phase = g.view_y.w;
+        let detail_weight = smoothstep(0.0, 0.30, phase) * (1.0 - smoothstep(0.70, 1.0, phase));
+        let seam_line = globe_seam_line(ds, texel_px) * detail_weight;
         let seam_line_peak = max(seam_line.r, max(seam_line.g, seam_line.b));
         let seam_albedo = seam_line / max(seam_line_peak, 1e-3) * 0.8;
         let albedo = mix(raw_albedo * (1.0 + grain.z * 0.22 * detail * step(0.0, h)), seam_albedo,
@@ -538,7 +542,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         // The bilinear tail of a one-texel line is cut back so the seam stays thin.
         let seam = globe_glow(ds);
         let seam_peak = max(seam.r, max(seam.g, seam.b));
-        surface += (seam * smoothstep(0.1, 0.45, seam_peak) + seam_line) * GLOW_E * (0.25 + 0.75 * night);
+        surface += (seam * smoothstep(0.1, 0.45, seam_peak) * (1.0 - detail_weight) + seam_line) * GLOW_E * (0.25 + 0.75 * night);
 
         // Cloud shell: lit tops over a soft cast shadow offset toward the sun.
         let cover = globe_clouds(d);
