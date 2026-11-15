@@ -24,3 +24,12 @@ community ledger. Use the `review` command for repeatable regional maps.
 Release acceptance requires a full survival run through discovery, delivery and
 a visible settlement response, plus a save and reopen. A clean build or a
 settlement scheduler starting up is a smoke check.
+
+## Native validation
+
+The local build reached gameplay on Hills, Ridged and Planet with generator 322.
+The Hills loading screen displayed the regional map. The Hills Survival run
+admitted 11 residents across three settlements, and one stockpile opened with
+eight bread and 16 planks. Ridged admitted eight residents across two settlements.
+The Planet run reached playable terrain but had admitted no communities at its
+last inspection. The supply delivery and save and reopen checks remain pending.

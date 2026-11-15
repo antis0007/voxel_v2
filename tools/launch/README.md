@@ -19,7 +19,13 @@ Normal Game mode leaves installed save/cache paths and inherited environment unc
 
 ## Ownership and integrity
 
-profiles.v1.json is the sole profile-to-artifact mapping, with schema version 1 and release_id. Current is pinned to release-v20-validation-20261111/bin/axiom-collision-readiness-v20.exe and references that build's binary-hashes.json. Native build tooling owns this integrity receipt; do not duplicate its hash in launch code. Workshop references its package build.json; legacy native transport hashes are captured in legacy-binary-hashes.json. These are integrity receipts, not alternative executable selectors or publisher signatures. Missing/nonobject/malformed bindings and mismatched bytes fail before launch.
+`profiles.v1.json` maps each profile to its executable. Current points to
+`target/shared-integration-4773c629/AXIOM.exe`, built from source commit
+`4773c629` with the `release-fast` profile. `current-build.json` records
+the source commit and executable SHA-256. The local executable lives under
+the ignored `target` directory. Workshop uses its package's `build.json`.
+The separate multiplayer profiles use `legacy-binary-hashes.json`.
+The launcher checks the selected executable against its receipt before launch.
 
 Core.ps1 owns profile/path/hash validation and the process boundary with cwd/environment restoration. Workshop.ps1 owns relay/session/data/locking behavior; Multiplayer.ps1 owns direct-transport flags and Steam environment. Neither module chooses a build. The injectable runner exists only in the internal process helper for no-UI tests; the public entrypoint cannot inject it.
 

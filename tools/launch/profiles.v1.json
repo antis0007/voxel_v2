@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
-  "release_id": "2026-11-11-v20",
+  "release_id": "2026-11-14-shared-4773c629",
   "profiles": {
     "Current": {
-      "executable": "D:\\CodexArtifacts\\axiom-generation-speed-20261110\\release-v20-validation-20261111\\bin\\axiom-collision-readiness-v20.exe",
-      "binding": "D:\\CodexArtifacts\\axiom-generation-speed-20261110\\release-v20-validation-20261111\\binary-hashes.json",
-      "hash_key": "axiom-collision-readiness-v20.exe"
+      "executable": "target/shared-integration-4773c629/AXIOM.exe",
+      "binding": "tools/launch/current-build.json",
+      "hash_key": "executable_sha256"
     },
     "Workshop": {
       "executable": "target/workshop-playtest/Workshop.exe",
