@@ -158,7 +158,7 @@ fn coke_oven(n: &mut Node) {
     if super::industry::blocked(n) { n.status = "Exhaust blocked"; return; }
     if !n.formed {
         cool(n, 8);
-        n.status = "Incomplete shell";
+        n.status = if n.enabled { "Incomplete shell" } else { "Paused" };
         return;
     }
     if !n.enabled {
@@ -207,7 +207,7 @@ fn blast_furnace(n: &mut Node) {
     if super::industry::blocked(n) { n.status = "Exhaust blocked"; return; }
     if !n.formed {
         cool(n, 12);
-        n.status = "Incomplete shell";
+        n.status = if n.enabled { "Incomplete shell" } else { "Paused" };
         return;
     }
     if !n.enabled {
