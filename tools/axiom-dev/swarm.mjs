@@ -55,7 +55,8 @@ const scoutTier = { name: "haiku·scout", model: cfg.haiku, effort: "low", maxTu
 // A stronger model cannot invent a missing spec, owner decision or protocol: those stop at once.
 const designBlock = /\b(spec|design decision|owner decision|needs? (a |an )?(decision|design|approval)|protocol|lore|proper noun)\b/i;
 
-const dir = path.join(root, "target", "axiom-dev", "swarm");
+// --state-dir lets a test instance run beside the live swarm without sharing its results.
+const dir = opt("state-dir") ? path.resolve(opt("state-dir")) : path.join(root, "target", "axiom-dev", "swarm");
 mkdirSync(path.join(dir, "logs"), { recursive: true });
 const resultsFile = path.join(dir, "results.jsonl");
 const stateFile = path.join(dir, "state.json");
@@ -116,9 +117,11 @@ for (const id of bumpRows) {
   else { finished.set(id, reopenedRows.get(id) ?? { id, status: "blocked", final: true }); }
 }
 if (!flag("reopen")) bumpRows.clear();
-const logTail = (w, text) => { w.activity.push({ t: Date.now(), text }); if (w.activity.length > 60) w.activity.shift(); };
+// rev: results, events, settings; act: worker activity. The broadcaster pushes both to open pages.
+let rev = 0, act = 0;
+const logTail = (w, text) => { act++; w.activity.push({ t: Date.now(), text }); if (w.activity.length > 60) w.activity.shift(); };
 // Atomic: a crash mid-write must not leave a truncated state file for the next start.
-const persist = () => { try { writeFileSync(stateFile + ".tmp", JSON.stringify(state)); renameSync(stateFile + ".tmp", stateFile); } catch { /* ui still has memory */ } };
+const persist = () => { rev++; try { writeFileSync(stateFile + ".tmp", JSON.stringify(state)); renameSync(stateFile + ".tmp", stateFile); } catch { /* ui still has memory */ } };
 // One swarm per tree: two supervisors would hand the same rows to two sets of agents.
 const lockFile = path.join(dir, "swarm.lock");
 if (!flag("dry")) {
@@ -135,7 +138,7 @@ if (!flag("dry")) {
 }
 state.events = [];
 if (flag("start-paused")) state.paused = "started paused; press Resume";
-const event = text => { state.events.unshift({ t: Date.now(), text }); if (state.events.length > 40) state.events.pop(); console.log(new Date().toISOString(), text); };
+const event = text => { rev++; state.events.unshift({ t: Date.now(), text }); if (state.events.length > 40) state.events.pop(); console.log(new Date().toISOString(), text); };
 process.on("unhandledRejection", e => event("internal error (kept running): " + String(e?.message ?? e).slice(0, 160)));
 process.on("uncaughtException", e => { event("fatal: " + String(e?.message ?? e).slice(0, 160)); setTimeout(() => process.exit(1), 300); });
 for (const h of history) tierRoi(h); // the Cost panel starts from saved results, not from zero
@@ -173,7 +176,7 @@ const STATIC_TASK = `${"Implement ONE parity row end to end, fast. Never stop on
 6. If the behaviour already exists and works, edit nothing: report already-implemented with the owner files you verified.
 7. If source context is absent after ~20 lookups, create the owner yourself per OWNER POLICY; do not stop.
 8. Machine or factory rows only: make it provable. Add a "scenario" key to RESULT (keep RESULT on ONE line), e.g. "scenario":{"steps":[{"op":"machine_test","position":[0,40,0],"kind":"Crusher","set":{"energy":5000,"input":{"Tin ingots":64}},"ticks":600,"expect":{"end.out.Tin dust":64}}]}. The supervisor stores it, runs it headless in the real engine after the next build and returns any mismatch to you. Expect only values your change produces; at most 12 steps; omit the key for rows with no machine behaviour. Do not write files under tools/.
-Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars"}`;
+Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
 
 // Engine-overhaul rows (ENG-*, --family engine|engperf|engsim|engnet|enggame|engarch) change shared
 // engine code instead of adding content, so the slice rules differ: same output by default, a
@@ -186,7 +189,7 @@ const ENGINE_TASK = `Implement ONE engine-overhaul row as its smallest safe slic
 5. Edit with Edit/Write only. Others edit this tree concurrently: never run git checkout/stash/reset/restore/clean, never revert or reformat, keep unrelated hunks. Do not touch wand_xmb.rs, adventure/growth.rs, the parity ledger or any test.
 6. Verify once at the end: cargo check -p <the crate you edited> (package names are in each crates/*/Cargo.toml; the app is minecraft_style_voxel_prototype). No tests, no cargo fmt, no benchmarks.
 7. Summary must say what the owner has to measure (the row's acceptance check) and that it was NOT measured here.
-Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars"}`;
+Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
 
 function prompt(row, tier, note, order, ctx = "") {
   return `${/^ENG-/.test(row.id) ? ENGINE_TASK : STATIC_TASK}
@@ -325,11 +328,23 @@ function prewarm() {
   } catch { /* best effort */ }
 }
 const active = new Map(); // id -> { files }
+// Rows a worker may take. A missing owner system that already blocked two rows parks every row that
+// needs it, so no model is paid to rediscover the same gap. Pinned rows bypass the family filter.
+function eligible(ledger) {
+  const open = r => !["verified", "blocked", "parked", "design"].includes(r.status) && !parked.has(r.id) && !active.has(r.id) && (!finished.has(r.id) || retry.has(r.id));
+  const blocks = new Map();
+  for (const r of ledger.rows) if (finished.get(r.id)?.status === "blocked") for (const o of r.readiness.missing) blocks.set(o, (blocks.get(o) ?? 0) + 1);
+  const dead = new Set([...blocks].filter(([, n]) => n >= 2).map(([o]) => o));
+  state.deadOwners = [...dead].sort().map(o => `${o}×${blocks.get(o)}`);
+  const rows = filterRows(ledger.rows, { family: familyOf(), ready: cfg.readyOnly || undefined })
+    .filter(r => open(r) && !r.readiness.missing.some(o => dead.has(o)));
+  const pushed = priority.map(id => ledger.rows.find(r => r.id === id)).filter(r => r && open(r));
+  return { rows, pushed };
+}
 function pick() {
   const ledger = loadLedger();
-  const rows = filterRows(ledger.rows, { family: familyOf(), ready: cfg.readyOnly || undefined }).filter(r => !["verified", "blocked", "parked", "design"].includes(r.status) && !parked.has(r.id) && !active.has(r.id) && (!finished.has(r.id) || retry.has(r.id)));
+  const { rows, pushed } = eligible(ledger);
   const busy = new Set(state.workers.flatMap(w => w.row ? [...(w.likely ?? []).slice(0, 2), ...(w.files ?? [])] : []));
-  const pushed = priority.map(id => rows.find(r => r.id === id)).filter(Boolean);
   for (const row of [...pushed, ...nextRows(rows, 80)]) {
     if (active.has(row.id) || (finished.has(row.id) && !retry.has(row.id))) continue;
     if (bumpRows.has(row.id) && [...active.keys()].filter(id => bumpRows.has(id)).length >= 5) continue; // at most 5 save-format editors at once
@@ -362,6 +377,7 @@ function tierRoi(entry) {
 // Landed rows whose own summary says nothing reaches them are scaffolding; the board reports cost per wired row.
 const UNWIRED = /\bnot (?:yet )?wired\b|\bunwired\b|\bno callers?\b|\bnot wired to\b|\bunused\b|\bunplayable\b/i;
 function record(entry) {
+  rev++;
   tierRoi(entry);
   state.results.unshift(entry); if (state.results.length > 200) state.results.pop();
   appendFileSync(resultsFile, JSON.stringify(entry) + "\n");
@@ -483,7 +499,8 @@ async function work(worker) {
     const parsed = parseResult(out.text);
     const entry = { id: row.id, label: row.label, tier: tier.name, at: Date.now(), ms: Date.now() - worker.startedAt, files: parsed?.files?.length ? parsed.files : out.files,
       summary: parsed?.summary ?? (out.error || out.text || "no result").toString().slice(0, 240), status: parsed?.status ?? (out.ok ? "building" : "failed"), log: worker.log, tokens, cost: rowCost,
-      turns: worker.turns, cached: out.usage?.cache_read_input_tokens ?? 0, out: out.usage?.output_tokens ?? 0 };
+      turns: worker.turns, cached: out.usage?.cache_read_input_tokens ?? 0, out: out.usage?.output_tokens ?? 0,
+      wired: parsed?.wired, entry: parsed?.entry, why: parsed?.why };
     if (limit.test(out.error || out.text || "")) {
       // Sleep until the provider's stated reset instead of relaunching failing agents every 10 minutes.
       const until = limitResetAt(out.error || out.text || "");
@@ -502,8 +519,8 @@ async function work(worker) {
     const good = (entry.status === "building" || entry.status === "playable") && entry.files.length > 0;
     // A stronger model cannot invent a missing spec or a save-format bump: stop those at once.
     // Cost: a stronger model re-explores the same missing owner and fails the same way (11 of 17 opus runs).
-    const noOwner = !entry.files.length && /explored \d+ turns without an edit|owner code not located/i.test(entry.summary ?? "");
-    const hardBlock = designBlock.test(entry.summary ?? "") || noOwner;
+    const noOwner = !entry.files.length && (entry.why === "no_owner" || /explored \d+ turns without an edit|owner code not located/i.test(entry.summary ?? ""));
+    const hardBlock = entry.why === "design" || designBlock.test(entry.summary ?? "") || noOwner;
     const repeat = !good && lastFail.has(row.id) && sameFailure(lastFail.get(row.id), entry.summary);
     if (!good) lastFail.set(row.id, entry.summary ?? "");
     if (!good && !hardBlock && !repeat && tierIndex < tiers.length - 1) {
@@ -522,7 +539,7 @@ async function work(worker) {
     }
     if (good) {
       state.totals.done++;
-      if (UNWIRED.test(entry.summary ?? "")) { state.totals.scaffold = (state.totals.scaffold ?? 0) + 1; entry.unwired = true; }
+      if (entry.wired === false || (entry.wired === undefined && UNWIRED.test(entry.summary ?? ""))) { state.totals.scaffold = (state.totals.scaffold ?? 0) + 1; entry.unwired = true; }
       if (parsed?.scenario) {
         const bad = validateScenario(parsed.scenario);
         if (bad) event(`${row.id}: scenario not stored (${bad})`);
@@ -695,8 +712,32 @@ const pageUrl = new URL("./swarm.html", import.meta.url);
 // peek() reads the whole ledger, so the push loop shares one result for ten seconds.
 let peekCache = { at: 0, rows: [] };
 const peekCached = () => { if (Date.now() - peekCache.at > 10_000) peekCache = { at: Date.now(), rows: peek() }; return peekCache.rows; };
-const stateView = () => ({ ...state, now: Date.now(), workers: state.workers.map(({ child, ...w }) => w), queue: peekCached(),
+// The queue is computed first: it also refreshes state.deadOwners, which the spread then carries.
+const stateView = (queue = peekCached()) => ({ ...state, rev, now: Date.now(), workers: state.workers.map(({ child, ...w }) => w), queue,
   parked: [...parked], lessons: brain.lessons().slice(0, 12), families: Object.keys(FAMILIES) });
+// One broadcaster for every open page. The signature is rev.act.workers: pages fetch the full state
+// when rev moves and the light view otherwise. Nothing is serialised to decide whether to send.
+const listeners = new Set();
+const signature = () => `${rev}.${act}.${state.workers.map(w => String(w.status ?? "-")[0] + (w.row ?? "") + (w.turns ?? 0)).join("")}`;
+let sentSig = "", quiet = 0;
+setInterval(() => {
+  if (!listeners.size) return;
+  const sig = signature();
+  let msg = "";
+  if (sig !== sentSig) { sentSig = sig; quiet = 0; msg = `data: ${sig}\n\n`; } else if (++quiet >= 30) { quiet = 0; msg = ": beat\n\n"; }
+  if (msg) for (const res of listeners) res.write(msg);
+}, 500).unref();
+let engineCache = { at: 0, body: null };
+// Implementation prompt for a row: its section in the engine review, else its matrix note.
+function promptFor(id) {
+  try {
+    const review = readFileSync(path.join(root, "docs", "research", "ENGINE_OVERHAUL_REVIEW.md"), "utf8");
+    const at = review.indexOf("### " + id + "\n") >= 0 ? review.indexOf("### " + id + "\n") : review.indexOf("### " + id + "\r\n");
+    if (at >= 0) { const end = review.slice(at + 4).search(/\n(?:### |# |---)/); return review.slice(at, end < 0 ? undefined : at + 4 + end).trim(); }
+    const row = loadLedger().rows.find(r => r.id === id);
+    return row ? `${row.id} ${row.label}\n\n${row.mapping}\n\n${row.notes}` : "unknown row";
+  } catch (error) { return "prompt unavailable: " + String(error.message ?? error); }
+}
 // Latest panics from the game's crash log (saves/crash.log): time, site and first message line.
 function recentCrashes(count) {
   try {
@@ -718,33 +759,34 @@ const server = createServer((req, res) => {
   if (!self.includes(req.headers.host ?? "")) { res.writeHead(403); return res.end(); }
   if (req.method === "POST" && (req.headers["x-swarm-ctl"] !== "1" || (req.headers.origin && !self.some(h => req.headers.origin === `http://${h}`)))) { res.writeHead(403); return res.end(); }
   if (url === "/state") {
-    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(stateView()));
+    // ?lite=1 skips results and events: pages ask for it when only worker activity changed.
+    const view = stateView();
+    if (req.url.includes("lite=1")) { delete view.results; delete view.events; }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(view));
   } else if (url === "/events") {
-    // Push: one small event whenever the state changes; the page then fetches /state. A heartbeat
-    // every 15 s keeps proxies from closing an idle stream.
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" });
-    let last = "", quiet = 0;
-    const emit = () => {
-      const { now, ...rest } = stateView();
-      const h = createHash("sha1").update(JSON.stringify(rest)).digest("hex").slice(0, 12);
-      if (h !== last) { last = h; quiet = 0; res.write(`data: ${h}\n\n`); } else if (++quiet >= 15) { quiet = 0; res.write(": beat\n\n"); }
-    };
-    emit();
-    const timer = setInterval(emit, 1000);
-    req.on("close", () => clearInterval(timer));
+    if (!sentSig) sentSig = signature();
+    res.write(`data: ${signature()}\n\n`);
+    listeners.add(res);
+    req.on("close", () => listeners.delete(res));
     return;
   } else if (url === "/engine") {
-    let body;
-    try {
-      const ledger = loadLedger();
-      const rows = ledger.rows.filter(isEngineRow).map(r => {
-        const f = finished.get(r.id);
-        return { id: r.id, label: r.label, status: r.status, epic: /^Epics\b/i.test(r.section), ms: r.milestone,
-          swarm: active.has(r.id) ? "running" : parked.has(r.id) ? "parked" : (f?.status ?? ""), files: (brief(r, ledger.systems).files ?? []).slice(0, 2) };
-      });
-      body = { rows, crashes: recentCrashes(8) };
-    } catch (error) { body = { error: String(error.message ?? error).slice(0, 200), rows: [], crashes: recentCrashes(8) }; }
-    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body));
+    if (!engineCache.body || Date.now() - engineCache.at > 3000) {
+      let body;
+      try {
+        const ledger = loadLedger();
+        const rows = ledger.rows.filter(isEngineRow).map(r => {
+          const f = finished.get(r.id);
+          return { id: r.id, label: r.label, status: r.status, epic: /^Epics\b/i.test(r.section), ms: r.milestone, missing: r.readiness.missing,
+            swarm: active.has(r.id) ? "running" : parked.has(r.id) ? "parked" : (f?.status ?? ""), files: (brief(r, ledger.systems).files ?? []).slice(0, 2) };
+        });
+        body = { rows, crashes: recentCrashes(8), deadOwners: state.deadOwners ?? [] };
+      } catch (error) { body = { error: String(error.message ?? error).slice(0, 200), rows: [], crashes: recentCrashes(8), deadOwners: [] }; }
+      engineCache = { at: Date.now(), body: JSON.stringify(body) };
+    }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(engineCache.body);
+  } else if (/^\/prompt\/[\w.-]{1,40}$/.test(url)) {
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }); res.end(promptFor(url.slice(8)));
   } else if (url.startsWith("/log/")) {
     // /log/<rowId> (latest attempt) or /log/w:<workerId> (live).
     const key = decodeURIComponent(url.slice(5));
@@ -801,8 +843,7 @@ const server = createServer((req, res) => {
 function peek() {
   try {
     const ledger = loadLedger();
-    const rows = filterRows(ledger.rows, { family: familyOf(), ready: cfg.readyOnly || undefined }).filter(r => !["verified", "blocked", "parked", "design"].includes(r.status) && !parked.has(r.id) && !active.has(r.id) && (!finished.has(r.id) || retry.has(r.id)));
-    const pushed = priority.map(id => rows.find(r => r.id === id)).filter(Boolean);
+    const { rows, pushed } = eligible(ledger);
     return [...pushed, ...nextRows(rows, 12).filter(r => !priority.includes(r.id))].slice(0, 12)
       .map(r => ({ id: r.id, label: r.label, tier: cfg.scout && !retry.has(r.id) ? scoutTier.name : tiers[Math.min(tiers.length - 1, retry.get(r.id) ?? 0)].name, pinned: priority.includes(r.id) }));
   } catch { return []; }

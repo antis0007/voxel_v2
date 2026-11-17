@@ -102,6 +102,17 @@ body[data-density=simple] .grid{grid-template-columns:repeat(auto-fill,minmax(30
 @keyframes rowin{0%{background:#1f6feb44;transform:translateX(-10px);opacity:0}30%{opacity:1;transform:none}100%{background:transparent}}
 @keyframes pop{0%{transform:scale(1)}30%{transform:scale(1.08)}100%{transform:scale(1)}}
 @media (max-width:900px){.cols{grid-template-columns:1fr}.grid{grid-template-columns:1fr}header{position:static}}
+.eng{flex:1;overflow:auto;padding:12px}.eng h3{font-size:12px;color:var(--dim);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.06em}
+.eng .fam{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.eng .card{text-align:left;background:var(--bg,#0d1117);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:inherit;cursor:pointer}
+.eng .card[aria-pressed=true]{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}.eng .card b{display:block;font-size:12px}.eng .card small{color:var(--dim);font-size:11px}
+.eng .meter{height:6px;border-radius:3px;background:#30363d;overflow:hidden;display:flex;margin:6px 0}.eng .meter i{display:block;height:100%;transition:width .4s}
+.eng table{width:100%;border-collapse:collapse;font-size:12px}.eng td,.eng th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.eng th{color:var(--dim);font-weight:500;position:sticky;top:-12px;background:var(--card)}.eng td small{color:var(--dim)}.eng td.act{white-space:nowrap;text-align:right}
+.eng tr:hover td{background:#ffffff08}.eng .tag{font-size:10px;padding:1px 7px;border-radius:9px;background:#30363d;white-space:nowrap}
+.eng .crash{font:11px/1.45 Consolas,monospace;color:#f0b4b4;border-left:2px solid var(--bad);padding:3px 8px;margin:4px 0;background:#f8514910}
+.eng .tools{display:flex;gap:6px;margin:12px 0 6px;flex-wrap:wrap;align-items:center}.eng .tools input{flex:1;min-width:160px}
+.eng .chips span{display:inline-block;margin:0 4px 4px 0}.eng pre{white-space:pre-wrap;font:12px/1.55 Consolas,monospace;background:#0d1117;padding:10px;border-radius:6px;margin:0}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 <header>
@@ -184,7 +195,7 @@ body[data-density=simple] .grid{grid-template-columns:repeat(auto-fill,minmax(30
   <kbd>Esc</kbd><span>Close the log or diff</span>
   <div class="end"><button>Close</button></div>
 </form></dialog>
-<div class="drawer" id="drawer" aria-hidden="true"><header><b id="d-title"></b><span id="d-sub"></span><button class="mini" id="d-refresh">Refresh</button><button class="mini" id="d-close">Close (Esc)</button></header><pre id="d-body"></pre></div>
+<div class="drawer" id="drawer" aria-hidden="true"><header><b id="d-title"></b><span id="d-sub"></span><button class="mini" id="d-refresh">Refresh</button><button class="mini" id="d-close">Close (Esc)</button></header><pre id="d-body"></pre><div id="d-html" class="eng" hidden></div></div>
 
 <script>
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -241,9 +252,9 @@ $('settings').addEventListener('close',()=>{if($('settings').returnValue!=='save
     readyOnly:$('s-ready').checked,prove:$('s-prove').checked,proveBatch:+$('s-pbatch').value,breaker:+$('s-breaker').value,exploreTurns:+$('s-explore').value,checkpointEvery:+$('s-cp').value},'Settings')});
 
 /* drawer */
-function openDrawer(t,sub){$('d-title').textContent=t;$('d-sub').textContent=sub||'';$('d-body').textContent='loading…';$('drawer').classList.add('open');$('drawer').setAttribute('aria-hidden','false')}
+function openDrawer(t,sub){$('d-html').hidden=true;$('d-body').hidden=false;$('d-title').textContent=t;$('d-sub').textContent=sub||'';$('d-body').textContent='loading…';$('drawer').classList.add('open');$('drawer').setAttribute('aria-hidden','false')}
 function closeDrawer(){drawerKey=null;$('drawer').classList.remove('open');$('drawer').setAttribute('aria-hidden','true')}
-$('d-close').onclick=closeDrawer;$('d-refresh').onclick=()=>drawerKey&&(drawerKey.kind==='log'?openLog(drawerKey.key,true):drawerKey.kind==='engine'?openEngine(true):openDiff(drawerKey.key,true));
+$('d-close').onclick=closeDrawer;$('d-refresh').onclick=()=>drawerKey&&(drawerKey.kind==='log'?openLog(drawerKey.key,true):drawerKey.kind==='engine'||drawerKey.kind==='prompt'?openEngine(drawerKey.kind==='engine'):openDiff(drawerKey.key,true));
 async function openLog(key,keep){drawerKey={kind:'log',key};if(!keep)openDrawer(key.startsWith('w:')?'live · '+key.slice(2):'log · '+key);
   try{const j=await (await fetch('log/'+encodeURIComponent(key),{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).json();$('d-sub').textContent=j.log||'no log yet';
     const pre=$('d-body'),stick=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30;
@@ -253,25 +264,37 @@ async function openDiff(id,keep){drawerKey={kind:'diff',key:id};if(!keep)openDra
   try{const t=await (await fetch('diff/'+encodeURIComponent(id),{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).text();
     $('d-body').innerHTML=t.split('\n').map(l=>`<div class="${/^\+(?!\+\+)/.test(l)?'add':/^-(?!--)/.test(l)?'del':/^@@/.test(l)?'hunk':''}">${esc(l)||'&nbsp;'}</div>`).join('')}
   catch{$('d-body').textContent='diff unavailable: swarm process not responding'}}
-setInterval(()=>{if(drawerKey?.kind==='log'&&drawerKey.key.startsWith('w:')&&!document.hidden)openLog(drawerKey.key,true);if(drawerKey?.kind==='engine'&&!document.hidden)openEngine(true)},3000);
+setInterval(()=>{if(drawerKey?.kind==='log'&&drawerKey.key.startsWith('w:')&&!document.hidden)openLog(drawerKey.key,true);if(drawerKey?.kind==='engine'&&!document.hidden&&document.activeElement?.id!=='eng-q')openEngine(true)},3000);
 const ENG_FAM=[['engperf',/^ENG-(VOX|MESH|REN|JOB)-/],['engsim',/^ENG-(SIM|PHY|ENT)-/],['engnet',/^ENG-(NET|SAVE|SEC|META)-/],['enggame',/^ENG-(RPG|COL|MAG|MOD|UX|AUD|ART)-/],['engarch',/^ENG-ARCH-/]];
-function renderEngine(j){
-  if(j.error)return 'ledger error: '+j.error;
-  const bar=(a,n)=>{const w=24,f=n?Math.round(w*a/n):0;return '█'.repeat(f)+'░'.repeat(w-f)};
-  const out=['ENGINE OVERHAUL  '+j.rows.length+' rows   (bar = playable or verified)',''];
-  for(const [k,re] of ENG_FAM){const rs=j.rows.filter(r=>re.test(r.id)),c={};rs.forEach(r=>c[r.status]=(c[r.status]||0)+1);
-    out.push(k.padEnd(9)+bar(rs.filter(r=>r.status==='playable'||r.status==='verified').length,rs.length)+'  '+Object.entries(c).map(([s,n])=>n+' '+s).join(' · '))}
-  out.push('','RECENT CRASHES  (saves/crash.log)');
-  j.crashes.forEach(c=>out.push(new Date(c.at).toLocaleString()+'  '+c.site+'\n    '+c.message));
-  if(!j.crashes.length)out.push('none recorded');
-  out.push('','ROWS  open slices first; epics wait for a design session');
-  const rank=r=>r.status==='open'?0:r.status==='building'?1:r.epic?3:2;
-  [...j.rows].sort((a,b)=>rank(a)-rank(b)||a.id.localeCompare(b.id)).forEach(r=>out.push(r.id.padEnd(13)+r.status.padEnd(10)+(r.swarm||'').padEnd(14)+r.label+(r.files.length?'   ['+r.files[0]+']':'')));
-  out.push('','Prompt for a row: docs/research/ENGINE_OVERHAUL_REVIEW.md (search the row id).','Run a family:   AxiomSwarm.cmd --family engperf   (or engsim, engnet, enggame, engarch)');
-  return out.join('\n')}
-async function openEngine(keep){drawerKey={kind:'engine'};if(!keep)openDrawer('engine board','');
-  try{const j=await (await fetch('engine',{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).json();$('d-sub').textContent=j.rows.length+' rows · '+j.rows.filter(r=>r.status==='open').length+' open slices';$('d-body').textContent=renderEngine(j)}
-  catch(e){$('d-body').textContent='engine board failed: '+e.message}}
+const ST_COL={open:'var(--acc)',building:'var(--warn)',playable:'var(--ok)',verified:'#d2a8ff',design:'#8b949e',blocked:'var(--bad)',parked:'#8b949e'};
+const ST_RANK={open:0,building:1,playable:2,verified:3,design:4,blocked:5,parked:6};
+let engF='all',engQ='',engSort='status',engData=null;
+function engineHtml(j){
+  if(j.error)return '<p>Ledger error: '+esc(j.error)+'</p>';
+  const counts=rs=>{const c={};rs.forEach(r=>c[r.status]=(c[r.status]||0)+1);return c};
+  const meter=(c,n)=>'<div class="meter">'+Object.entries(c).sort((a,b)=>(ST_RANK[b[0]]??9)-(ST_RANK[a[0]]??9)).map(([s,k])=>`<i style="width:${100*k/n}%;background:${ST_COL[s]||'#888'}" title="${k} ${esc(s)}"></i>`).join('')+'</div>';
+  const card=(k,label,rs)=>{const c=counts(rs);return `<button class="card" data-efam="${k}" aria-pressed="${engF===k}"><b>${esc(label)}</b>${meter(c,rs.length||1)}<small>${Object.entries(c).map(([s,n])=>n+' '+esc(s)).join(' · ')}</small></button>`};
+  const fam=k=>ENG_FAM.find(f=>f[0]===k);
+  let rows=j.rows.filter(r=>(engF==='all'||fam(engF)[1].test(r.id))&&(!engQ||(r.id+' '+r.label+' '+r.files.join(' ')).toLowerCase().includes(engQ)));
+  rows.sort(engSort==='id'?(a,b)=>a.id.localeCompare(b.id):(a,b)=>(ST_RANK[a.status]??9)-(ST_RANK[b.status]??9)||a.id.localeCompare(b.id));
+  const tag=s=>`<span class="tag" style="background:color-mix(in srgb,${ST_COL[s]||'#30363d'} 22%,transparent);color:${ST_COL[s]||'inherit'}">${esc(s)}</span>`;
+  const tr=rows.map(r=>`<tr><td><b>${esc(r.id)}</b><br><small>${esc(r.ms)}</small></td><td>${tag(r.status)}${r.swarm?' <span class="tag">'+esc(r.swarm)+'</span>':''}</td><td>${esc(r.label)}<br><small>${esc(r.files[0]||'')}</small></td><td class="act"><button class="mini" data-eng="prompt" data-id="${esc(r.id)}">Prompt</button>${r.status==='open'||r.status==='building'?` <button class="mini" data-eng="pin" data-id="${esc(r.id)}">Run next</button>`:''} <button class="mini ghost" data-eng="park" data-id="${esc(r.id)}">Park</button></td></tr>`).join('');
+  const crashes=j.crashes.length?j.crashes.map(c=>`<div class="crash">${esc(new Date(c.at).toLocaleString())} · ${esc(c.site)}<br>${esc(c.message)}</div>`).join(''):'<small>No crashes recorded.</small>';
+  const dead=j.deadOwners.length?`<h3>Owners parked</h3><div class="chips">${j.deadOwners.map(o=>'<span class="tag" title="rows needing this owner system are skipped until it exists">'+esc(o)+'</span>').join('')}</div>`:'';
+  return `<div class="fam">${card('all','All engine rows',j.rows)}${ENG_FAM.map(([k])=>card(k,k,j.rows.filter(r=>fam(k)[1].test(r.id)))).join('')}</div>${dead}<h3>Recent crashes</h3>${crashes}
+  <div class="tools"><input type="search" id="eng-q" placeholder="Filter rows, labels, files" value="${esc(engQ)}"><button class="mini" data-esort="status" aria-pressed="${engSort==='status'}">By status</button><button class="mini" data-esort="id" aria-pressed="${engSort==='id'}">By id</button><small>${rows.length} shown</small></div>
+  <table><thead><tr><th>Row</th><th>Status</th><th>Feature · owner file</th><th></th></tr></thead><tbody>${tr}</tbody></table>
+  <p><small>Run next works under any family. Whole family: AxiomSwarm.cmd --family engperf (engsim, engnet, enggame, engarch).</small></p>`}
+function paintEngine(){const box=$('d-html'),top=box.scrollTop,f=document.activeElement?.id==='eng-q',pos=f?document.activeElement.selectionStart:0;box.innerHTML=engineHtml(engData);box.scrollTop=top;if(f){const q=$('eng-q');q.focus();q.setSelectionRange(pos,pos)}}
+async function openEngine(keep){drawerKey={kind:'engine'};if(!keep){openDrawer('Engine board','');$('d-body').hidden=true;$('d-html').hidden=false;$('d-html').innerHTML='<small>Loading…</small>'}
+  try{engData=await (await fetch('engine',{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).json();$('d-sub').textContent=engData.rows.length+' rows · '+engData.rows.filter(r=>r.status==='open').length+' open slices · '+engData.crashes.length+' recent crashes';paintEngine()}
+  catch(e){$('d-html').textContent='Engine board failed: '+e.message}}
+async function openPrompt(id){drawerKey={kind:'prompt',key:id};openDrawer('Prompt · '+id,'docs/research/ENGINE_OVERHAUL_REVIEW.md');
+  try{$('d-body').textContent=await (await fetch('prompt/'+encodeURIComponent(id),{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).text()}catch(e){$('d-body').textContent='Prompt failed: '+e.message}}
+document.addEventListener('input',e=>{if(e.target.id==='eng-q'){engQ=e.target.value.toLowerCase();paintEngine()}});
+document.addEventListener('click',e=>{const f=e.target.closest('[data-efam]'),o=e.target.closest('[data-esort]'),b=e.target.closest('[data-eng]');
+  if(f){engF=f.dataset.efam;return paintEngine()}if(o){engSort=o.dataset.esort;return paintEngine()}
+  if(b){const id=b.dataset.id,v=b.dataset.eng;if(v==='prompt')return openPrompt(id);return post('/ctl/'+v+'/'+encodeURIComponent(id),null,(v==='pin'?'Run next ':'Park ')+id,b).then(()=>openEngine(true))}});
 
 /* render */
 const shown={};function tween(id,to,fmt){const el=$(id),from=shown[id]??to;shown[id]=to;if(from===to){el.textContent=fmt(to);return}
@@ -377,8 +400,8 @@ cv.addEventListener('click',e=>{const y=e.clientY-cv.getBoundingClientRect().top
 {let d='technical';try{d=localStorage.getItem('swarm-density')||d}catch{}setDensity(d)}
 floorFit();
 
-async function tick(){
-  let s;try{const r=await fetch('state',{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}});if(!r.ok)throw new Error(r.status);s=await r.json();window._s=s;$('live').style.background='var(--ok)';
+async function tick(full=true){
+  let s;try{const lite=!full&&window._s;const r=await fetch(lite?'state?lite=1':'state',{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}});if(!r.ok)throw new Error(r.status);s=await r.json();if(lite){s.results=window._s.results;s.events=window._s.events}window._s=s;$('live').style.background='var(--ok)';
     if(offline){offline=false;toast('Reconnected')}$('offline').hidden=true}
   catch(e){$('live').style.background='var(--bad)';offline=true;$('offline').hidden=false;$('stale').textContent=lastOk?'Last update '+dur(Date.now()-lastOk)+' ago.':'';document.title='offline | Axiom swarm';return}
   lastOk=Date.now();
@@ -422,10 +445,11 @@ async function tick(){
   $('cfgline').textContent=`family ${c.family} | scout ${c.scout?'on':'off'} | context ${c.context!==false?'on':'off'} | builder stops after ${c.exploreTurns} turns with no edit | checkpoint every ${c.checkpointEvery??8} rows | live proof ${c.prove===false?'off':s.lastProof?(s.lastProof.ok?'passed':'found mismatches')+' '+dur(s.now-s.lastProof.at)+' ago':'on, not run yet'}`;
   renderRoi(s);floorSync();renderResults(s);spark(s.results,s.now);firstPaint=false}
 // 1 s while agents work, 4 s idle, paused in hidden tabs.
-let sse=false,pushT=0;
-const push=()=>{if(document.hidden||pushT)return;pushT=setTimeout(async()=>{pushT=0;await tick()},250)};
+let sse=false,pushT=0,pushFull=false,lastRev='';
+// A moved revision needs the full state; worker activity alone needs only the light view.
+const push=msg=>{const r=msg.slice(5).trim().split('.')[0];if(r!==lastRev){lastRev=r;pushFull=true}if(document.hidden||pushT)return;pushT=setTimeout(async()=>{pushT=0;const f=pushFull;pushFull=false;await tick(f)},250)};
 // Push: the supervisor sends a tiny event on every state change; polling only runs as the fallback.
-(async function live(){let wait=1000;for(;;){try{const r=await fetch('events',{headers:{'x-axiom-session':location.hash.slice(1)},cache:'no-store'});if(!r.ok||!r.body)throw 0;sse=true;wait=1000;const rd=r.body.getReader(),dec=new TextDecoder();let buf='';for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;while((i=buf.indexOf('\n\n'))>=0){const msg=buf.slice(0,i);buf=buf.slice(i+2);if(msg.startsWith('data:'))push()}}}catch{}sse=false;await new Promise(r=>setTimeout(r,wait));wait=Math.min(wait*2,15000)}})();
+(async function live(){let wait=1000;for(;;){try{const r=await fetch('events',{headers:{'x-axiom-session':location.hash.slice(1)},cache:'no-store'});if(!r.ok||!r.body)throw 0;sse=true;wait=1000;const rd=r.body.getReader(),dec=new TextDecoder();let buf='';for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;while((i=buf.indexOf('\n\n'))>=0){const msg=buf.slice(0,i);buf=buf.slice(i+2);if(msg.startsWith('data:'))push(msg)}}}catch{}sse=false;await new Promise(r=>setTimeout(r,wait));wait=Math.min(wait*2,15000)}})();
 (function loop(){const busy=window._s&&window._s.workers.some(w=>w.status==='working');setTimeout(async()=>{if(!document.hidden)await tick();loop()},sse?20000:busy?1000:4000)})();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});tick();
 </script>
