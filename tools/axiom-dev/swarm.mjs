@@ -26,9 +26,10 @@
 // - A usage limit pauses the swarm and retries every 10 minutes. UI: http://127.0.0.1:<port>
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
-import { FAMILIES, brief, filterRows, loadLedger, nextRows, writeStatus } from "./parity-data.mjs";
+import { FAMILIES, brief, filterRows, isEngineRow, loadLedger, nextRows, writeStatus } from "./parity-data.mjs";
 import { root, buildCommand, runScenarios } from "./factory-lab.mjs";
 import { blameContent, pendingProof, scenarioFile, settleProof, shouldProve, tolerantScenarios, validateScenario } from "./swarm-proof.mjs";
 import { createBrain } from "./swarm-brain.mjs";
@@ -81,6 +82,7 @@ const POLICY = [
   "RED TREE: other agents edit live, so cargo check can fail in code you never touched. If every error is outside your hunks, wait 60 s and re-run up to 6 times; if it stays red, report your slice as building with the exact foreign error quoted, not blocked.",
   "ALREADY-IMPLEMENTED needs evidence: name the file and symbol and what in it satisfies the row, or build the missing part instead.",
   "LOG: for every save, gate, shader-contract or new-kind change append ONE line to target/axiom-dev/swarm/changes.md as `<row> | <files> | <what changed> | <tests the owner should run>` so the owner can verify the batch.",
+  "WIRING: a slice counts only when a player action, a tick or a loaded table reaches it. Before reporting, wire the smallest real caller (one call site or one data row read). Say 'not wired' in the summary only when no caller was possible, because unwired scaffolding is not counted as landed value.",
   "HONESTY: only cargo check is run here. State plainly what was not tested; never claim a feature works in game.",
   "Report blocked ONLY if cargo check still fails after two fix attempts on your own hunks, quoting the exact compiler error."
 ].join(" ");
@@ -357,6 +359,8 @@ function tierRoi(entry) {
   if (entry.status === "escalated") t.escalated++; else if (entry.status === "blocked") t.blocked++;
   else if (/^(playable|building|already-implemented|proven)$/.test(entry.status)) t.landed++;
 }
+// Landed rows whose own summary says nothing reaches them are scaffolding; the board reports cost per wired row.
+const UNWIRED = /\bnot (?:yet )?wired\b|\bunwired\b|\bno callers?\b|\bnot wired to\b|\bunused\b|\bunplayable\b/i;
 function record(entry) {
   tierRoi(entry);
   state.results.unshift(entry); if (state.results.length > 200) state.results.pop();
@@ -497,7 +501,9 @@ async function work(worker) {
     }
     const good = (entry.status === "building" || entry.status === "playable") && entry.files.length > 0;
     // A stronger model cannot invent a missing spec or a save-format bump: stop those at once.
-    const hardBlock = designBlock.test(entry.summary ?? "");
+    // Cost: a stronger model re-explores the same missing owner and fails the same way (11 of 17 opus runs).
+    const noOwner = !entry.files.length && /explored \d+ turns without an edit|owner code not located/i.test(entry.summary ?? "");
+    const hardBlock = designBlock.test(entry.summary ?? "") || noOwner;
     const repeat = !good && lastFail.has(row.id) && sameFailure(lastFail.get(row.id), entry.summary);
     if (!good) lastFail.set(row.id, entry.summary ?? "");
     if (!good && !hardBlock && !repeat && tierIndex < tiers.length - 1) {
@@ -516,6 +522,7 @@ async function work(worker) {
     }
     if (good) {
       state.totals.done++;
+      if (UNWIRED.test(entry.summary ?? "")) { state.totals.scaffold = (state.totals.scaffold ?? 0) + 1; entry.unwired = true; }
       if (parsed?.scenario) {
         const bad = validateScenario(parsed.scenario);
         if (bad) event(`${row.id}: scenario not stored (${bad})`);
@@ -685,6 +692,25 @@ function readBody(req) {
 const ROW_ID = /^[\w.-]{1,40}$/;
 
 const pageUrl = new URL("./swarm.html", import.meta.url);
+// peek() reads the whole ledger, so the push loop shares one result for ten seconds.
+let peekCache = { at: 0, rows: [] };
+const peekCached = () => { if (Date.now() - peekCache.at > 10_000) peekCache = { at: Date.now(), rows: peek() }; return peekCache.rows; };
+const stateView = () => ({ ...state, now: Date.now(), workers: state.workers.map(({ child, ...w }) => w), queue: peekCached(),
+  parked: [...parked], lessons: brain.lessons().slice(0, 12), families: Object.keys(FAMILIES) });
+// Latest panics from the game's crash log (saves/crash.log): time, site and first message line.
+function recentCrashes(count) {
+  try {
+    const file = path.join(root, "saves", "crash.log");
+    if (!existsSync(file)) return [];
+    const text = readFileSync(file, "utf8").slice(-400_000);
+    const out = [];
+    for (const m of text.matchAll(/unix_time=(\d+)\r?\nthread=[^\r\n]*\r?\npanicked at ([^\r\n]+?):\r?\n([^\r\n]*)/g)) {
+      out.push({ at: Number(m[1]) * 1000, site: m[2].replaceAll("\\", "/").replace(/^.*?crates\//, "crates/"), message: m[3].slice(0, 200) });
+    }
+    return out.slice(-count).reverse();
+  } catch { return []; }
+}
+
 const server = createServer((req, res) => {
   const url = req.url.split("?")[0];
   // Localhost-only, same-origin only: blocks DNS rebinding (Host) and cross-site POSTs (Origin + custom header).
@@ -692,9 +718,33 @@ const server = createServer((req, res) => {
   if (!self.includes(req.headers.host ?? "")) { res.writeHead(403); return res.end(); }
   if (req.method === "POST" && (req.headers["x-swarm-ctl"] !== "1" || (req.headers.origin && !self.some(h => req.headers.origin === `http://${h}`)))) { res.writeHead(403); return res.end(); }
   if (url === "/state") {
-    const view = { ...state, now: Date.now(), workers: state.workers.map(({ child, ...w }) => w), queue: peek(),
-      parked: [...parked], lessons: brain.lessons().slice(0, 12), families: Object.keys(FAMILIES) };
-    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(view));
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(stateView()));
+  } else if (url === "/events") {
+    // Push: one small event whenever the state changes; the page then fetches /state. A heartbeat
+    // every 15 s keeps proxies from closing an idle stream.
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "x-accel-buffering": "no" });
+    let last = "", quiet = 0;
+    const emit = () => {
+      const { now, ...rest } = stateView();
+      const h = createHash("sha1").update(JSON.stringify(rest)).digest("hex").slice(0, 12);
+      if (h !== last) { last = h; quiet = 0; res.write(`data: ${h}\n\n`); } else if (++quiet >= 15) { quiet = 0; res.write(": beat\n\n"); }
+    };
+    emit();
+    const timer = setInterval(emit, 1000);
+    req.on("close", () => clearInterval(timer));
+    return;
+  } else if (url === "/engine") {
+    let body;
+    try {
+      const ledger = loadLedger();
+      const rows = ledger.rows.filter(isEngineRow).map(r => {
+        const f = finished.get(r.id);
+        return { id: r.id, label: r.label, status: r.status, epic: /^Epics\b/i.test(r.section), ms: r.milestone,
+          swarm: active.has(r.id) ? "running" : parked.has(r.id) ? "parked" : (f?.status ?? ""), files: (brief(r, ledger.systems).files ?? []).slice(0, 2) };
+      });
+      body = { rows, crashes: recentCrashes(8) };
+    } catch (error) { body = { error: String(error.message ?? error).slice(0, 200), rows: [], crashes: recentCrashes(8) }; }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body));
   } else if (url.startsWith("/log/")) {
     // /log/<rowId> (latest attempt) or /log/w:<workerId> (live).
     const key = decodeURIComponent(url.slice(5));

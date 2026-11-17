@@ -113,6 +113,7 @@ body[data-density=simple] .grid{grid-template-columns:repeat(auto-fill,minmax(30
   <div class="stat"><b id="tok">0</b><span>tokens in / out</span></div>
   <div class="stat"><b id="cost">$0</b><span id="costl">api cost</span><div class="cap" id="capbar" hidden><i></i></div></div>
   <div class="stat"><b id="per">–</b><span>$ / row</span></div>
+  <div class="stat"><b id="perwired">–</b><span>$ / wired row</span></div>
   <div class="stat"><b id="rate">–</b><span>rows / hour</span></div>
   <div class="stat"><svg id="spark" viewBox="0 0 150 30" preserveAspectRatio="none"></svg><span>landed, last hour</span></div>
   <div class="stat tech"><b id="cachepct">–</b><span>input read from cache</span></div>
@@ -122,6 +123,7 @@ body[data-density=simple] .grid{grid-template-columns:repeat(auto-fill,minmax(30
   <button data-act="toggle" id="runbtn">Resume</button>
   <button data-act="add">+ agent</button><button data-act="drop">− agent</button>
   <button data-act="checkpoint" title="Drain agents, run one cargo check, auto-repair compile errors (c)">Checkpoint</button>
+  <button data-act="engine" title="Engine overhaul rows, crash feed and run command">Engine board</button>
   <button data-act="prove" title="Checkpoint, build the engine, then run every landed row's scenario in it (p)">Prove now</button>
   <button data-act="requeue" title="Retry blocked rows (not design blocks) on the cheap tier">Requeue blocked</button>
   <button data-act="settings" title="Agents, spend cap, family, scout/context toggles">Settings</button>
@@ -207,7 +209,7 @@ async function post(path,body,name,btn){
 const ctl=(a,btn)=>post('/ctl/'+a,null,LABEL[a]||a,btn);
 document.addEventListener('click',e=>{
   const b=e.target.closest('button[data-act]');
-  if(b){const a=b.dataset.act;if(a==='settings')return openSettings();if(a==='toggle')return ctl(window._s?.paused?'resume':'pause',b);
+  if(b){const a=b.dataset.act;if(a==='settings')return openSettings();if(a==='engine')return openEngine();if(a==='toggle')return ctl(window._s?.paused?'resume':'pause',b);
     if(a==='stop'&&!confirm('Stop every agent now? Rows in progress are not recorded.'))return;return ctl(a,b)}
   const r=e.target.closest('button[data-row]');
   if(r){const{verb,row}=r.dataset;if(verb==='log')return openLog(row);if(verb==='diff')return openDiff(row);
@@ -241,7 +243,7 @@ $('settings').addEventListener('close',()=>{if($('settings').returnValue!=='save
 /* drawer */
 function openDrawer(t,sub){$('d-title').textContent=t;$('d-sub').textContent=sub||'';$('d-body').textContent='loading…';$('drawer').classList.add('open');$('drawer').setAttribute('aria-hidden','false')}
 function closeDrawer(){drawerKey=null;$('drawer').classList.remove('open');$('drawer').setAttribute('aria-hidden','true')}
-$('d-close').onclick=closeDrawer;$('d-refresh').onclick=()=>drawerKey&&(drawerKey.kind==='log'?openLog(drawerKey.key,true):openDiff(drawerKey.key,true));
+$('d-close').onclick=closeDrawer;$('d-refresh').onclick=()=>drawerKey&&(drawerKey.kind==='log'?openLog(drawerKey.key,true):drawerKey.kind==='engine'?openEngine(true):openDiff(drawerKey.key,true));
 async function openLog(key,keep){drawerKey={kind:'log',key};if(!keep)openDrawer(key.startsWith('w:')?'live · '+key.slice(2):'log · '+key);
   try{const j=await (await fetch('log/'+encodeURIComponent(key),{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).json();$('d-sub').textContent=j.log||'no log yet';
     const pre=$('d-body'),stick=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30;
@@ -251,7 +253,25 @@ async function openDiff(id,keep){drawerKey={kind:'diff',key:id};if(!keep)openDra
   try{const t=await (await fetch('diff/'+encodeURIComponent(id),{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).text();
     $('d-body').innerHTML=t.split('\n').map(l=>`<div class="${/^\+(?!\+\+)/.test(l)?'add':/^-(?!--)/.test(l)?'del':/^@@/.test(l)?'hunk':''}">${esc(l)||'&nbsp;'}</div>`).join('')}
   catch{$('d-body').textContent='diff unavailable: swarm process not responding'}}
-setInterval(()=>{if(drawerKey?.kind==='log'&&drawerKey.key.startsWith('w:')&&!document.hidden)openLog(drawerKey.key,true)},3000);
+setInterval(()=>{if(drawerKey?.kind==='log'&&drawerKey.key.startsWith('w:')&&!document.hidden)openLog(drawerKey.key,true);if(drawerKey?.kind==='engine'&&!document.hidden)openEngine(true)},3000);
+const ENG_FAM=[['engperf',/^ENG-(VOX|MESH|REN|JOB)-/],['engsim',/^ENG-(SIM|PHY|ENT)-/],['engnet',/^ENG-(NET|SAVE|SEC|META)-/],['enggame',/^ENG-(RPG|COL|MAG|MOD|UX|AUD|ART)-/],['engarch',/^ENG-ARCH-/]];
+function renderEngine(j){
+  if(j.error)return 'ledger error: '+j.error;
+  const bar=(a,n)=>{const w=24,f=n?Math.round(w*a/n):0;return '█'.repeat(f)+'░'.repeat(w-f)};
+  const out=['ENGINE OVERHAUL  '+j.rows.length+' rows   (bar = playable or verified)',''];
+  for(const [k,re] of ENG_FAM){const rs=j.rows.filter(r=>re.test(r.id)),c={};rs.forEach(r=>c[r.status]=(c[r.status]||0)+1);
+    out.push(k.padEnd(9)+bar(rs.filter(r=>r.status==='playable'||r.status==='verified').length,rs.length)+'  '+Object.entries(c).map(([s,n])=>n+' '+s).join(' · '))}
+  out.push('','RECENT CRASHES  (saves/crash.log)');
+  j.crashes.forEach(c=>out.push(new Date(c.at).toLocaleString()+'  '+c.site+'\n    '+c.message));
+  if(!j.crashes.length)out.push('none recorded');
+  out.push('','ROWS  open slices first; epics wait for a design session');
+  const rank=r=>r.status==='open'?0:r.status==='building'?1:r.epic?3:2;
+  [...j.rows].sort((a,b)=>rank(a)-rank(b)||a.id.localeCompare(b.id)).forEach(r=>out.push(r.id.padEnd(13)+r.status.padEnd(10)+(r.swarm||'').padEnd(14)+r.label+(r.files.length?'   ['+r.files[0]+']':'')));
+  out.push('','Prompt for a row: docs/research/ENGINE_OVERHAUL_REVIEW.md (search the row id).','Run a family:   AxiomSwarm.cmd --family engperf   (or engsim, engnet, enggame, engarch)');
+  return out.join('\n')}
+async function openEngine(keep){drawerKey={kind:'engine'};if(!keep)openDrawer('engine board','');
+  try{const j=await (await fetch('engine',{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).json();$('d-sub').textContent=j.rows.length+' rows · '+j.rows.filter(r=>r.status==='open').length+' open slices';$('d-body').textContent=renderEngine(j)}
+  catch(e){$('d-body').textContent='engine board failed: '+e.message}}
 
 /* render */
 const shown={};function tween(id,to,fmt){const el=$(id),from=shown[id]??to;shown[id]=to;if(from===to){el.textContent=fmt(to);return}
@@ -367,6 +387,7 @@ async function tick(){
   $('tok').textContent=k(t.in)+' / '+k(t.out);tween('cost',t.cost,v=>usd(v));
   $('costl').textContent=c.budget?'of '+usd(c.budget)+' cap':'api cost';$('capbar').hidden=!c.budget;if(c.budget)$('capbar').firstElementChild.style.width=Math.min(100,t.cost/c.budget*100)+'%';
   const costed=s.results.filter(r=>r.final!==false&&r.cost>0);$('per').textContent=costed.length?usd(costed.reduce((a,r)=>a+r.cost,0)/costed.length):'–';
+  {const wired=t.done-(t.scaffold||0);$('perwired').textContent=wired>0?usd(t.cost/wired):'–';$('perwired').parentElement.title=(t.scaffold||0)+' of '+t.done+' landed rows say they are not wired to anything yet'}
   if(t.done>lastDone&&!firstPaint){const e=$('sdone');e.classList.remove('pop');void e.offsetWidth;e.classList.add('pop')}lastDone=t.done;
   const hrs=(s.now-s.startedAt)/36e5;$('rate').textContent=hrs>0.05?((t.done+t.blocked)/hrs).toFixed(1):'–';
   $('runbtn').textContent=s.paused?'Resume':'Pause';$('runbtn').style.borderColor=s.paused?'var(--ok)':'';
@@ -401,6 +422,10 @@ async function tick(){
   $('cfgline').textContent=`family ${c.family} | scout ${c.scout?'on':'off'} | context ${c.context!==false?'on':'off'} | builder stops after ${c.exploreTurns} turns with no edit | checkpoint every ${c.checkpointEvery??8} rows | live proof ${c.prove===false?'off':s.lastProof?(s.lastProof.ok?'passed':'found mismatches')+' '+dur(s.now-s.lastProof.at)+' ago':'on, not run yet'}`;
   renderRoi(s);floorSync();renderResults(s);spark(s.results,s.now);firstPaint=false}
 // 1 s while agents work, 4 s idle, paused in hidden tabs.
-(function loop(){const busy=window._s&&window._s.workers.some(w=>w.status==='working');setTimeout(async()=>{if(!document.hidden)await tick();loop()},busy?1000:4000)})();
+let sse=false,pushT=0;
+const push=()=>{if(document.hidden||pushT)return;pushT=setTimeout(async()=>{pushT=0;await tick()},250)};
+// Push: the supervisor sends a tiny event on every state change; polling only runs as the fallback.
+(async function live(){let wait=1000;for(;;){try{const r=await fetch('events',{headers:{'x-axiom-session':location.hash.slice(1)},cache:'no-store'});if(!r.ok||!r.body)throw 0;sse=true;wait=1000;const rd=r.body.getReader(),dec=new TextDecoder();let buf='';for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;while((i=buf.indexOf('\n\n'))>=0){const msg=buf.slice(0,i);buf=buf.slice(i+2);if(msg.startsWith('data:'))push()}}}catch{}sse=false;await new Promise(r=>setTimeout(r,wait));wait=Math.min(wait*2,15000)}})();
+(function loop(){const busy=window._s&&window._s.workers.some(w=>w.status==='working');setTimeout(async()=>{if(!document.hidden)await tick();loop()},sse?20000:busy?1000:4000)})();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)tick()});tick();
 </script>
