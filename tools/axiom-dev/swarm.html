@@ -243,12 +243,12 @@ function openDrawer(t,sub){$('d-title').textContent=t;$('d-sub').textContent=sub
 function closeDrawer(){drawerKey=null;$('drawer').classList.remove('open');$('drawer').setAttribute('aria-hidden','true')}
 $('d-close').onclick=closeDrawer;$('d-refresh').onclick=()=>drawerKey&&(drawerKey.kind==='log'?openLog(drawerKey.key,true):openDiff(drawerKey.key,true));
 async function openLog(key,keep){drawerKey={kind:'log',key};if(!keep)openDrawer(key.startsWith('w:')?'live · '+key.slice(2):'log · '+key);
-  try{const j=await (await fetch('log/'+encodeURIComponent(key),{cache:'no-store'})).json();$('d-sub').textContent=j.log||'no log yet';
+  try{const j=await (await fetch('log/'+encodeURIComponent(key),{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).json();$('d-sub').textContent=j.log||'no log yet';
     const pre=$('d-body'),stick=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30;
     pre.innerHTML=j.lines.length?j.lines.map(l=>`<div class="${esc(l.k)}">${l.k==='say'?'':'  '}${esc(l.t)}</div>`).join(''):'no events yet';
     if(stick||!keep)pre.scrollTop=pre.scrollHeight}catch{$('d-body').textContent='log unavailable: swarm process not responding'}}
 async function openDiff(id,keep){drawerKey={kind:'diff',key:id};if(!keep)openDrawer('diff · '+id,'working-tree diff of reported files (peer hunks in the same files show too)');
-  try{const t=await (await fetch('diff/'+encodeURIComponent(id),{cache:'no-store'})).text();
+  try{const t=await (await fetch('diff/'+encodeURIComponent(id),{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}})).text();
     $('d-body').innerHTML=t.split('\n').map(l=>`<div class="${/^\+(?!\+\+)/.test(l)?'add':/^-(?!--)/.test(l)?'del':/^@@/.test(l)?'hunk':''}">${esc(l)||'&nbsp;'}</div>`).join('')}
   catch{$('d-body').textContent='diff unavailable: swarm process not responding'}}
 setInterval(()=>{if(drawerKey?.kind==='log'&&drawerKey.key.startsWith('w:')&&!document.hidden)openLog(drawerKey.key,true)},3000);
@@ -358,7 +358,7 @@ cv.addEventListener('click',e=>{const y=e.clientY-cv.getBoundingClientRect().top
 floorFit();
 
 async function tick(){
-  let s;try{const r=await fetch('state',{cache:'no-store'});if(!r.ok)throw new Error(r.status);s=await r.json();window._s=s;$('live').style.background='var(--ok)';
+  let s;try{const r=await fetch('state',{cache:'no-store',headers:{'x-axiom-session':location.hash.slice(1)}});if(!r.ok)throw new Error(r.status);s=await r.json();window._s=s;$('live').style.background='var(--ok)';
     if(offline){offline=false;toast('Reconnected')}$('offline').hidden=true}
   catch(e){$('live').style.background='var(--bad)';offline=true;$('offline').hidden=false;$('stale').textContent=lastOk?'Last update '+dur(Date.now()-lastOk)+' ago.':'';document.title='offline | Axiom swarm';return}
   lastOk=Date.now();
