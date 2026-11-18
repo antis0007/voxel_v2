@@ -21,7 +21,12 @@
 //   runs the scenarios in it and sends any failure back to the row as ONE retry with the observed
 //   values. A content-table error goes to the rows that edited that table. No model cost. --no-prove: off.
 // - Robustness: one swarm per tree (lock file), atomic state writes, and a circuit breaker that pauses
-//   after --breaker rows in a row fail to land (0 = off).
+//   after --breaker rows in a row fail to land (0 = off). Never stuck: low disk first reclaims stale cargo
+//   incremental caches and old logs; a red tree triggers a checkpoint repair and builders start anyway
+//   after 20 minutes; checkpoints drain only agents with a live process.
+// - Tool contract: agents get the exact Bash forms the sandbox allows (denials used to burn ~1 turn in 6);
+//   denied calls do not count toward the no-edit cap. Killed runs report an estimated cost from stream usage.
+//   The supervisor, not the agent, appends changes.md from RESULT (incl. its "tests" field).
 // - Agents never touch the ledger or git. The supervisor records `building` with the files touched.
 // - A usage limit pauses the swarm and retries every 10 minutes. UI: http://127.0.0.1:<port>
 import { spawn, spawnSync } from "node:child_process";
@@ -43,17 +48,20 @@ const cfg = { workers: Math.min(16, Math.max(1, Number(opt("workers", 5)))), por
   maxRows: Number(opt("max-rows", 0)), timeoutMs: Number(opt("timeout-min", 25)) * 60_000,
   sonnet: opt("sonnet", "sonnet"), opus: opt("opus", "opus"), haiku: opt("haiku", "haiku"), family: family ?? "all",
   scout: !flag("no-scout"), readyOnly: flag("ready-only"), budget: Number(opt("budget-usd", 0)),
-  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)) };
+  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire") };
 // Cost ladder (history: failed runs cost as much as successes, and turns drive cost because every
 // turn re-reads context). A haiku scout triages first; the builder starts cheap with a tight turn
 // cap; ONE escalation to opus, only for failures a stronger model can fix.
 const tiers = [
-  { name: "sonnet·low", model: cfg.sonnet, effort: "low", maxTurns: 32, budget: 1.0 },
-  { name: "opus·medium", model: cfg.opus, effort: "medium", maxTurns: 60, budget: 2.5 },
+  // Caps bound the tail only: sonnet runs average 8.8 turns, landed opus runs 21-28.
+  { name: "sonnet·low", model: cfg.sonnet, effort: "low", maxTurns: 24, budget: 0.5 },
+  { name: "opus·medium", model: cfg.opus, effort: "medium", maxTurns: 40, budget: 1.2 },
 ];
 const scoutTier = { name: "haiku·scout", model: cfg.haiku, effort: "low", maxTurns: 10, budget: 0.15, tools: "Read,Grep,Glob", scout: true };
 // A stronger model cannot invent a missing spec, owner decision or protocol: those stop at once.
 const designBlock = /\b(spec|design decision|owner decision|needs? (a |an )?(decision|design|approval)|protocol|lore|proper noun)\b/i;
+// Scout needs-design verdicts quote "[design]" owners, which designBlock misses; Requeue used to pay a builder for each.
+const isDesignBlock = r => r?.why === "design" || /^scout:/.test(r?.summary ?? "") || designBlock.test(r?.summary ?? "");
 
 // --state-dir lets a test instance run beside the live swarm without sharing its results.
 const dir = opt("state-dir") ? path.resolve(opt("state-dir")) : path.join(root, "target", "axiom-dev", "swarm");
@@ -82,7 +90,7 @@ const POLICY = [
   "SCOPE: land the first playable slice (up to 300 changed lines) and put the remainder in the summary. Never touch files another agent is editing right now beyond your own hunks; never revert a peer.",
   "RED TREE: other agents edit live, so cargo check can fail in code you never touched. If every error is outside your hunks, wait 60 s and re-run up to 6 times; if it stays red, report your slice as building with the exact foreign error quoted, not blocked.",
   "ALREADY-IMPLEMENTED needs evidence: name the file and symbol and what in it satisfies the row, or build the missing part instead.",
-  "LOG: for every save, gate, shader-contract or new-kind change append ONE line to target/axiom-dev/swarm/changes.md as `<row> | <files> | <what changed> | <tests the owner should run>` so the owner can verify the batch.",
+  "LOG: do not write any log file; the supervisor writes target/axiom-dev/swarm/changes.md from your RESULT. Put the tests the owner should run in RESULT \"tests\" (required for save, gate, shader-contract or new-kind changes).",
   "WIRING: a slice counts only when a player action, a tick or a loaded table reaches it. Before reporting, wire the smallest real caller (one call site or one data row read). Say 'not wired' in the summary only when no caller was possible, because unwired scaffolding is not counted as landed value.",
   "HONESTY: only cargo check is run here. State plainly what was not tested; never claim a feature works in game.",
   "Report blocked ONLY if cargo check still fails after two fix attempts on your own hunks, quoting the exact compiler error."
@@ -94,6 +102,9 @@ if (allowBump) for (const [id, r] of [...finished]) {
 const history = [...finished.values()].slice(-60).reverse();
 const state = { startedAt: Date.now(), cfg, paused: null, stop: false, workers: [], results: history, totals: { in: 0, out: 0, cost: 0, done: 0, blocked: 0, cached: 0, proven: 0 }, tierStats: {} };
 const retry = new Map(); // id -> next tier
+const wireStats = { n: 0, wired: 0 };
+let sinceCheckpoint = 0; // landed rows + wire passes since the last auto checkpoint
+const forced = new Set(); // rows already given their one narrower sonnet retry after a zero-edit failure
 let failStreak = 0, idleProved = false;
 const lastFail = new Map(); // id -> previous failure summary; an identical repeat is deterministic, so do not pay to retry it
 const sameFailure = (a, b) => { const x = new Set(String(a).toLowerCase().match(/[a-z_]{4,}/g) ?? []), y = new Set(String(b).toLowerCase().match(/[a-z_]{4,}/g) ?? []); let h = 0; for (const w of x) if (y.has(w)) h++; return h / Math.max(1, Math.min(x.size, y.size)) > 0.8; };
@@ -108,7 +119,7 @@ const requeue = (id, tier, why) => { finished.delete(id); retry.set(id, tier); r
 // Pass --reopen to retry blocked rows that were not design blocks; the Requeue button does the same.
 for (const id of reopened) {
   const r = reopenedRows.get(id);
-  if (flag("reopen") && !bumpRows.has(id) && !designBlock.test(r?.summary ?? "")) requeue(id, 0, "Earlier attempt reported blocked: " + String(r?.summary ?? "").slice(0, 200));
+  if (flag("reopen") && !bumpRows.has(id) && !isDesignBlock(r)) requeue(id, 0, "Earlier attempt reported blocked: " + String(r?.summary ?? "").slice(0, 200));
   else { finished.set(id, r ?? { id, status: "blocked", final: true }); reopened.delete(id); }
 }
 // Save-bump retries (opus) also run only with --reopen; POLICY is already in the prompt.
@@ -166,17 +177,20 @@ const childEnv = () => ({ ...Object.fromEntries(Object.entries(process.env).filt
   /^ANTHROPIC_(API_KEY|AUTH_TOKEN)$/.test(k) || (!/^CLAUDE_CODE_/.test(k) && !/(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE)|_KEY$/i.test(k)))),
   RUSTC_WRAPPER: "", CARGO_BUILD_RUSTC_WRAPPER: "", RUSTC_WORKSPACE_WRAPPER: "", CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "" });
 
-const SYSTEM = "You are a fast Rust/wgpu voxel-game coding agent in a shared tree. Be terse; no preamble. Rules: no unwrap/expect outside tests; no content tables in Rust (use assets/*.ron); simulation uses fixed steps and seeded hashes, no wall-clock; no new dependencies; player text follows crates/app/src/egui_ui/UI_RULES.md and adds no new proper nouns; host/WGSL structs are one contract.";
+// History: ~700 tool calls across 600 logs were permission denials (rg/grep/cd/pipes through Bash, echo >> changes.md).
+// Each one costs a full-context turn and counts toward the no-edit cap, so the exact allowed forms are stated up front.
+const TOOL_RULES = "TOOLS: search with the Grep and Glob tools, read with Read, edit with Edit/Write; paths are relative to the repo root (already the cwd). Bash accepts ONLY these exact forms: `cargo check -p <package> --message-format short`, `git status --short`, `git diff -- <path>`. No cd, no pipes, no 2>&1, no &&/;, no rg/grep/sed/cat/echo/mkdir/python through Bash: everything else is denied and wastes a turn. Short format already prints one line per error; read it as is. Every tool result is re-sent on each later turn, so Read with offset/limit around a Grep -n hit (at most 150 lines), never a whole large file, and never re-read a range you already have.";
+const SYSTEM = "You are a fast Rust/wgpu voxel-game coding agent in a shared tree. Be terse; no preamble. " + TOOL_RULES + " Rules: no unwrap/expect outside tests; no content tables in Rust (use assets/*.ron); simulation uses fixed steps and seeded hashes, no wall-clock; no new dependencies; player text follows crates/app/src/egui_ui/UI_RULES.md and adds no new proper nouns; host/WGSL structs are one contract.";
 const STATIC_TASK = `${"Implement ONE parity row end to end, fast. Never stop on a missing owner."} Steps:
 1. Use the work order below; do not re-run describe.
 2. Pick the smallest playable slice (<300 changed lines). Data first: rows in assets/*.ron or modes/fields on existing kinds. New resources, machine kinds, save fields, generator gates and shader fields are APPROVED: build them (see OWNER POLICY).
 3. Gate behaviour under world.rules.systems.enabled("<system>") where it ticks.
 4. Edit with Edit/Write only. Others edit this tree concurrently: never run git checkout/stash/reset/restore/clean, never revert or reformat, keep unrelated hunks. Do not touch wand_xmb.rs, adventure/growth.rs, the parity ledger or any test.
-5. Verify once at the end: cargo check -p minecraft_style_voxel_prototype (wait if another agent holds the lock; fix errors you caused). No tests, no cargo fmt.
+5. Verify once at the end with exactly: cargo check -p minecraft_style_voxel_prototype --message-format short (it waits if another agent holds the lock; fix errors you caused). No tests, no cargo fmt.
 6. If the behaviour already exists and works, edit nothing: report already-implemented with the owner files you verified.
 7. If source context is absent after ~20 lookups, create the owner yourself per OWNER POLICY; do not stop.
 8. Machine or factory rows only: make it provable. Add a "scenario" key to RESULT (keep RESULT on ONE line), e.g. "scenario":{"steps":[{"op":"machine_test","position":[0,40,0],"kind":"Crusher","set":{"energy":5000,"input":{"Tin ingots":64}},"ticks":600,"expect":{"end.out.Tin dust":64}}]}. The supervisor stores it, runs it headless in the real engine after the next build and returns any mismatch to you. Expect only values your change produces; at most 12 steps; omit the key for rows with no machine behaviour. Do not write files under tools/.
-Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
+Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","tests":"<owner checks, or empty>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
 
 // Engine-overhaul rows (ENG-*, --family engine|engperf|engsim|engnet|enggame|engarch) change shared
 // engine code instead of adding content, so the slice rules differ: same output by default, a
@@ -187,9 +201,9 @@ const ENGINE_TASK = `Implement ONE engine-overhaul row as its smallest safe slic
 3. Slice under 300 changed lines. Default behaviour, saves, generated terrain and rendered output stay identical: put a new code path behind a preference, world rule or existing debug switch that defaults to the old path, unless the row is a pure bug fix (panic, unbounded allocation, missing validation), which lands directly.
 4. Robustness rows: replace unwrap/expect/indexing on the named path with a typed error or a bounded fallback; never change the wire or save layout unless the row says so.
 5. Edit with Edit/Write only. Others edit this tree concurrently: never run git checkout/stash/reset/restore/clean, never revert or reformat, keep unrelated hunks. Do not touch wand_xmb.rs, adventure/growth.rs, the parity ledger or any test.
-6. Verify once at the end: cargo check -p <the crate you edited> (package names are in each crates/*/Cargo.toml; the app is minecraft_style_voxel_prototype). No tests, no cargo fmt, no benchmarks.
+6. Verify once at the end with exactly: cargo check -p <the crate you edited> --message-format short (package names are in each crates/*/Cargo.toml; the app is minecraft_style_voxel_prototype). No tests, no cargo fmt, no benchmarks.
 7. Summary must say what the owner has to measure (the row's acceptance check) and that it was NOT measured here.
-Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
+Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","tests":"<owner checks, or empty>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
 
 function prompt(row, tier, note, order, ctx = "") {
   return `${/^ENG-/.test(row.id) ? ENGINE_TASK : STATIC_TASK}
@@ -230,23 +244,50 @@ function parseResult(text) {
   try { return JSON.parse(hit[1]); } catch { return null; }
 }
 
+// Spend: every cache write used the 1-hour TTL (2x input price); 5-minute writes cost 1.25x. Runs take 34 s
+// p50 / 122 s p90 (2 of 172 over 5 min), so the short TTL never expires mid-run. Measured on one call:
+// 16k tokens written at 1h vs 0.7k at 5m (the rest read from the shared prefix). Account MCP connectors
+// stay out of agents (strict MCP config) so they never enter the cached tool list.
+const LEAN_ENV = { FORCE_PROMPT_CACHING_5M: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", DISABLE_TELEMETRY: "1" };
+const DENIAL = /requires approval|permission to use|was blocked|denied/i;
+// USD per million tokens [input, output]; cache reads bill at 0.1x input, cache writes at 1.25x. Estimates only.
+const PRICE = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5] };
+function estimateCost(model, u) {
+  const [i, o] = PRICE[Object.keys(PRICE).find(k => String(model).includes(k)) ?? "sonnet"];
+  return ((u.input_tokens ?? 0) * i + (u.cache_read_input_tokens ?? 0) * i * 0.1 + (u.cache_creation_input_tokens ?? 0) * i * 1.25 + (u.output_tokens ?? 0) * o) / 1e6;
+}
+
 function runAgent(worker, row, tier, note, order, ctx = "") {
   return new Promise(resolve => {
     const args = ["-p", "--model", tier.model, "--effort", tier.effort, "--output-format", "stream-json", "--verbose",
-      "--no-session-persistence", "--setting-sources", "local", "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections",
+      "--no-session-persistence", "--setting-sources", "local", "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections", "--strict-mcp-config",
       "--tools", tier.tools ?? "Read,Grep,Glob,Edit,Write,Bash", "--system-prompt", SYSTEM, "--permission-mode", "acceptEdits",
       "--allowedTools", SAFE_TOOLS.join(","), "--disallowedTools", DENY_TOOLS.join(","),
       "--max-turns", String(tier.maxTurns ?? 45), "--max-budget-usd", String(tier.budget ?? 1)];
     const log = path.join(dir, "logs", `${row.id}-${worker.id}-${Date.now()}.log`);
     worker.log = path.relative(root, log);
     const child = spawn(process.env.AXIOM_CLAUDE_PATH || "claude", args, { cwd: root, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...childEnv(), ENABLE_TOOL_SEARCH: "false", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", DISABLE_TELEMETRY: "1" } });
+      env: { ...childEnv(), ...LEAN_ENV, ENABLE_TOOL_SEARCH: "false" } });
+    // claude.exe's own children (ripgrep for Grep, cargo under Bash) inherit stdout, so a plain kill left the
+    // pipe open and 'close' never fired: Stop all, the explore cap, the watchdog and the timeout all waited
+    // for the agent's tools to finish. Kill the whole tree, and force the pipes shut 5 s after exit.
+    const plainKill = child.kill.bind(child);
+    child.kill = () => {
+      if (process.platform === "win32" && child.pid && child.exitCode === null) spawnSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
+      return plainKill();
+    };
+    child.once("exit", () => setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 5000).unref());
     const kill = setTimeout(() => child.kill(), cfg.timeoutMs);
     worker.child = child; worker.phase = "connecting";
-    let lastEvent = Date.now(), pending = 0, stalled = false, explored = false;
+    let lastEvent = Date.now(), pending = 0, stalled = false, explored = false, denied = 0, turns = 0, linger;
+    const cargoCalls = new Set();
+    // A killed run (explore cap, watchdog, timeout) emits no result event, so its spend was recorded as $0.
+    // Sum per-message usage from the stream and estimate the cost when no final total arrives.
+    const seen = new Set(), usage = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
     // Silent connection (no events) for 90 s, or a tool that never returns for 15 min: kill and let the caller retry.
     const watchdog = setInterval(() => {
       const quiet = Date.now() - lastEvent;
+      if (final) return; // finished; the linger timer ends the process
       if ((!pending && quiet > 90_000) || quiet > 900_000) { stalled = true; logTail(worker, "stalled " + Math.round(quiet / 1000) + "s: reconnecting"); child.kill(); }
     }, 10_000);
     let buf = "", final, err = "";
@@ -261,14 +302,30 @@ function runAgent(worker, row, tier, note, order, ctx = "") {
         const line = buf.slice(0, n); buf = buf.slice(n + 1);
         let ev; try { ev = JSON.parse(line); } catch { continue; }
         if (ev.type === "system" && ev.subtype === "init") worker.phase = "running";
-        if (ev.type === "result") final = ev;
-        if (ev.type === "user" && Array.isArray(ev.message?.content)) pending = Math.max(0, pending - ev.message.content.filter(b => b.type === "tool_result").length);
+        // The result is the end of the run. claude.exe used to linger after it (waiting on a cargo check stuck
+        // behind the build lock); the watchdog then killed it as "stalled", the row was retried from scratch
+        // and good work was recorded as blocked. Take the result and end the process tree shortly after.
+        if (ev.type === "result") { final = ev; linger ??= setTimeout(() => child.kill(), 3000); }
+        if (ev.type === "user" && Array.isArray(ev.message?.content)) {
+          const results = ev.message.content.filter(b => b.type === "tool_result");
+          pending = Math.max(0, pending - results.length);
+          // A clean agent cargo check proves the tree is green right now: the health gate reuses it instead of
+          // starting its own cargo run that competes with the agents for the build lock.
+          for (const b of results) if (cargoCalls.has(b.tool_use_id)) {
+            const c = typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "");
+            if (/Finished/.test(c) && !/\berror(\[E\d+\])?:/.test(c)) Object.assign(health, { ok: true, at: Date.now(), errors: [] });
+          }
+          for (const b of results) if (b.is_error && DENIAL.test(typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? ""))) { denied++; worker.denied = (worker.denied ?? 0) + 1; }
+        }
+        if (ev.type === "assistant" && ev.message?.usage && !seen.has(ev.message.id)) { seen.add(ev.message.id); for (const k in usage) usage[k] += ev.message.usage[k] ?? 0; }
         if (ev.type === "assistant") for (const b of ev.message?.content ?? []) {
           if (b.type === "tool_use") {
-            worker.turns++; pending++; worker.phase = "running";
+            worker.turns++; turns++; pending++; worker.phase = "running";
             const i = b.input ?? {};
+            if (b.name === "Bash" && /^cargo check\b/.test(String(i.command ?? ""))) cargoCalls.add(b.id);
             // Exploration spiral: many turns, no edit. Every extra turn re-reads the whole context.
-            if (!tier.scout && !explored && worker.turns >= cfg.exploreTurns && !touched.size && !/^(Edit|Write)$/.test(b.name)) {
+            // Denied calls are a prompt/sandbox mismatch, not exploration, so they do not count here.
+            if (!tier.scout && !explored && turns - denied >= cfg.exploreTurns && !touched.size && !/^(Edit|Write)$/.test(b.name)) {
               explored = true; logTail(worker, `no edit after ${worker.turns} turns: stopping`); child.kill();
             }
             if (/^(Edit|Write)$/.test(b.name) && i.file_path) { touched.add(path.relative(root, i.file_path).replaceAll("\\", "/")); logTail(worker, "✎ " + path.basename(i.file_path)); }
@@ -280,9 +337,11 @@ function runAgent(worker, row, tier, note, order, ctx = "") {
       }
     });
     child.once("close", code => {
-      clearTimeout(kill); clearInterval(watchdog);
-      const text = explored ? `RESULT {"status":"blocked","files":[],"summary":"explored ${worker.turns} turns without an edit; owner code not located"}` : (final?.result ?? "");
-      resolve({ ok: !explored && code === 0 && !final?.is_error, code, stalled, explored, noResult: !final && !explored, text, usage: final?.usage, cost: final?.total_cost_usd ?? 0, files: [...touched], err, error: final?.is_error ? text : (code ? err : "") });
+      clearTimeout(kill); clearTimeout(linger); clearInterval(watchdog);
+      if (worker.child === child) worker.child = null;
+      const text = explored ? `RESULT {"status":"blocked","files":[],"summary":"explored ${turns} turns without an edit; owner code not located"}` : (final?.result ?? "");
+      // With a result in hand the exit code only reflects the linger kill.
+      resolve({ ok: !explored && !!final && !final.is_error, code, stalled: stalled && !final, explored, noResult: !final && !explored, text, usage: final?.usage ?? usage, cost: final?.total_cost_usd ?? estimateCost(tier.model, usage), estimated: !final, denied, files: [...touched], err, error: final?.is_error ? text : (!final && code ? err : "") });
     });
     child.stdin.on("error", () => {});
     child.stdin.end(tier.scout ? scoutPrompt(row, order, ctx) : prompt(row, tier, note, order, ctx));
@@ -353,6 +412,30 @@ function pick() {
     const at = priority.indexOf(row.id); if (at >= 0) priority.splice(at, 1);
     return { row, files, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 3500) };
   }
+  // Nothing new to build: wire what already landed instead of idling.
+  const wire = wireCandidates(ledger, busy)[0];
+  if (wire) return wire;
+}
+// Wire pass. Most open rows wait on design-only owner systems, so the queue runs dry while ~2/3 of landed
+// slices are scaffolding nothing calls (cost per wired row is ~4x cost per row). When no new row is free, a
+// landed-but-unwired row goes back to sonnet once to add its smallest real caller. One pass per row; the
+// result carries wirePass so restarts do not repeat it.
+const isUnwired = r => r && /^(building|playable)$/.test(r.status) && !r.wirePass && (r.files ?? []).length > 0
+  && (r.unwired || r.wired === false || (r.wired === undefined && UNWIRED.test(r.summary ?? "")));
+function wireCandidates(ledger, busy = new Set()) {
+  if (!cfg.wire) return [];
+  const byId = new Map(ledger.rows.map(r => [r.id, r]));
+  const out = [];
+  for (const r of [...finished.values()].sort((a, b) => (b.at ?? 0) - (a.at ?? 0))) {
+    const row = byId.get(r.id);
+    if (!row || !isUnwired(r) || active.has(r.id) || parked.has(r.id) || (cfg.family !== "all" && !filterRows([row], { family: cfg.family }).length)) continue;
+    const files = (r.files ?? []).filter(f => /^[\w./-]+$/.test(f)).slice(0, 6);
+    if (files.slice(0, 2).some(f => busy.has(f))) continue;
+    out.push({ row, files, wire: true, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 2500),
+      note: `WIRE PASS. An earlier slice of this row landed in ${files.join(", ")} and reported: ${String(r.summary).slice(0, 260)} Nothing reaches it yet. Do NOT add features: wire the smallest real caller so a player action, a tick or a loaded table reaches the existing code (one call site, one RON row read, or one UI line), behind the row's system switch. Start from those files; first Edit within 6 tool calls. If no caller is possible without an owner decision, edit nothing and report blocked with why "design".` });
+    if (out.length >= 12) break;
+  }
+  return out;
 }
 let resumeTimer;
 // "resets 2pm" or "resets 2:30 pm": next occurrence of that local time; otherwise retry in 30 minutes.
@@ -411,14 +494,20 @@ function checkHealth() {
   });
   return health.checking;
 }
+// Never wait forever: a tree broken by a peer session (not the swarm) used to park every worker indefinitely.
+// After two red checks a checkpoint repair runs; after 20 minutes the builder starts anyway and POLICY
+// RED TREE tells it to report foreign errors instead of fixing them.
 async function waitForGreen(worker) {
   if (!useHealthGate) return;
   if (Date.now() - health.at > 180_000 || !health.ok) await checkHealth();
-  while (!health.ok && !state.stop) {
+  const since = Date.now();
+  for (let red = 1; !health.ok && !state.stop; red++) {
+    if (Date.now() - since > 20 * 60_000) { logTail(worker, "build still red after 20 min; starting anyway"); return; }
     worker.status = "waiting for green build";
     logTail(worker, "build red: " + (health.errors[0] ?? "").slice(0, 100));
+    if (red === 2 && !state.checkpointing) checkpoint("build red; repair");
     await new Promise(r => setTimeout(r, 45_000));
-    await checkHealth();
+    if (!state.checkpointing) await checkHealth();
   }
 }
 
@@ -435,13 +524,14 @@ async function work(worker) {
     if (!next && cfg.prove && !active.size && !idleProved) { idleProved = true; if (proofPending().size) checkpoint("idle: proof of landed rows"); }
     if (!next) { worker.status = "idle"; worker.row = null; await new Promise(r => setTimeout(r, 3000)); continue; }
     const { row, files, order } = next;
-    const isRetry = retry.has(row.id);
-    const tierIndex = Math.min(tiers.length - 1, retry.get(row.id) ?? startTier(row));
+    const wiring = !!next.wire, prior = wiring ? finished.get(row.id) : null;
+    const isRetry = retry.has(row.id) || wiring; // a wire pass skips the scout: it already has its files
+    const tierIndex = wiring ? 0 : Math.min(tiers.length - 1, retry.get(row.id) ?? startTier(row));
     const tier = tiers[tierIndex];
-    let note = isRetry ? retry.get(row.id + ":note") : "";
+    let note = wiring ? next.note : isRetry ? retry.get(row.id + ":note") : "";
     retry.delete(row.id);
     active.set(row.id, { files });
-    Object.assign(worker, { status: "working", row: row.id, label: row.label, phase: "context", activity: [], turns: 0, files: [] });
+    Object.assign(worker, { status: "working", row: row.id, label: row.label, phase: "context", activity: [], turns: 0, denied: 0, files: [] });
     const ctx = await rowContext(row, files);
     prewarm();
     let rowCost = 0;
@@ -452,6 +542,8 @@ async function work(worker) {
       state.totals.cost += s.cost ?? 0; rowCost += s.cost ?? 0;
       state.totals.in += (s.usage?.input_tokens ?? 0) + (s.usage?.cache_read_input_tokens ?? 0) + (s.usage?.cache_creation_input_tokens ?? 0);
       state.totals.out += s.usage?.output_tokens ?? 0; state.totals.cached += s.usage?.cache_read_input_tokens ?? 0;
+      // A scout killed by Stop/Park fell through into waitForGreen's cargo check before noticing the stop.
+      if (state.stop || parked.has(row.id)) { active.delete(row.id); worker.child = null; logTail(worker, "stopped after scout; not recorded"); if (state.stop) break; continue; }
       const verdict = parseScout(s.text);
       if (limit.test((s.error || "") + " " + (s.text || ""))) { active.delete(row.id); retry.set(row.id, tierIndex); retry.set(row.id + ":note", ""); state.paused = "usage limit hit (scout)"; continue; }
       // Cheap models over-block: a needs-design verdict must cite an explicit design marker, else build.
@@ -460,7 +552,7 @@ async function work(worker) {
         active.delete(row.id); worker.child = null;
         const entry = { id: row.id, label: row.label, tier: scoutTier.name, at: Date.now(), ms: Date.now() - worker.startedAt, files: verdict.files ?? [],
           summary: `scout: ${verdict.evidence || verdict.plan || verdict.verdict}`.slice(0, 240), status: verdict.verdict === "needs-design" ? "blocked" : "already-implemented",
-          log: worker.log, tokens: s.usage?.input_tokens ?? 0, cost: rowCost, final: true };
+          log: worker.log, tokens: s.usage?.input_tokens ?? 0, cost: rowCost, final: true, why: verdict.verdict === "needs-design" ? "design" : undefined };
         finished.set(row.id, entry);
         if (entry.status === "blocked") state.totals.blocked++; else state.totals.done++;
         record(entry); persist(); logTail(worker, `scout settled: ${entry.status}`);
@@ -500,7 +592,7 @@ async function work(worker) {
     const entry = { id: row.id, label: row.label, tier: tier.name, at: Date.now(), ms: Date.now() - worker.startedAt, files: parsed?.files?.length ? parsed.files : out.files,
       summary: parsed?.summary ?? (out.error || out.text || "no result").toString().slice(0, 240), status: parsed?.status ?? (out.ok ? "building" : "failed"), log: worker.log, tokens, cost: rowCost,
       turns: worker.turns, cached: out.usage?.cache_read_input_tokens ?? 0, out: out.usage?.output_tokens ?? 0,
-      wired: parsed?.wired, entry: parsed?.entry, why: parsed?.why };
+      wired: parsed?.wired, entry: parsed?.entry, why: parsed?.why, tests: parsed?.tests, estimated: out.estimated || undefined, denied: out.denied || undefined };
     if (limit.test(out.error || out.text || "")) {
       // Sleep until the provider's stated reset instead of relaunching failing agents every 10 minutes.
       const until = limitResetAt(out.error || out.text || "");
@@ -517,14 +609,41 @@ async function work(worker) {
       entry.final = true; finished.set(row.id, entry); state.totals.done++; record(entry); persist(); continue;
     }
     const good = (entry.status === "building" || entry.status === "playable") && entry.files.length > 0;
+    if (wiring) {
+      // One wire pass per row. A failed pass keeps the earlier landed slice as the row's result.
+      entry.wirePass = true;
+      // Wire passes must pay for themselves: below 1 in 3 actually wired after 6 tries, stop starting them
+      // (re-enable in Settings). Idle workers cost nothing; unproductive passes cost ~$0.09 each.
+      wireStats.n++; if (good && entry.wired !== false && !UNWIRED.test(entry.summary ?? "")) wireStats.wired++;
+      if (cfg.wire && wireStats.n >= 6 && wireStats.wired / wireStats.n < 1 / 3) { cfg.wire = false; event(`wire pass off: ${wireStats.wired}/${wireStats.n} wired; turn it on in Settings`); }
+      if (!good) {
+        record({ ...entry, status: "blocked", summary: "wire pass: " + entry.summary, final: false });
+        finished.set(row.id, { ...prior, wirePass: true });
+        appendFileSync(resultsFile, JSON.stringify({ ...prior, wirePass: true, final: true }) + "\n");
+        persist(); continue;
+      }
+      entry.files = [...new Set([...(prior?.files ?? []), ...entry.files])];
+    }
     // A stronger model cannot invent a missing spec or a save-format bump: stop those at once.
     // Cost: a stronger model re-explores the same missing owner and fails the same way (11 of 17 opus runs).
     const noOwner = !entry.files.length && (entry.why === "no_owner" || /explored \d+ turns without an edit|owner code not located/i.test(entry.summary ?? ""));
     const hardBlock = entry.why === "design" || designBlock.test(entry.summary ?? "") || noOwner;
     const repeat = !good && lastFail.has(row.id) && sameFailure(lastFail.get(row.id), entry.summary);
     if (!good) lastFail.set(row.id, entry.summary ?? "");
-    if (!good && !hardBlock && !repeat && tierIndex < tiers.length - 1) {
-      retry.set(row.id, tierIndex + 1); retry.set(row.id + ":note", `${tier.name} reported: ${entry.summary}`.slice(0, 300));
+    // Zero-edit failures ("too wide", "out of budget") never landed on opus: it re-explores at medium effort and
+    // hits the no-edit cap (16 of 22 before the fix, 2 of 2 after, ~$0.35 each). They get ONE cheap sonnet retry
+    // forced to the narrowest slice instead; opus is kept for rows that edited code and then failed.
+    if (!good && !hardBlock && !repeat && !entry.files.length && !forced.has(row.id)) {
+      forced.add(row.id);
+      const plan = note.startsWith("Scout") ? " " + note.split(" Peers editing now")[0] : "";
+      retry.set(row.id, 0); retry.set(row.id + ":note", (`Previous attempt made NO edit and said: ${entry.summary}`.slice(0, 300)
+        + " That scope is too wide on purpose: land ONLY the narrowest slice that compiles (the RON rows + a typed loader/struct + one real caller, or one mode on an existing kind). Do not re-explore: start from the files below, make your first Edit within 6 tool calls." + plan).slice(0, 1200));
+      record({ ...entry, status: "escalated", final: false, summary: "retrying narrower on sonnet: " + entry.summary });
+      continue;
+    }
+    if (!good && !hardBlock && !repeat && entry.files.length && tierIndex < tiers.length - 1) {
+      const plan = note.startsWith("Scout") ? " " + note.split(" Peers editing now")[0] : "";
+      retry.set(row.id, tierIndex + 1); retry.set(row.id + ":note", (`${tier.name} reported: ${entry.summary}`.slice(0, 300) + plan).slice(0, 1200));
       record({ ...entry, status: "escalated", final: false });
       continue;
     }
@@ -538,7 +657,10 @@ async function work(worker) {
       event(state.paused); failStreak = 0;
     }
     if (good) {
-      state.totals.done++;
+      if (wiring) state.totals.wired = (state.totals.wired ?? 0) + 1; else state.totals.done++;
+      sinceCheckpoint++;
+      const flat = v => String(v ?? "").replace(/\s+/g, " ").trim();
+      try { appendFileSync(path.join(dir, "changes.md"), `${row.id} | ${entry.files.join(", ")} | ${flat(entry.summary)} | ${flat(entry.tests) || "-"}\n`); } catch { /* best effort */ }
       if (entry.wired === false || (entry.wired === undefined && UNWIRED.test(entry.summary ?? ""))) { state.totals.scaffold = (state.totals.scaffold ?? 0) + 1; entry.unwired = true; }
       if (parsed?.scenario) {
         const bad = validateScenario(parsed.scenario);
@@ -558,7 +680,7 @@ async function work(worker) {
     record(entry);
     persist();
     brain.learn(entry).catch(() => {});
-    if (good && cfg.checkpointEvery > 0 && state.totals.done % cfg.checkpointEvery === 0) checkpoint(`auto: ${cfg.checkpointEvery} rows landed`);
+    if (good && cfg.checkpointEvery > 0 && sinceCheckpoint >= cfg.checkpointEvery && !state.checkpointing) sinceCheckpoint = 0, checkpoint(`auto: ${cfg.checkpointEvery} rows landed`);
   }
   worker.status = "stopped";
 }
@@ -569,7 +691,9 @@ async function checkpoint(why) {
   state.checkpointing = why;
   event(`checkpoint: ${why}; draining agents`);
   try {
-    for (let i = 0; active.size && i < 240 && !state.stop; i++) await new Promise(r => setTimeout(r, 2500));
+    // Drain only agents that are actually running: workers parked in waitForGreen hold a row in `active`
+    // but no child, and waiting on them stalled every red-tree checkpoint for the full 10 minutes.
+    for (let i = 0; state.workers.some(w => w.child) && i < 240 && !state.stop; i++) await new Promise(r => setTimeout(r, 2500));
     let result = await brain.compile();
     for (let round = 1; !result.ok && result.errors.length && round <= 2 && !state.stop; round++) {
       event(`checkpoint: ${result.errors.length} compiler errors; repair agent round ${round}`);
@@ -581,6 +705,8 @@ async function checkpoint(why) {
     }
     event(result.ok ? "checkpoint: tree compiles" : `checkpoint: still failing (${result.errors.length} errors${result.note ? ", " + result.note : ""}); see cargo check`);
     state.lastCheckpoint = { at: Date.now(), ok: result.ok, errors: result.errors.slice(0, 5) };
+    // The checkpoint just compiled the same package the health gate checks; share it instead of re-checking.
+    if (result.ok || result.errors.length) Object.assign(health, { ok: result.ok, at: Date.now(), errors: result.errors.slice(0, 6) }), state.health = { ok: health.ok, at: health.at, errors: health.errors };
     if (result.ok) await prove(/proof|supervisor/.test(why), /idle/.test(why));
   } finally { state.checkpointing = null; }
 }
@@ -805,7 +931,7 @@ const server = createServer((req, res) => {
       if (Number.isFinite(b.workers)) setWorkers(b.workers);
       if (typeof b.family === "string" && (b.family === "all" || b.family in FAMILIES)) cfg.family = b.family;
       if (Number.isFinite(b.budget) && b.budget >= 0) { cfg.budget = b.budget; if (state.paused?.startsWith("budget cap") && (!b.budget || state.totals.cost < b.budget)) state.paused = null; }
-      for (const k of ["scout", "readyOnly", "context", "prove"]) if (typeof b[k] === "boolean") cfg[k] = b[k];
+      for (const k of ["scout", "readyOnly", "context", "prove", "wire"]) if (typeof b[k] === "boolean") cfg[k] = b[k];
       if (Number.isFinite(b.exploreTurns) && b.exploreTurns >= 8 && b.exploreTurns <= 90) cfg.exploreTurns = b.exploreTurns;
       if (Number.isFinite(b.checkpointEvery) && b.checkpointEvery >= 0 && b.checkpointEvery <= 100) cfg.checkpointEvery = b.checkpointEvery;
       if (Number.isFinite(b.proveBatch) && b.proveBatch >= 1 && b.proveBatch <= 50) cfg.proveBatch = b.proveBatch;
@@ -829,7 +955,7 @@ const server = createServer((req, res) => {
     else if (action === "resume") state.paused = null;
     else if (action === "checkpoint") checkpoint("requested by supervisor");
     else if (action === "prove") { idleProved = false; checkpoint("proof requested by supervisor"); }
-    else if (action === "requeue") { for (const [id, r] of [...finished]) if ((r.status === "blocked" || r.status === "failed") && !designBlock.test(r.summary ?? "")) requeue(id, 0, `Previously blocked: ${String(r.summary).slice(0, 200)}`); }
+    else if (action === "requeue") { for (const [id, r] of [...finished]) if ((r.status === "blocked" || r.status === "failed") && !isDesignBlock(r)) requeue(id, 0, `Previously blocked: ${String(r.summary).slice(0, 200)}`); }
     else if (action === "stop") { state.stop = true; state.userStop = true; for (const w of state.workers) w.child?.kill(); }
     else if (action === "add" && state.workers.length < 16) {
       if (state.stop && !state.userStop) state.stop = false; // revive after an automatic stop
@@ -844,8 +970,11 @@ function peek() {
   try {
     const ledger = loadLedger();
     const { rows, pushed } = eligible(ledger);
-    return [...pushed, ...nextRows(rows, 12).filter(r => !priority.includes(r.id))].slice(0, 12)
+    const fresh = [...pushed, ...nextRows(rows, 12).filter(r => !priority.includes(r.id))].slice(0, 12)
       .map(r => ({ id: r.id, label: r.label, tier: cfg.scout && !retry.has(r.id) ? scoutTier.name : tiers[Math.min(tiers.length - 1, retry.get(r.id) ?? 0)].name, pinned: priority.includes(r.id) }));
+    // When new rows run short the workers take wire passes; show them so the queue is not reported empty.
+    const wires = fresh.length < 12 ? wireCandidates(ledger).slice(0, 12 - fresh.length).map(w => ({ id: w.row.id, label: "wire: " + w.row.label, tier: tiers[0].name + "·wire", pinned: false })) : [];
+    return [...fresh, ...wires];
   } catch { return []; }
 }
 
