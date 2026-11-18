@@ -595,8 +595,14 @@ async function waitForGreen(worker) {
   if (!health.ok) await checkHealth();
   else if (Date.now() - health.at > 180_000) checkHealth();
   const since = Date.now();
-  for (let red = 1; !health.ok && !state.stop; red++) {
-    if (Date.now() - since > 20 * 60_000) { logTail(worker, "build still red after 20 min; starting anyway"); return; }
+  // Errors inside files a running agent is editing are its half-done edit (ENG-MESH-02's flag_table held
+  // every builder): only orphaned errors block. The checkpoint applies the same rule.
+  const blocking = () => {
+    const editing = state.workers.filter(w => w.child && w !== worker).flatMap(w => w.files ?? []);
+    return health.errors.filter(e => !editing.some(f => e.replaceAll("\\", "/").includes(f)));
+  };
+  for (let red = 1; !health.ok && blocking().length && !state.stop; red++) {
+    if (Date.now() - since > 8 * 60_000) { logTail(worker, "build still red after 8 min; starting anyway"); return; }
     worker.status = "waiting for green build";
     logTail(worker, "build red: " + (health.errors[0] ?? "").slice(0, 100));
     if (red === 2 && !state.checkpointing) checkpoint("build red; repair");
