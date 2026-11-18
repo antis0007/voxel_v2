@@ -30,7 +30,7 @@
 // - Agents never touch the ledger or git. The supervisor records `building` with the files touched.
 // - A usage limit pauses the swarm and retries every 10 minutes. UI: http://127.0.0.1:<port>
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -49,7 +49,7 @@ const cfg = { workers: Math.min(16, Math.max(1, Number(opt("workers", 5)))), por
   maxRows: Number(opt("max-rows", 0)), timeoutMs: Number(opt("timeout-min", 25)) * 60_000,
   sonnet: opt("sonnet", "sonnet"), opus: opt("opus", "opus"), haiku: opt("haiku", "haiku"), family: family ?? "all",
   scout: !flag("no-scout"), readyOnly: flag("ready-only"), budget: Number(opt("budget-usd", 0)),
-  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire") };
+  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire"), maxCont: Number(opt("max-cont", 2)) };
 // Cost ladder (history: failed runs cost as much as successes, and turns drive cost because every
 // turn re-reads context). A haiku scout triages first; the builder starts cheap with a tight turn
 // cap; ONE escalation to opus, only for failures a stronger model can fix.
@@ -425,9 +425,30 @@ function pick() {
     const at = priority.indexOf(row.id); if (at >= 0) priority.splice(at, 1);
     return { row, files, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 3500) };
   }
-  // Nothing new to build: wire what already landed instead of idling.
+  // Nothing new to build: wire what already landed, then grow wired rows, instead of idling.
   const wire = wireCandidates(ledger, busy)[0];
   if (wire) return wire;
+  const cont = contCandidates(ledger, busy)[0];
+  if (cont) return cont;
+}
+// Continue pass. Once new rows and wire passes run out (every open row waiting on a design-only owner left
+// all seven workers idle), a wired row that landed only its first slice gets its NEXT slice, taken from the
+// remainder its own summary lists. At most cfg.maxCont passes per row; the count is saved on the result.
+function contCandidates(ledger, busy = new Set()) {
+  if (!cfg.maxCont) return [];
+  const byId = new Map(ledger.rows.map(r => [r.id, r]));
+  const out = [];
+  for (const r of [...finished.values()].sort((a, b) => (a.cont ?? 0) - (b.cont ?? 0) || (b.at ?? 0) - (a.at ?? 0))) {
+    const row = byId.get(r.id);
+    if (!row || row.status === "verified" || r.wired !== true || !/^(building|playable)$/.test(r.status) || (r.cont ?? 0) >= cfg.maxCont
+      || active.has(r.id) || parked.has(r.id) || (cfg.family !== "all" && !filterRows([row], { family: cfg.family }).length)) continue;
+    const files = (r.files ?? []).filter(f => /^[\w./-]+$/.test(f)).slice(0, 6);
+    if (!files.length || files.slice(0, 2).some(f => busy.has(f))) continue;
+    out.push({ row, files, cont: true, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 2500),
+      note: `CONTINUE PASS ${(r.cont ?? 0) + 1}. Earlier slices of this row landed and are wired, in ${files.join(", ")}; the last report said: ${String(r.summary).slice(0, 300)} Build the NEXT smallest playable slice of what that report says remains, reusing the existing code and keeping it reachable (wired). Do not redo or restructure what exists. Start from those files; first Edit within 8 tool calls. If everything that remains needs an owner decision, edit nothing and report blocked with why "design".` });
+    if (out.length >= 12) break;
+  }
+  return out;
 }
 // Wire pass. Most open rows wait on design-only owner systems, so the queue runs dry while ~2/3 of landed
 // slices are scaffolding nothing calls (cost per wired row is ~4x cost per row). When no new row is free, a
@@ -567,11 +588,11 @@ async function work(worker) {
     if (!next && cfg.prove && !active.size && !idleProved) { idleProved = true; if (proofPending().size) checkpoint("idle: proof of landed rows"); }
     if (!next) { worker.status = "idle"; worker.row = null; await new Promise(r => setTimeout(r, 3000)); continue; }
     const { row, files, order } = next;
-    const wiring = !!next.wire, prior = wiring ? finished.get(row.id) : null;
-    const isRetry = retry.has(row.id) || wiring; // a wire pass skips the scout: it already has its files
-    const tierIndex = wiring ? 0 : Math.min(tiers.length - 1, retry.get(row.id) ?? startTier(row));
+    const wiring = !!next.wire, continuing = !!next.cont, prior = wiring || continuing ? finished.get(row.id) : null;
+    const isRetry = retry.has(row.id) || wiring || continuing; // follow-up passes skip the scout: they have their files
+    const tierIndex = wiring || continuing ? 0 : Math.min(tiers.length - 1, retry.get(row.id) ?? startTier(row));
     let tier = wiring && cfg.wireModel === "haiku" ? wireTier : tiers[tierIndex];
-    let note = wiring ? next.note : isRetry ? retry.get(row.id + ":note") : "";
+    let note = wiring || continuing ? next.note : isRetry ? retry.get(row.id + ":note") : "";
     retry.delete(row.id);
     active.set(row.id, { files });
     Object.assign(worker, { status: "working", row: row.id, label: row.label, phase: "context", activity: [], turns: 0, denied: 0, files: [] });
@@ -677,6 +698,18 @@ async function work(worker) {
       }
       entry.files = [...new Set([...(prior?.files ?? []), ...entry.files])];
     }
+    if (continuing) {
+      // A failed continuation keeps the earlier result and stops further continues of that row.
+      entry.cont = (prior?.cont ?? 0) + 1; entry.wirePass = prior?.wirePass;
+      if (!good) {
+        record({ ...entry, status: "blocked", summary: `continue pass ${entry.cont}: ` + entry.summary, final: false });
+        finished.set(row.id, { ...prior, cont: cfg.maxCont });
+        appendFileSync(resultsFile, JSON.stringify({ ...prior, cont: cfg.maxCont, final: true }) + "\n");
+        persist(); continue;
+      }
+      entry.files = [...new Set([...(prior?.files ?? []), ...entry.files])];
+      if (entry.wired === undefined) entry.wired = prior?.wired;
+    }
     // A stronger model cannot invent a missing spec or a save-format bump: stop those at once.
     // Cost: a stronger model re-explores the same missing owner and fails the same way (11 of 17 opus runs).
     const noOwner = !entry.files.length && (entry.why === "no_owner" || /explored \d+ turns without an edit|owner code not located/i.test(entry.summary ?? ""));
@@ -710,7 +743,9 @@ async function work(worker) {
       event(state.paused); failStreak = 0;
     }
     if (good) {
-      if (wiring) state.totals.wired = (state.totals.wired ?? 0) + 1; else state.totals.done++;
+      if (wiring) state.totals.wired = (state.totals.wired ?? 0) + 1;
+      else if (continuing) state.totals.cont = (state.totals.cont ?? 0) + 1;
+      else state.totals.done++;
       sinceCheckpoint++;
       const flat = v => String(v ?? "").replace(/\s+/g, " ").trim();
       try { appendFileSync(path.join(dir, "changes.md"), `${row.id} | ${entry.files.join(", ")} | ${flat(entry.summary)} | ${flat(entry.tests) || "-"}\n`); } catch { /* best effort */ }
@@ -742,7 +777,7 @@ async function work(worker) {
 async function checkpoint(why) {
   if (state.checkpointing || state.stop) return;
   state.checkpointing = why;
-  event(`checkpoint: ${why}; draining agents`);
+  event(`checkpoint: ${why}`);
   try {
     // No drain and no pause: the shared check compiles the whole tree with every agent's edits (and loads the
     // content tables), so a quiet tree is not needed. Draining used to idle all five workers for the length of
@@ -808,7 +843,20 @@ async function prove(manual = false, idle = false) {
   const run = [...new Map([...pending.values()].flat().map(s => [s.id, s])).values()];
   state.checkpointing = `building the engine to prove ${pending.size} row(s)`;
   event("proof: " + state.checkpointing);
-  const built = await buildEngine();
+  let built = await buildEngine();
+  // `undefined symbol: anon.<hash>.llvm.<n>` at link is a stale incremental codegen cache for the app (several
+  // builds and checks share target/). Drop the app's incremental sessions not touched in 2 minutes and retry once.
+  if (!built.ok && /undefined symbol|LNK20(01|19)/.test(built.note ?? "")) {
+    const inc = path.join(root, "target", "debug", "incremental");
+    let dropped = 0;
+    try {
+      for (const d of readdirSync(inc).filter(d => d.startsWith("minecraft_style_voxel_prototype-"))) {
+        try { const p = path.join(inc, d); if (Date.now() - statSync(p).mtimeMs > 120_000) { rmSync(p, { recursive: true, force: true }); dropped++; } } catch { /* in use */ }
+      }
+    } catch { /* no incremental dir */ }
+    event(`proof: link failed on stale incremental code; dropped ${dropped} app cache dir(s), rebuilding once`);
+    built = await buildEngine();
+  }
   if (!built.ok) { state.lastProof = { at: Date.now(), ok: false, note: "engine build failed" }; event("proof: engine build failed; rows stay unproven. " + (built.note ?? "")); return; }
   state.checkpointing = `running ${run.length} scenario(s) in the engine`;
   let results;
@@ -1036,7 +1084,8 @@ function peek() {
       .map(r => ({ id: r.id, label: r.label, tier: cfg.scout && !retry.has(r.id) ? scoutTier.name : tiers[Math.min(tiers.length - 1, retry.get(r.id) ?? 0)].name, pinned: priority.includes(r.id) }));
     // When new rows run short the workers take wire passes; show them so the queue is not reported empty.
     const wires = fresh.length < 12 ? wireCandidates(ledger).slice(0, 12 - fresh.length).map(w => ({ id: w.row.id, label: "wire: " + w.row.label, tier: cfg.wireModel === "haiku" ? wireTier.name : tiers[0].name + "·wire", pinned: false })) : [];
-    return [...fresh, ...wires];
+    const conts = fresh.length + wires.length < 12 ? contCandidates(ledger).slice(0, 12 - fresh.length - wires.length).map(c => ({ id: c.row.id, label: "continue: " + c.row.label, tier: tiers[0].name + "·cont", pinned: false })) : [];
+    return [...fresh, ...wires, ...conts];
   } catch { return []; }
 }
 
