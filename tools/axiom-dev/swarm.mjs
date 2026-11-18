@@ -49,7 +49,7 @@ const cfg = { workers: Math.min(16, Math.max(1, Number(opt("workers", 5)))), por
   maxRows: Number(opt("max-rows", 0)), timeoutMs: Number(opt("timeout-min", 25)) * 60_000,
   sonnet: opt("sonnet", "sonnet"), opus: opt("opus", "opus"), haiku: opt("haiku", "haiku"), family: family ?? "all",
   scout: !flag("no-scout"), readyOnly: flag("ready-only"), budget: Number(opt("budget-usd", 0)),
-  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire"), maxCont: Number(opt("max-cont", 2)) };
+  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire"), maxCont: Number(opt("max-cont", 4)) };
 // Cost ladder (history: failed runs cost as much as successes, and turns drive cost because every
 // turn re-reads context). A haiku scout triages first; the builder starts cheap with a tight turn
 // cap; ONE escalation to opus, only for failures a stronger model can fix.
@@ -430,6 +430,12 @@ function pick() {
   if (wire) return wire;
   const cont = contCandidates(ledger, busy)[0];
   if (cont) return cont;
+  const again = retryCandidate(ledger);
+  if (again) {
+    retryPassIds.add(again.id);
+    requeue(again.id, 0, "Earlier run stopped after exploring without an edit, mostly from tool-permission bugs fixed since. Start from the work order's owner files and make your first Edit within 8 tool calls.");
+    return pick();
+  }
 }
 // Continue pass. Once new rows and wire passes run out (every open row waiting on a design-only owner left
 // all seven workers idle), a wired row that landed only its first slice gets its NEXT slice, taken from the
@@ -454,8 +460,10 @@ function contCandidates(ledger, busy = new Set()) {
 // slices are scaffolding nothing calls (cost per wired row is ~4x cost per row). When no new row is free, a
 // landed-but-unwired row goes back to sonnet once to add its smallest real caller. One pass per row; the
 // result carries wirePass so restarts do not repeat it.
-const isUnwired = r => r && /^(building|playable)$/.test(r.status) && !r.wirePass && (r.files ?? []).length > 0
-  && (r.unwired || r.wired === false || (r.wired === undefined && UNWIRED.test(r.summary ?? "")));
+// Anything not explicitly wired qualifies: 133 older results had no wired field and no "unwired" keyword,
+// so neither the wire pass (not unwired) nor the continue pass (not wired) ever picked them. A wire pass on
+// a row that is in fact reachable reports already-implemented and marks it wired.
+const isUnwired = r => r && /^(building|playable)$/.test(r.status) && !r.wirePass && (r.files ?? []).length > 0 && r.wired !== true;
 function wireCandidates(ledger, busy = new Set()) {
   if (!cfg.wire) return [];
   const byId = new Map(ledger.rows.map(r => [r.id, r]));
@@ -466,10 +474,24 @@ function wireCandidates(ledger, busy = new Set()) {
     const files = (r.files ?? []).filter(f => /^[\w./-]+$/.test(f)).slice(0, 6);
     if (files.slice(0, 2).some(f => busy.has(f))) continue;
     out.push({ row, files, wire: true, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 2500),
-      note: `WIRE PASS. An earlier slice of this row landed in ${files.join(", ")} and reported: ${String(r.summary).slice(0, 260)} Nothing reaches it yet. Do NOT add features: wire the smallest real caller so a player action, a tick or a loaded table reaches the existing code (one call site, one RON row read, or one UI line), behind the row's system switch. Start from those files; first Edit within 6 tool calls. If no caller is possible without an owner decision, edit nothing and report blocked with why "design".` });
+      note: `WIRE PASS. An earlier slice of this row landed in ${files.join(", ")} and reported: ${String(r.summary).slice(0, 260)} Nothing reaches it yet. Do NOT add features: wire the smallest real caller so a player action, a tick or a loaded table reaches the existing code (one call site, one RON row read, or one UI line), behind the row's system switch. Start from those files; first Edit within 6 tool calls. If no caller is possible without an owner decision, edit nothing and report blocked with why "design". If a player action, tick or loaded table ALREADY reaches it, edit nothing and report already-implemented with that entry point in "entry".` });
     if (out.length >= 12) break;
   }
   return out;
+}
+// Retry pass: rows blocked by "explored N turns without an edit" mostly hit the Bash-denial and linger bugs
+// fixed since (denials counted as turns; finished runs re-run with the old turn count). Each gets ONE fresh
+// sonnet run when nothing else is queued; the result carries retryPass so it is never repeated.
+const retryPassIds = new Set();
+function retryCandidate(ledger) {
+  const byId = new Map(ledger.rows.map(r => [r.id, r]));
+  for (const r of [...finished.values()].sort((a, b) => (b.at ?? 0) - (a.at ?? 0))) {
+    const row = byId.get(r.id);
+    if (!row || r.status !== "blocked" || r.retryPass || isDesignBlock(r) || !/explored \d+ turns without an edit/.test(r.summary ?? "")
+      || active.has(r.id) || parked.has(r.id) || row.readiness?.missing?.some(o => (state.deadOwners ?? []).some(d => d.startsWith(o + "×")))) continue;
+    if (cfg.family !== "all" && !filterRows([row], { family: cfg.family }).length) continue;
+    return row;
+  }
 }
 let resumeTimer;
 // "resets 2pm" or "resets 2:30 pm": next occurrence of that local time; otherwise retry in 30 minutes.
@@ -670,6 +692,14 @@ async function work(worker) {
       continue;
     }
     if (/CLI not found/.test(out.error ?? "")) { state.stop = true; state.paused = out.error; break; }
+    if (retryPassIds.has(row.id)) entry.retryPass = true;
+    if (entry.status === "already-implemented" && (wiring || continuing)) {
+      // A follow-up pass found the slice already reachable (wire) or nothing left to add (continue): keep the
+      // landed result, mark it wired, and stop further passes of that kind.
+      const kept = { ...prior, wired: true, entry: entry.entry ?? prior?.entry, wirePass: true, cont: continuing ? cfg.maxCont : prior?.cont, final: true };
+      record({ ...entry, final: false, summary: (continuing ? "continue pass: " : "wire pass: ") + entry.summary });
+      finished.set(row.id, kept); appendFileSync(resultsFile, JSON.stringify(kept) + "\n"); persist(); continue;
+    }
     if (entry.status === "already-implemented") {
       entry.final = true; finished.set(row.id, entry); state.totals.done++; record(entry); persist(); continue;
     }
