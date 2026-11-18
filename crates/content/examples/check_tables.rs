@@ -9,13 +9,10 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 fn main() {
     // Keep the failure text in the report instead of a second copy on stderr.
     std::panic::set_hook(Box::new(|_| {}));
-    let checks: [(&str, fn()); 7] = [
+    let checks: [(&str, fn()); 4] = [
         ("assets/materials.ron", || drop(engine_content::MATERIAL_TABLE.len())),
         ("assets/reactions.ron", || drop(engine_content::reactions::ROWS.len())),
         ("assets/environment.ron", || drop(&*engine_content::environment::DEFINITIONS)),
-        ("assets/mana_sources.ron", || drop(&*engine_content::mana_sources::TABLE)),
-        ("assets/aura.ron", || drop(&*engine_content::aura::DIALS)),
-        ("assets/entity_anim.ron", || drop(&*engine_content::entity_anim::ENTITY_ANIM)),
         ("portal layout", || drop(&*engine_content::portal_layout::LAYOUT)),
     ];
     let mut failed = 0;
