@@ -7,9 +7,26 @@
 // which batches every agent waiting at that moment into ONE cargo run, and prints only the errors. If no
 // supervisor answers, it runs cargo itself with the same filter. Agents cannot edit tools/**, so the
 // command they are allowed to run is fixed.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import { pathToFileURL } from "node:url";
+
+// cargo's rustc children inherit stdout, so a plain kill left the pipe open and 'close' never fired: one
+// hung check held every waiting agent. Kill the whole tree, and settle on 'exit' if the pipes stay open.
+export function treeKill(child) {
+  if (!child?.pid || child.exitCode !== null) return;
+  if (process.platform === "win32") spawnSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
+  try { child.kill(); } catch { /* gone */ }
+}
+export function settleOnce(child, finish, timeoutMs) {
+  let settled = false;
+  const timer = setTimeout(() => treeKill(child), timeoutMs);
+  const once = code => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(grace); finish(code); };
+  let grace;
+  child.once("exit", code => { grace = setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); once(code); }, 10_000); grace.unref?.(); });
+  child.on("close", once);
+  child.on("error", () => once(-1));
+}
 
 export const APP = "minecraft_style_voxel_prototype";
 export const validPackage = p => (/^[\w-]{1,64}$/.test(p ?? "") ? p : APP);
@@ -19,12 +36,10 @@ export function runCheck(pkg, { root = process.cwd(), env = process.env, timeout
   return new Promise(resolve => {
     let out = "";
     const child = spawn("cargo", ["check", "-p", pkg, "--message-format", "short"], { cwd: root, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
     const take = c => { out = (out + c).slice(-400_000); };
     child.stdout.setEncoding("utf8").on("data", take);
     child.stderr.setEncoding("utf8").on("data", take);
     const done = code => {
-      clearTimeout(timer);
       const lines = out.split(/\r?\n/);
       const errors = [...new Set(lines.filter(l => /: error(\[E\d+\])?: /.test(l) || (/^error(\[E\d+\])?: /.test(l) && !/could not compile|aborting due to/.test(l))).map(l => l.trim()))];
       const warnings = lines.filter(l => /: warning: /.test(l)).length;
@@ -34,8 +49,8 @@ export function runCheck(pkg, { root = process.cwd(), env = process.env, timeout
         : `FAILED (no compiler error lines). cargo said:\n${lines.filter(Boolean).slice(-15).join("\n")}`;
       resolve({ ok, errors, warnings, text, at: Date.now() });
     };
-    child.on("error", e => { clearTimeout(timer); resolve({ ok: false, errors: [], warnings: 0, text: "FAILED: could not start cargo: " + e.message, at: Date.now() }); });
-    child.on("close", done);
+    // A timed-out run reports "no compiler error lines", which health treats as not red.
+    settleOnce(child, done, timeoutMs);
   });
 }
 
@@ -46,18 +61,15 @@ export function runTables({ root = process.cwd(), env = process.env, timeoutMs =
   return new Promise(resolve => {
     let out = "";
     const child = spawn("cargo", ["run", "-q", "-p", "engine_content", "--example", "check_tables"], { cwd: root, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
     child.stdout.setEncoding("utf8").on("data", c => { out = (out + c).slice(-100_000); });
     child.stderr.setEncoding("utf8").on("data", c => { out = (out + c).slice(-100_000); });
     const finish = code => {
-      clearTimeout(timer);
       const failures = out.split(/\r?\n/).filter(l => l.startsWith("FAILED ")).map(l => l.slice(7, 600));
       const ran = /^ok |^FAILED /m.test(out);
       // The example failing to build is a compile problem the app check reports, not a table failure.
       resolve({ ok: code === 0 || !ran, failures, ran });
     };
-    child.on("error", () => { clearTimeout(timer); resolve({ ok: true, failures: [], ran: false }); });
-    child.on("close", finish);
+    settleOnce(child, finish, timeoutMs);
   });
 }
 

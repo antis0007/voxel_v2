@@ -38,7 +38,8 @@ import { FAMILIES, brief, filterRows, isEngineRow, loadLedger, nextRows, writeSt
 import { root, buildCommand, runScenarios } from "./factory-lab.mjs";
 import { blameContent, pendingProof, scenarioFile, settleProof, shouldProve, tolerantScenarios, validateScenario } from "./swarm-proof.mjs";
 import { createBrain } from "./swarm-brain.mjs";
-import { APP, runCheck, runTables, validPackage } from "./swarm-check.mjs";
+import { APP, runCheck, runTables, settleOnce, treeKill, validPackage } from "./swarm-check.mjs";
+import { planView } from "./swarm-plan.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback) => { const i = argv.indexOf("--" + name); return i < 0 ? fallback : argv[i + 1]; };
@@ -49,7 +50,7 @@ const cfg = { workers: Math.min(16, Math.max(1, Number(opt("workers", 5)))), por
   maxRows: Number(opt("max-rows", 0)), timeoutMs: Number(opt("timeout-min", 25)) * 60_000,
   sonnet: opt("sonnet", "sonnet"), opus: opt("opus", "opus"), haiku: opt("haiku", "haiku"), family: family ?? "all",
   scout: !flag("no-scout"), readyOnly: flag("ready-only"), budget: Number(opt("budget-usd", 0)),
-  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire"), maxCont: Number(opt("max-cont", 4)) };
+  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire"), maxCont: Number(opt("max-cont", 4)), familyFallback: !flag("no-family-fallback") };
 // Cost ladder (history: failed runs cost as much as successes, and turns drive cost because every
 // turn re-reads context). A haiku scout triages first; the builder starts cheap with a tight turn
 // cap; ONE escalation to opus, only for failures a stronger model can fix.
@@ -405,11 +406,19 @@ const active = new Map(); // id -> { files }
 function eligible(ledger) {
   const open = r => !["verified", "blocked", "parked", "design"].includes(r.status) && !parked.has(r.id) && !active.has(r.id) && (!finished.has(r.id) || retry.has(r.id));
   const blocks = new Map();
-  for (const r of ledger.rows) if (finished.get(r.id)?.status === "blocked") for (const o of r.readiness.missing) blocks.set(o, (blocks.get(o) ?? 0) + 1);
+  // Only design blocks kill an owner: "explored N turns" blocks came from tool bugs, and counting them
+  // parked whole owners whose rows had never really been tried.
+  for (const r of ledger.rows) { const f = finished.get(r.id); if (f?.status === "blocked" && isDesignBlock(f)) for (const o of r.readiness.missing) blocks.set(o, (blocks.get(o) ?? 0) + 1); }
   const dead = new Set([...blocks].filter(([, n]) => n >= 2).map(([o]) => o));
   state.deadOwners = [...dead].sort().map(o => `${o}×${blocks.get(o)}`);
-  const rows = filterRows(ledger.rows, { family: familyOf(), ready: cfg.readyOnly || undefined })
-    .filter(r => open(r) && !r.readiness.missing.some(o => dead.has(o)));
+  const usable = r => open(r) && !r.readiness.missing.some(o => dead.has(o));
+  let rows = filterRows(ledger.rows, { family: familyOf(), ready: cfg.readyOnly || undefined }).filter(usable);
+  // Family "all" means the parity ledger and leaves ENG-* rows out; a single family can run dry too. When the
+  // chosen family has nothing left, take the rest of the ledger (engine rows included) instead of idling.
+  if (!rows.length && cfg.familyFallback) {
+    rows = ledger.rows.filter(r => usable(r) && (!cfg.readyOnly || r.readiness.ready));
+    if (rows.length && state.fallbackFamily !== true) { state.fallbackFamily = true; event(`family ${cfg.family} has no open rows; taking ${rows.length} from the rest of the ledger (engine rows included)`); }
+  } else if (rows.length) state.fallbackFamily = false;
   const pushed = priority.map(id => ledger.rows.find(r => r.id === id)).filter(r => r && open(r));
   return { rows, pushed };
 }
@@ -567,7 +576,8 @@ function sharedCheck(pkg) {
         state.health = { ok: health.ok, at: health.at, errors: health.errors };
       }
       return r;
-    }).finally(() => { s.running = null; });
+    }).catch(e => ({ ok: false, errors: [], warnings: 0, text: "FAILED (check did not run): " + String(e?.message ?? e).slice(0, 200), at: Date.now() }))
+      .finally(() => { s.running = null; });
     return s.running;
   };
   if (s.next) return s.next;
@@ -595,7 +605,22 @@ async function waitForGreen(worker) {
   }
 }
 
+// A throw anywhere in one row (a bad ledger row, a JSON parse, a file race) used to end that worker's loop
+// for good while its rail still said "working". Restart the loop, release the row and retry it later.
 async function work(worker) {
+  for (let crashes = 0; !state.stop && !worker.retire; crashes++) {
+    try { await workLoop(worker); return; }
+    catch (e) {
+      const id = worker.row;
+      event(`worker ${worker.id} recovered from: ${String(e?.message ?? e).slice(0, 140)}${id ? ` (row ${id} requeued)` : ""}`);
+      if (worker.child) treeKill(worker.child);
+      if (id) { active.delete(id); if (crashes < 3) retry.set(id, retry.get(id) ?? 0); else parked.add(id); }
+      Object.assign(worker, { status: "idle", row: null, child: null, phase: "" });
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+}
+async function workLoop(worker) {
   while (!state.stop && !worker.retire) {
     const disk = brain.diskGuard();
     if (disk.low) { worker.status = "paused"; worker.phase = `low disk ${disk.gb.toFixed(1)} GB`; await new Promise(r => setTimeout(r, 15000)); continue; }
@@ -854,10 +879,10 @@ function buildEngine(timeoutMs = 40 * 60_000) {
     const child = spawn(cmd, args, { cwd: root, windowsHide: true, env: proofEnv(), stdio: ["ignore", "ignore", "pipe"] });
     // Stop all and supervisor exit end the build too; on Windows an orphaned cargo kept running.
     proofChild = child; child.once("close", () => { if (proofChild === child) proofChild = null; });
-    let err = ""; const timer = setTimeout(() => child.kill(), timeoutMs);
+    let err = "";
     child.stderr.setEncoding("utf8").on("data", c => { err = (err + c).slice(-4000); });
-    child.on("error", e => { clearTimeout(timer); resolve({ ok: false, note: e.message }); });
-    child.on("close", code => { clearTimeout(timer); resolve({ ok: code === 0, note: err.split(/\r?\n/).filter(l => /error/.test(l)).slice(0, 2).join(" ") }); });
+    // Tree-kill on timeout and settle on exit: a plain kill left rustc holding the pipe and proof hung.
+    settleOnce(child, code => resolve({ ok: code === 0, note: err.split(/\r?\n/).filter(l => /error/.test(l)).slice(0, 2).join(" ") || (code === null ? "build timed out" : "") }), timeoutMs);
   });
 }
 function sendBack(id, entry, summary, note, files = []) {
@@ -1040,6 +1065,12 @@ const server = createServer((req, res) => {
     listeners.add(res);
     req.on("close", () => listeners.delete(res));
     return;
+  } else if (url === "/plan") {
+    // Buildout plan: rows being built, the next rows and why they rank there, due supervisor actions, milestone tally.
+    let body;
+    try { body = planView({ ledger: loadLedger(), state, queue: peekCached(), family: cfg.family }); }
+    catch (error) { body = { error: String(error.message ?? error).slice(0, 200) }; }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body));
   } else if (url === "/check") {
     // Agents' shared compile check (swarm-check.mjs). Localhost + Host check above; the package is validated.
     const pkg = validPackage(new URL(req.url, "http://x").searchParams.get("pkg"));

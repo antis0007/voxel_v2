@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, rmSync, statSync, statfsSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { settleOnce } from "./swarm-check.mjs";
 
 // Provider/infra noise is not a codebase lesson; it would crowd out real rules.
 const NOISE = /limit|resets? \d|rate.?limit|credit|quota|overloaded|ECONN|ETIMEDOUT|stalled|no result|CLI not found|connection problem|disk/i;
@@ -81,10 +82,9 @@ export function createBrain({ dir, root, childEnv, event, claude = process.env.A
       const child = spawn(claude, ["-p", "--model", model, "--effort", "low", "--tools", "", "--system-prompt", system, "--setting-sources", "local",
         "--disable-slash-commands", "--no-session-persistence", "--strict-mcp-config", "--max-turns", "1", "--max-budget-usd", "0.05"],
       { cwd: root, windowsHide: true, stdio: ["pipe", "pipe", "ignore"], env: { ...childEnv(), FORCE_PROMPT_CACHING_5M: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", DISABLE_TELEMETRY: "1" } });
-      let out = ""; const timer = setTimeout(() => child.kill(), timeoutMs);
+      let out = "";
       child.stdout.setEncoding("utf8").on("data", c => { out += c; });
-      child.on("error", () => { clearTimeout(timer); resolve(""); });
-      child.on("close", () => { clearTimeout(timer); resolve(out.trim()); });
+      settleOnce(child, () => resolve(out.trim()), timeoutMs);
       child.stdin.on("error", () => {});
       child.stdin.end(prompt);
     });
