@@ -57,10 +57,14 @@ pub(super) struct QualityProxies {
 }
 
 /// What the membership sync's visible-set rebuild reads that can change
-/// without a rebuild of its own: quality membership and admission, the mesh
-/// set (installs, replacements and removals bump the revision), and the dirty,
-/// pending and water-dirty state that gates admission.
-type QualitySyncInputs = (u64, u64, usize, usize, usize);
+/// without a rebuild of its own: quality membership and admission, each
+/// quality member's mesh presence/LOD and the dirty, pending and water-dirty
+/// state that gates its admission, and which horizon pins hold a mesh (the
+/// rebuild re-adds those to the visible set). Ordinary installs flag
+/// publication themselves, so the global mesh revision is not an input:
+/// keying on it rebuilt every visible chunk on each upload (~2.5 ms/frame
+/// while streaming at 9k visible chunks).
+type QualitySyncInputs = (u64, u64, usize);
 
 impl QualityProxies {
     pub(super) fn columns(&self) -> impl Iterator<Item=(i32,i32)> + '_ {self.columns.keys().copied()}
@@ -157,8 +161,13 @@ impl ChunkCache {
         columns.sort_unstable_by_key(|c|c.0);
         let mut hasher=std::collections::hash_map::DefaultHasher::new();
         columns.hash(&mut hasher);
-        (hasher.finish(), self.gpu_mesh_revision, self.dirty_meshes.len(), self.pending_gpu.len(),
-            self.edit_proxies.water_dirty.len())
+        let mut members=std::collections::hash_map::DefaultHasher::new();
+        for q in columns.iter().flat_map(|c|c.2.iter()) {
+            (self.gpu_meshes.get(q).map(|m|m.lod), self.dirty_meshes.contains(q),
+                self.pending_gpu.contains(q), self.edit_proxies.water_dirty.contains(q)).hash(&mut members);
+        }
+        let pinned_meshes=self.horizon_pin_coords.iter().filter(|q|self.gpu_meshes.contains_key(*q)).count();
+        (hasher.finish(), members.finish(), pinned_meshes)
     }
     /// Call after current dirty/halo invalidation, using the same immutable
     /// snapshot as source-only meshing. Recommendations contain no authority.
