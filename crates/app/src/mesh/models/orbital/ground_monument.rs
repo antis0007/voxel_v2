@@ -1,5 +1,6 @@
 //! The anchor is the landmark. All secondary roofs remain below ten metres.
 use super::{Model,Quat,Vec3,architecture::{part,strut},palette::*};
+use super::super::posed;
 use crate::world::World;
 use engine_worldgen::meridian_terminal::{PASSENGER_GUIDE_SIDE_M, PASSENGER_SHAFT_HALF_M};
 pub(super) const DETAIL_RANGE_M: f32 = 2600.0;
@@ -25,6 +26,28 @@ pub(super) fn build(mesh:&mut Model,world:&World,viewer:Vec3) {
     let cfg=world.sample_config();
     let p=Vec3::new(1100.0,engine_worldgen::meridian_terminal::floor(&cfg),-900.0);
     if (p-viewer).length_squared() > DETAIL_RANGE_M.powi(2) {return;}
+    // The monument is rigid: nothing in it depends on the viewer beyond the
+    // near-detail cutoff, and only the dock crate on delivered stock. Building
+    // its ~2k parts every frame cost ~1.4 ms, so each variant is built once
+    // around the origin and posed at the terminal.
+    let near=(p-viewer).length_squared()<=700.0_f32.powi(2);
+    let stock=near && world.orbital.dynamics.delivered_iron>0;
+    let key=posed::key(&[0x6d6f_6e75,u32::from(near),u32::from(stock)]);
+    let range=posed::intern(key,|| {
+        let mut local=Model::new(1.0);
+        build_local(&mut local,near,stock);
+        local.vertices
+    });
+    posed::place(mesh,range,Quat::IDENTITY,p);
+    // The direct build left the scene on the strut finish; later orbital
+    // parts were authored against that.
+    mesh.set_surface_kind(41.0);
+}
+
+/// The monument in metres around its floor centre. `near` adds the anchor
+/// chamber, cargo dock and control wing; `stock` the delivered crate.
+fn build_local(mesh:&mut Model,near:bool,stock:bool) {
+    let p=Vec3::ZERO;
     let shaft_corner = PASSENGER_SHAFT_HALF_M.hypot(PASSENGER_GUIDE_SIDE_M);
     for sector in 0..6 {
         let a=sector as f32*std::f32::consts::FRAC_PI_3;
@@ -62,7 +85,7 @@ pub(super) fn build(mesh:&mut Model,world:&World,viewer:Vec3) {
         super::pressure::rim(mesh,18.0-y*0.043+2.5,1.35,48,STEEL);
         for v in &mut mesh.vertices[mark..] {v.pos=(Vec3::from_array(v.pos)+Vec3::Y*y/mesh.scale+p/mesh.scale).to_array();}
     }
-    if (p-viewer).length_squared()>700.0_f32.powi(2) {return;}
+    if !near {return;}
     // Broad annular anchor chamber. Open front portal reveals the guide well.
     for side in [-1.0,1.0] {
         super::detail::vessel(mesh,p+Vec3::new(side*7.0,7.0,0.0),32.0,2.3,
@@ -88,7 +111,7 @@ pub(super) fn build(mesh:&mut Model,world:&World,viewer:Vec3) {
     }
     // Delivered stock alone creates filled crates. An empty dock never suggests
     // a continuous, unaccounted cargo flow.
-    if world.orbital.dynamics.delivered_iron>0 {
+    if stock {
         part(mesh,p+Vec3::new(35.0,1.0,19.0),Vec3::new(2.2,2.0,2.4),Quat::IDENTITY,CARGO,0.0);
     }
     // The control wing's canopy frames its actual receiver console, off-axis.
