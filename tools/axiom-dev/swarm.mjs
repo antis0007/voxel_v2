@@ -38,6 +38,7 @@ import { FAMILIES, brief, filterRows, isEngineRow, loadLedger, nextRows, writeSt
 import { root, buildCommand, runScenarios } from "./factory-lab.mjs";
 import { blameContent, pendingProof, scenarioFile, settleProof, shouldProve, tolerantScenarios, validateScenario } from "./swarm-proof.mjs";
 import { createBrain } from "./swarm-brain.mjs";
+import { APP, runCheck, validPackage } from "./swarm-check.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback) => { const i = argv.indexOf("--" + name); return i < 0 ? fallback : argv[i + 1]; };
@@ -57,6 +58,10 @@ const tiers = [
   { name: "sonnet·low", model: cfg.sonnet, effort: "low", maxTurns: 24, budget: 0.5 },
   { name: "opus·medium", model: cfg.opus, effort: "medium", maxTurns: 40, budget: 1.2 },
 ];
+// Wire passes add one call site to code that already compiles: haiku first (about a third of sonnet's price);
+// the wire stats below fall back to sonnet if haiku stops landing them. --wire-model sonnet skips haiku.
+const wireTier = { name: "haiku·wire", model: cfg.haiku, effort: "low", maxTurns: 16, budget: 0.2 };
+cfg.wireModel = opt("wire-model", "haiku") === "sonnet" ? "sonnet" : "haiku";
 const scoutTier = { name: "haiku·scout", model: cfg.haiku, effort: "low", maxTurns: 10, budget: 0.15, tools: "Read,Grep,Glob", scout: true };
 // A stronger model cannot invent a missing spec, owner decision or protocol: those stop at once.
 const designBlock = /\b(spec|design decision|owner decision|needs? (a |an )?(decision|design|approval)|protocol|lore|proper noun)\b/i;
@@ -163,6 +168,7 @@ const brain = createBrain({ dir, root, childEnv: () => childEnv(), event });
 // admits --config (rustc wrapper injection). Deny rules win over allow rules, so flags that write files or run
 // programs are denied outright even where a wildcard allow would otherwise match.
 const SAFE_TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Bash(cargo check)", "Bash(cargo check -p *)", "Bash(cargo check --message-format short)",
+  "Bash(node tools/axiom-dev/swarm-check.mjs)", "Bash(node tools/axiom-dev/swarm-check.mjs *)",
   "Bash(git status)", "Bash(git status --short)", "Bash(git diff)", "Bash(git diff --stat)", "Bash(git diff -- *)"];
 // The supervisor imports and spawns tools/axiom-dev/*.mjs (parity-data, context-cli) and git runs
 // .git hooks, so agents may not write any of them. Deny both Edit and Write.
@@ -179,14 +185,14 @@ const childEnv = () => ({ ...Object.fromEntries(Object.entries(process.env).filt
 
 // History: ~700 tool calls across 600 logs were permission denials (rg/grep/cd/pipes through Bash, echo >> changes.md).
 // Each one costs a full-context turn and counts toward the no-edit cap, so the exact allowed forms are stated up front.
-const TOOL_RULES = "TOOLS: search with the Grep and Glob tools, read with Read, edit with Edit/Write; paths are relative to the repo root (already the cwd). Bash accepts ONLY these exact forms: `cargo check -p <package> --message-format short`, `git status --short`, `git diff -- <path>`. No cd, no pipes, no 2>&1, no &&/;, no rg/grep/sed/cat/echo/mkdir/python through Bash: everything else is denied and wastes a turn. Short format already prints one line per error; read it as is. Every tool result is re-sent on each later turn, so Read with offset/limit around a Grep -n hit (at most 150 lines), never a whole large file, and never re-read a range you already have.";
+const TOOL_RULES = "TOOLS: search with the Grep and Glob tools, read with Read, edit with Edit/Write; paths are relative to the repo root (already the cwd). Bash accepts ONLY these exact forms: `node tools/axiom-dev/swarm-check.mjs [package]` (the compile check: it shares one cargo run with the other agents and prints only errors, or OK; default package is the app), `git status --short`, `git diff -- <path>`. No cd, no pipes, no 2>&1, no &&/;, no cargo/rg/grep/sed/cat/echo/mkdir/python through Bash: everything else is denied or wasted. The check can take several minutes; run it once and wait for it. Every tool result is re-sent on each later turn, so Read with offset/limit around a Grep -n hit (at most 150 lines), never a whole large file, and never re-read a range you already have.";
 const SYSTEM = "You are a fast Rust/wgpu voxel-game coding agent in a shared tree. Be terse; no preamble. " + TOOL_RULES + " Rules: no unwrap/expect outside tests; no content tables in Rust (use assets/*.ron); simulation uses fixed steps and seeded hashes, no wall-clock; no new dependencies; player text follows crates/app/src/egui_ui/UI_RULES.md and adds no new proper nouns; host/WGSL structs are one contract.";
 const STATIC_TASK = `${"Implement ONE parity row end to end, fast. Never stop on a missing owner."} Steps:
 1. Use the work order below; do not re-run describe.
 2. Pick the smallest playable slice (<300 changed lines). Data first: rows in assets/*.ron or modes/fields on existing kinds. New resources, machine kinds, save fields, generator gates and shader fields are APPROVED: build them (see OWNER POLICY).
 3. Gate behaviour under world.rules.systems.enabled("<system>") where it ticks.
 4. Edit with Edit/Write only. Others edit this tree concurrently: never run git checkout/stash/reset/restore/clean, never revert or reformat, keep unrelated hunks. Do not touch wand_xmb.rs, adventure/growth.rs, the parity ledger or any test.
-5. Verify once at the end with exactly: cargo check -p minecraft_style_voxel_prototype --message-format short (it waits if another agent holds the lock; fix errors you caused). No tests, no cargo fmt.
+5. Verify once at the end with exactly: node tools/axiom-dev/swarm-check.mjs (fix errors you caused; re-run once after fixing). No tests, no cargo fmt.
 6. If the behaviour already exists and works, edit nothing: report already-implemented with the owner files you verified.
 7. If source context is absent after ~20 lookups, create the owner yourself per OWNER POLICY; do not stop.
 8. Machine or factory rows only: make it provable. Add a "scenario" key to RESULT (keep RESULT on ONE line), e.g. "scenario":{"steps":[{"op":"machine_test","position":[0,40,0],"kind":"Crusher","set":{"energy":5000,"input":{"Tin ingots":64}},"ticks":600,"expect":{"end.out.Tin dust":64}}]}. The supervisor stores it, runs it headless in the real engine after the next build and returns any mismatch to you. Expect only values your change produces; at most 12 steps; omit the key for rows with no machine behaviour. Do not write files under tools/.
@@ -201,7 +207,7 @@ const ENGINE_TASK = `Implement ONE engine-overhaul row as its smallest safe slic
 3. Slice under 300 changed lines. Default behaviour, saves, generated terrain and rendered output stay identical: put a new code path behind a preference, world rule or existing debug switch that defaults to the old path, unless the row is a pure bug fix (panic, unbounded allocation, missing validation), which lands directly.
 4. Robustness rows: replace unwrap/expect/indexing on the named path with a typed error or a bounded fallback; never change the wire or save layout unless the row says so.
 5. Edit with Edit/Write only. Others edit this tree concurrently: never run git checkout/stash/reset/restore/clean, never revert or reformat, keep unrelated hunks. Do not touch wand_xmb.rs, adventure/growth.rs, the parity ledger or any test.
-6. Verify once at the end with exactly: cargo check -p <the crate you edited> --message-format short (package names are in each crates/*/Cargo.toml; the app is minecraft_style_voxel_prototype). No tests, no cargo fmt, no benchmarks.
+6. Verify once at the end with exactly: node tools/axiom-dev/swarm-check.mjs <the package you edited> (package names are in each crates/*/Cargo.toml; the app is minecraft_style_voxel_prototype). No tests, no cargo fmt, no benchmarks.
 7. Summary must say what the owner has to measure (the row's acceptance check) and that it was NOT measured here.
 Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","tests":"<owner checks, or empty>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
 
@@ -248,7 +254,9 @@ function parseResult(text) {
 // p50 / 122 s p90 (2 of 172 over 5 min), so the short TTL never expires mid-run. Measured on one call:
 // 16k tokens written at 1h vs 0.7k at 5m (the rest read from the shared prefix). Account MCP connectors
 // stay out of agents (strict MCP config) so they never enter the cached tool list.
-const LEAN_ENV = { FORCE_PROMPT_CACHING_5M: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", DISABLE_TELEMETRY: "1" };
+// The Bash tool's 2-minute default was shorter than a check behind the build lock ("cargo check pending on
+// lock" summaries, agents that lingered after their result); 15 minutes covers a shared check.
+const LEAN_ENV = { BASH_DEFAULT_TIMEOUT_MS: "900000", BASH_MAX_TIMEOUT_MS: "1200000", FORCE_PROMPT_CACHING_5M: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", DISABLE_TELEMETRY: "1" };
 const DENIAL = /requires approval|permission to use|was blocked|denied/i;
 // USD per million tokens [input, output]; cache reads bill at 0.1x input, cache writes at 1.25x. Estimates only.
 const PRICE = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5] };
@@ -267,7 +275,7 @@ function runAgent(worker, row, tier, note, order, ctx = "") {
     const log = path.join(dir, "logs", `${row.id}-${worker.id}-${Date.now()}.log`);
     worker.log = path.relative(root, log);
     const child = spawn(process.env.AXIOM_CLAUDE_PATH || "claude", args, { cwd: root, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...childEnv(), ...LEAN_ENV, ENABLE_TOOL_SEARCH: "false" } });
+      env: { ...childEnv(), ...LEAN_ENV, ENABLE_TOOL_SEARCH: "false", AXIOM_SWARM_PORT: String(cfg.port) } });
     // claude.exe's own children (ripgrep for Grep, cargo under Bash) inherit stdout, so a plain kill left the
     // pipe open and 'close' never fired: Stop all, the explore cap, the watchdog and the timeout all waited
     // for the agent's tools to finish. Kill the whole tree, and force the pipes shut 5 s after exit.
@@ -473,26 +481,31 @@ const useHealthGate = !flag("no-health");
 const health = { ok: true, at: 0, errors: [], checking: null };
 function checkHealth() {
   if (health.checking) return health.checking;
-  health.checking = new Promise(resolve => {
-    let out = "";
-    const child = spawn("cargo", ["check", "-p", "minecraft_style_voxel_prototype", "--message-format", "short"],
-      { cwd: root, windowsHide: true, env: childEnv(), stdio: ["ignore", "pipe", "pipe"] });
-    const kill = setTimeout(() => child.kill(), 15 * 60_000);
-    const take = c => { out = (out + c).slice(-60_000); };
-    child.stdout.setEncoding("utf8").on("data", take);
-    child.stderr.setEncoding("utf8").on("data", take);
-    const done = ok => {
-      clearTimeout(kill);
-      health.errors = ok ? [] : out.split("\n").filter(l => /: error|^error/.test(l)).slice(0, 6).map(l => l.slice(0, 200));
-      health.ok = ok || !health.errors.length; // a spawn/lock failure with no compiler error is not "red"
-      health.at = Date.now(); health.checking = null;
-      state.health = { ok: health.ok, at: health.at, errors: health.errors };
-      resolve();
-    };
-    child.on("error", () => done(true));
-    child.on("close", code => done(code === 0));
-  });
+  health.checking = sharedCheck(APP).then(() => { health.checking = null; });
   return health.checking;
+}
+// Shared compile check. Every caller (agents through swarm-check.mjs, the health gate) gets the result of a
+// cargo run that STARTED after it asked, so its edits are covered; callers that arrive while a run is in
+// flight share the single follow-up run. Before, five agents queued five 3-minute checks behind the lock.
+const checks = new Map(); // pkg -> { running, next }
+function sharedCheck(pkg) {
+  let s = checks.get(pkg);
+  if (!s) checks.set(pkg, s = { running: null, next: null });
+  const start = () => {
+    s.running = runCheck(pkg, { root, env: childEnv() }).then(r => {
+      if (pkg === APP) {
+        // A spawn/lock failure with no compiler error is not "red".
+        Object.assign(health, { ok: r.ok || !r.errors.length, at: r.at, errors: r.errors.slice(0, 6).map(l => l.slice(0, 200)) });
+        state.health = { ok: health.ok, at: health.at, errors: health.errors };
+      }
+      return r;
+    }).finally(() => { s.running = null; });
+    return s.running;
+  };
+  if (s.next) return s.next;
+  if (!s.running) return start();
+  s.next = s.running.then(() => { s.next = null; return start(); });
+  return s.next;
 }
 // Never wait forever: a tree broken by a peer session (not the swarm) used to park every worker indefinitely.
 // After two red checks a checkpoint repair runs; after 20 minutes the builder starts anyway and POLICY
@@ -527,7 +540,7 @@ async function work(worker) {
     const wiring = !!next.wire, prior = wiring ? finished.get(row.id) : null;
     const isRetry = retry.has(row.id) || wiring; // a wire pass skips the scout: it already has its files
     const tierIndex = wiring ? 0 : Math.min(tiers.length - 1, retry.get(row.id) ?? startTier(row));
-    const tier = tiers[tierIndex];
+    const tier = wiring && cfg.wireModel === "haiku" ? wireTier : tiers[tierIndex];
     let note = wiring ? next.note : isRetry ? retry.get(row.id + ":note") : "";
     retry.delete(row.id);
     active.set(row.id, { files });
@@ -615,7 +628,10 @@ async function work(worker) {
       // Wire passes must pay for themselves: below 1 in 3 actually wired after 6 tries, stop starting them
       // (re-enable in Settings). Idle workers cost nothing; unproductive passes cost ~$0.09 each.
       wireStats.n++; if (good && entry.wired !== false && !UNWIRED.test(entry.summary ?? "")) wireStats.wired++;
-      if (cfg.wire && wireStats.n >= 6 && wireStats.wired / wireStats.n < 1 / 3) { cfg.wire = false; event(`wire pass off: ${wireStats.wired}/${wireStats.n} wired; turn it on in Settings`); }
+      if (cfg.wire && wireStats.n >= 6 && wireStats.wired / wireStats.n < 1 / 3) {
+        if (cfg.wireModel === "haiku") { cfg.wireModel = "sonnet"; event(`wire pass: haiku wired ${wireStats.wired}/${wireStats.n}; switching wire passes to sonnet`); wireStats.n = wireStats.wired = 0; }
+        else { cfg.wire = false; event(`wire pass off: ${wireStats.wired}/${wireStats.n} wired; turn it on in Settings`); }
+      }
       if (!good) {
         record({ ...entry, status: "blocked", summary: "wire pass: " + entry.summary, final: false });
         finished.set(row.id, { ...prior, wirePass: true });
@@ -896,6 +912,12 @@ const server = createServer((req, res) => {
     listeners.add(res);
     req.on("close", () => listeners.delete(res));
     return;
+  } else if (url === "/check") {
+    // Agents' shared compile check (swarm-check.mjs). Localhost + Host check above; the package is validated.
+    const pkg = validPackage(new URL(req.url, "http://x").searchParams.get("pkg"));
+    sharedCheck(pkg).then(r => { res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }); res.end(r.text); },
+      e => { res.writeHead(500); res.end(String(e?.message ?? e)); });
+    return;
   } else if (url === "/engine") {
     if (!engineCache.body || Date.now() - engineCache.at > 3000) {
       let body;
@@ -973,7 +995,7 @@ function peek() {
     const fresh = [...pushed, ...nextRows(rows, 12).filter(r => !priority.includes(r.id))].slice(0, 12)
       .map(r => ({ id: r.id, label: r.label, tier: cfg.scout && !retry.has(r.id) ? scoutTier.name : tiers[Math.min(tiers.length - 1, retry.get(r.id) ?? 0)].name, pinned: priority.includes(r.id) }));
     // When new rows run short the workers take wire passes; show them so the queue is not reported empty.
-    const wires = fresh.length < 12 ? wireCandidates(ledger).slice(0, 12 - fresh.length).map(w => ({ id: w.row.id, label: "wire: " + w.row.label, tier: tiers[0].name + "·wire", pinned: false })) : [];
+    const wires = fresh.length < 12 ? wireCandidates(ledger).slice(0, 12 - fresh.length).map(w => ({ id: w.row.id, label: "wire: " + w.row.label, tier: cfg.wireModel === "haiku" ? wireTier.name : tiers[0].name + "·wire", pinned: false })) : [];
     return [...fresh, ...wires];
   } catch { return []; }
 }
