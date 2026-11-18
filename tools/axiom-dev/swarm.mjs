@@ -30,7 +30,7 @@
 // - Agents never touch the ledger or git. The supervisor records `building` with the files touched.
 // - A usage limit pauses the swarm and retries every 10 minutes. UI: http://127.0.0.1:<port>
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -38,7 +38,7 @@ import { FAMILIES, brief, filterRows, isEngineRow, loadLedger, nextRows, writeSt
 import { root, buildCommand, runScenarios } from "./factory-lab.mjs";
 import { blameContent, pendingProof, scenarioFile, settleProof, shouldProve, tolerantScenarios, validateScenario } from "./swarm-proof.mjs";
 import { createBrain } from "./swarm-brain.mjs";
-import { APP, runCheck, validPackage } from "./swarm-check.mjs";
+import { APP, runCheck, runTables, validPackage } from "./swarm-check.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback) => { const i = argv.indexOf("--" + name); return i < 0 ? fallback : argv[i + 1]; };
@@ -58,9 +58,14 @@ const tiers = [
   { name: "sonnet·low", model: cfg.sonnet, effort: "low", maxTurns: 24, budget: 0.5 },
   { name: "opus·medium", model: cfg.opus, effort: "medium", maxTurns: 40, budget: 1.2 },
 ];
-// Wire passes add one call site to code that already compiles: haiku first (about a third of sonnet's price);
-// the wire stats below fall back to sonnet if haiku stops landing them. --wire-model sonnet skips haiku.
+// Wire passes add one call site to code that already compiles: haiku (~$0.004 a pass vs ~$0.09 on sonnet).
+// --wire-model sonnet uses sonnet instead.
 const wireTier = { name: "haiku·wire", model: cfg.haiku, effort: "low", maxTurns: 16, budget: 0.2 };
+// Data-only rows (the scout names only assets/*.ron files) start on haiku; anything that does not land goes
+// to a normal sonnet run with haiku's report, so the worst case adds ~$0.005. --no-haiku-data turns it off.
+const dataTier = { name: "haiku·data", model: cfg.haiku, effort: "low", maxTurns: 16, budget: 0.2 };
+cfg.haikuData = !flag("no-haiku-data");
+const dataOnly = files => files?.length > 0 && files.every(f => /^assets\/[\w./-]+\.ron$/.test(f));
 cfg.wireModel = opt("wire-model", "haiku") === "sonnet" ? "sonnet" : "haiku";
 const scoutTier = { name: "haiku·scout", model: cfg.haiku, effort: "low", maxTurns: 10, budget: 0.15, tools: "Read,Grep,Glob", scout: true };
 // A stronger model cannot invent a missing spec, owner decision or protocol: those stop at once.
@@ -488,11 +493,31 @@ function checkHealth() {
 // cargo run that STARTED after it asked, so its edits are covered; callers that arrive while a run is in
 // flight share the single follow-up run. Before, five agents queued five 3-minute checks behind the lock.
 const checks = new Map(); // pkg -> { running, next }
+// Runtime table check, re-run only when a table or the content crate changed (mtime signature).
+let tablesMemo = { sig: "", result: { ok: true, failures: [] } };
+function contentSignature() {
+  const parts = [];
+  const walk = d => { try { for (const e of readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(ron|rs)$/.test(e.name)) parts.push(e.name + statSync(p).mtimeMs); } } catch { /* vanished */ } };
+  walk(path.join(root, "assets")); walk(path.join(root, "crates", "content", "src"));
+  return createHash("sha1").update(parts.join("|")).digest("hex");
+}
+async function tablesCheck() {
+  const sig = contentSignature();
+  if (sig === tablesMemo.sig) return tablesMemo.result;
+  const result = await runTables({ root, env: childEnv() });
+  if (result.ran) tablesMemo = { sig, result };
+  if (!result.ok) event(`content tables fail at runtime: ${result.failures.join(" ; ").slice(0, 200)}`);
+  return result;
+}
 function sharedCheck(pkg) {
   let s = checks.get(pkg);
   if (!s) checks.set(pkg, s = { running: null, next: null });
   const start = () => {
-    s.running = runCheck(pkg, { root, env: childEnv() }).then(r => {
+    s.running = runCheck(pkg, { root, env: childEnv() }).then(async r => {
+      if (pkg === APP && r.ok) {
+        const t = await tablesCheck();
+        if (!t.ok) r = { ...r, ok: false, errors: t.failures, text: `FAILED: the code compiles but a content table does not load at runtime (the game would panic at start):\n${t.failures.join("\n")}\nFix the row you added or changed; ids must exist in the tables they reference.` };
+      }
       if (pkg === APP) {
         // A spawn/lock failure with no compiler error is not "red".
         Object.assign(health, { ok: r.ok || !r.errors.length, at: r.at, errors: r.errors.slice(0, 6).map(l => l.slice(0, 200)) });
@@ -512,7 +537,10 @@ function sharedCheck(pkg) {
 // RED TREE tells it to report foreign errors instead of fixing them.
 async function waitForGreen(worker) {
   if (!useHealthGate) return;
-  if (Date.now() - health.at > 180_000 || !health.ok) await checkHealth();
+  // A stale green result refreshes in the background; awaiting it held every builder ~3 min before its
+  // first turn. Only a known-red tree blocks.
+  if (!health.ok) await checkHealth();
+  else if (Date.now() - health.at > 180_000) checkHealth();
   const since = Date.now();
   for (let red = 1; !health.ok && !state.stop; red++) {
     if (Date.now() - since > 20 * 60_000) { logTail(worker, "build still red after 20 min; starting anyway"); return; }
@@ -520,7 +548,7 @@ async function waitForGreen(worker) {
     logTail(worker, "build red: " + (health.errors[0] ?? "").slice(0, 100));
     if (red === 2 && !state.checkpointing) checkpoint("build red; repair");
     await new Promise(r => setTimeout(r, 45_000));
-    if (!state.checkpointing) await checkHealth();
+    await checkHealth(); // shared: joins a checkpoint's run instead of starting another
   }
 }
 
@@ -528,7 +556,9 @@ async function work(worker) {
   while (!state.stop && !worker.retire) {
     const disk = brain.diskGuard();
     if (disk.low) { worker.status = "paused"; worker.phase = `low disk ${disk.gb.toFixed(1)} GB`; await new Promise(r => setTimeout(r, 15000)); continue; }
-    if (state.paused || state.checkpointing) { worker.status = "paused"; await new Promise(r => setTimeout(r, state.checkpointing ? 2000 : 5000)); continue; }
+    // Checkpoints and proof runs no longer pause new rows: agents edit while the engine builds and their
+    // compile checks simply queue behind it. Pausing idled every worker for up to the whole engine build.
+    if (state.paused) { worker.status = "paused"; await new Promise(r => setTimeout(r, 5000)); continue; }
     if (cfg.budget && state.totals.cost >= cfg.budget) { state.paused = `budget cap $${cfg.budget} reached; raise it in Settings`; continue; }
     if (cfg.maxRows && state.totals.done + state.totals.blocked + active.size >= cfg.maxRows && !retry.size) break;
     // Green-build gate moved to just before the builder: read-only scouts run while the tree is red.
@@ -540,7 +570,7 @@ async function work(worker) {
     const wiring = !!next.wire, prior = wiring ? finished.get(row.id) : null;
     const isRetry = retry.has(row.id) || wiring; // a wire pass skips the scout: it already has its files
     const tierIndex = wiring ? 0 : Math.min(tiers.length - 1, retry.get(row.id) ?? startTier(row));
-    const tier = wiring && cfg.wireModel === "haiku" ? wireTier : tiers[tierIndex];
+    let tier = wiring && cfg.wireModel === "haiku" ? wireTier : tiers[tierIndex];
     let note = wiring ? next.note : isRetry ? retry.get(row.id + ":note") : "";
     retry.delete(row.id);
     active.set(row.id, { files });
@@ -572,6 +602,7 @@ async function work(worker) {
         continue;
       }
       if (verdict?.verdict === "build") note = `Scout (read-only) says edit: ${(verdict.files ?? []).join(", ")}. Plan: ${String(verdict.plan ?? "").slice(0, 500)} Start from these files; skip broad exploration.`;
+      if (verdict?.verdict === "build" && cfg.haikuData && tierIndex === 0 && dataOnly(verdict.files)) tier = dataTier;
     }
     await waitForGreen(worker);
     if (state.stop) { active.delete(row.id); break; }
@@ -622,15 +653,21 @@ async function work(worker) {
       entry.final = true; finished.set(row.id, entry); state.totals.done++; record(entry); persist(); continue;
     }
     const good = (entry.status === "building" || entry.status === "playable") && entry.files.length > 0;
+    if (tier === dataTier && !good) {
+      // Haiku did not land the data row: hand its report and any partial edits to a normal sonnet run.
+      retry.set(row.id, 0); retry.set(row.id + ":note", (`haiku tried first and reported: ${entry.summary}`.slice(0, 300) + (entry.files.length ? ` It already edited ${entry.files.join(", ")}; finish or correct that.` : "") + " " + note.split(" Peers editing now")[0]).slice(0, 1200));
+      record({ ...entry, status: "escalated", final: false });
+      continue;
+    }
     if (wiring) {
       // One wire pass per row. A failed pass keeps the earlier landed slice as the row's result.
       entry.wirePass = true;
-      // Wire passes must pay for themselves: below 1 in 3 actually wired after 6 tries, stop starting them
-      // (re-enable in Settings). Idle workers cost nothing; unproductive passes cost ~$0.09 each.
-      wireStats.n++; if (good && entry.wired !== false && !UNWIRED.test(entry.summary ?? "")) wireStats.wired++;
-      if (cfg.wire && wireStats.n >= 6 && wireStats.wired / wireStats.n < 1 / 3) {
-        if (cfg.wireModel === "haiku") { cfg.wireModel = "sonnet"; event(`wire pass: haiku wired ${wireStats.wired}/${wireStats.n}; switching wire passes to sonnet`); wireStats.n = wireStats.wired = 0; }
-        else { cfg.wire = false; event(`wire pass off: ${wireStats.wired}/${wireStats.n} wired; turn it on in Settings`); }
+      // An explicit wired:true wins over summary keywords ("no unused default" matched UNWIRED). Many
+      // candidates honestly have no possible caller and fail on any model, so haiku (~$0.004 a pass) is
+      // never swapped for sonnet; only sonnet wire passes switch off when they stop paying.
+      wireStats.n++; if (good && (entry.wired === true || (entry.wired === undefined && !UNWIRED.test(entry.summary ?? "")))) wireStats.wired++;
+      if (cfg.wire && cfg.wireModel === "sonnet" && wireStats.n >= 6 && wireStats.wired / wireStats.n < 1 / 3) {
+        cfg.wire = false; event(`wire pass off: ${wireStats.wired}/${wireStats.n} wired on sonnet; turn it on in Settings`);
       }
       if (!good) {
         record({ ...entry, status: "blocked", summary: "wire pass: " + entry.summary, final: false });
@@ -707,19 +744,22 @@ async function checkpoint(why) {
   state.checkpointing = why;
   event(`checkpoint: ${why}; draining agents`);
   try {
-    // Drain only agents that are actually running: workers parked in waitForGreen hold a row in `active`
-    // but no child, and waiting on them stalled every red-tree checkpoint for the full 10 minutes.
-    for (let i = 0; state.workers.some(w => w.child) && i < 240 && !state.stop; i++) await new Promise(r => setTimeout(r, 2500));
-    let result = await brain.compile();
+    // No drain and no pause: the shared check compiles the whole tree with every agent's edits (and loads the
+    // content tables), so a quiet tree is not needed. Draining used to idle all five workers for the length of
+    // the slowest run on every checkpoint. Errors inside files a running agent is editing are its work in
+    // progress and stay with it; only orphaned errors go to the repair agent.
+    let result = await sharedCheck(APP);
     for (let round = 1; !result.ok && result.errors.length && round <= 2 && !state.stop; round++) {
-      event(`checkpoint: ${result.errors.length} compiler errors; repair agent round ${round}`);
+      const editing = state.workers.filter(w => w.child).flatMap(w => w.files ?? []);
+      const orphaned = result.errors.filter(e => !editing.some(f => e.replaceAll("\\", "/").includes(f)));
+      if (!orphaned.length) { event(`checkpoint: ${result.errors.length} error(s), all in files agents are editing now; left to them`); break; }
+      event(`checkpoint: ${orphaned.length} orphaned error(s); repair agent round ${round}`);
       const fixer = { id: "fix", activity: [], turns: 0, files: [] };
-      const order = result.errors.join("\n").slice(0, 3500);
-      const out = await runAgent(fixer, { id: "CHECKPOINT", label: "Fix compile errors" }, tiers[0], "NOT a feature row. The tree no longer compiles; fix ONLY these errors with the smallest edits, add no behaviour, never revert another agent's work. Report status building with the files you changed.", order);
+      const out = await runAgent(fixer, { id: "CHECKPOINT", label: "Fix compile errors" }, tiers[0], "NOT a feature row. The tree no longer compiles or a content table no longer loads; fix ONLY these errors with the smallest edits, add no behaviour, never revert another agent's work. Report status building with the files you changed.", orphaned.join("\n").slice(0, 3500));
       state.totals.cost += out.cost ?? 0;
-      result = await brain.compile();
+      result = await sharedCheck(APP);
     }
-    event(result.ok ? "checkpoint: tree compiles" : `checkpoint: still failing (${result.errors.length} errors${result.note ? ", " + result.note : ""}); see cargo check`);
+    event(result.ok ? "checkpoint: tree compiles and tables load" : `checkpoint: still failing (${result.errors.length} errors); see the shared check`);
     state.lastCheckpoint = { at: Date.now(), ok: result.ok, errors: result.errors.slice(0, 5) };
     // The checkpoint just compiled the same package the health gate checks; share it instead of re-checking.
     if (result.ok || result.errors.length) Object.assign(health, { ok: result.ok, at: Date.now(), errors: result.errors.slice(0, 6) }), state.health = { ok: health.ok, at: health.at, errors: health.errors };

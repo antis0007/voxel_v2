@@ -39,6 +39,28 @@ export function runCheck(pkg, { root = process.cwd(), env = process.env, timeout
   });
 }
 
+// Content tables are parsed and validated only at runtime, so cargo check passed while the game panicked at
+// start (a Fallout row without sim_as; reaction rows naming a Plasma block that does not exist). This loads
+// every validated table once through engine_content's check_tables example.
+export function runTables({ root = process.cwd(), env = process.env, timeoutMs = 15 * 60_000 } = {}) {
+  return new Promise(resolve => {
+    let out = "";
+    const child = spawn("cargo", ["run", "-q", "-p", "engine_content", "--example", "check_tables"], { cwd: root, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.stdout.setEncoding("utf8").on("data", c => { out = (out + c).slice(-100_000); });
+    child.stderr.setEncoding("utf8").on("data", c => { out = (out + c).slice(-100_000); });
+    const finish = code => {
+      clearTimeout(timer);
+      const failures = out.split(/\r?\n/).filter(l => l.startsWith("FAILED ")).map(l => l.slice(7, 600));
+      const ran = /^ok |^FAILED /m.test(out);
+      // The example failing to build is a compile problem the app check reports, not a table failure.
+      resolve({ ok: code === 0 || !ran, failures, ran });
+    };
+    child.on("error", () => { clearTimeout(timer); resolve({ ok: true, failures: [], ran: false }); });
+    child.on("close", finish);
+  });
+}
+
 function viaSupervisor(pkg, port) {
   return new Promise((resolve, reject) => {
     const req = http.get({ host: "127.0.0.1", port, path: "/check?pkg=" + encodeURIComponent(pkg), headers: { host: `127.0.0.1:${port}` } }, res => {
