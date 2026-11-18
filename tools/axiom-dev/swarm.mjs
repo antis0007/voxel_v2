@@ -808,12 +808,22 @@ async function checkpoint(why) {
 // own work against real engine behaviour instead of a compile check alone.
 const proven = new Set(), proofRetried = new Set();
 const scenarioPath = path.join(root, "tools/axiom-dev/scenarios");
-const debugExe = path.join(root, "target/debug/minecraft_style_voxel_prototype.exe");
+// Proof builds use their own target dir: in the shared target/ the debug build + link held cargo's build
+// lock for many minutes and every agent's compile check queued behind it (7 of 7 agents stalled 4-6 min).
+// sccache stays on for this build (the repo's own config), so a cold build reuses cached dependencies.
+const proofTarget = path.join(root, "target", "proof");
+const debugExe = path.join(proofTarget, "debug", "minecraft_style_voxel_prototype.exe");
+let proofChild = null;
+const killProof = () => { if (proofChild?.pid && proofChild.exitCode === null) { if (process.platform === "win32") spawnSync("taskkill", ["/T", "/F", "/PID", String(proofChild.pid)], { windowsHide: true, stdio: "ignore" }); else proofChild.kill(); } };
+process.on("exit", killProof);
+const proofEnv = () => { const env = { ...childEnv(), CARGO_TARGET_DIR: proofTarget }; for (const k of ["RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"]) delete env[k]; return env; };
 const proofPending = () => pendingProof(finished.values(), tolerantScenarios(scenarioPath).scenarios, proven);
 function buildEngine(timeoutMs = 40 * 60_000) {
   return new Promise(resolve => {
     const [cmd, ...args] = buildCommand.split(" ");
-    const child = spawn(cmd, args, { cwd: root, windowsHide: true, env: childEnv(), stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(cmd, args, { cwd: root, windowsHide: true, env: proofEnv(), stdio: ["ignore", "ignore", "pipe"] });
+    // Stop all and supervisor exit end the build too; on Windows an orphaned cargo kept running.
+    proofChild = child; child.once("close", () => { if (proofChild === child) proofChild = null; });
     let err = ""; const timer = setTimeout(() => child.kill(), timeoutMs);
     child.stderr.setEncoding("utf8").on("data", c => { err = (err + c).slice(-4000); });
     child.on("error", e => { clearTimeout(timer); resolve({ ok: false, note: e.message }); });
@@ -847,7 +857,7 @@ async function prove(manual = false, idle = false) {
   // `undefined symbol: anon.<hash>.llvm.<n>` at link is a stale incremental codegen cache for the app (several
   // builds and checks share target/). Drop the app's incremental sessions not touched in 2 minutes and retry once.
   if (!built.ok && /undefined symbol|LNK20(01|19)/.test(built.note ?? "")) {
-    const inc = path.join(root, "target", "debug", "incremental");
+    const inc = path.join(proofTarget, "debug", "incremental");
     let dropped = 0;
     try {
       for (const d of readdirSync(inc).filter(d => d.startsWith("minecraft_style_voxel_prototype-"))) {
@@ -1066,7 +1076,7 @@ const server = createServer((req, res) => {
     else if (action === "checkpoint") checkpoint("requested by supervisor");
     else if (action === "prove") { idleProved = false; checkpoint("proof requested by supervisor"); }
     else if (action === "requeue") { for (const [id, r] of [...finished]) if ((r.status === "blocked" || r.status === "failed") && !isDesignBlock(r)) requeue(id, 0, `Previously blocked: ${String(r.summary).slice(0, 200)}`); }
-    else if (action === "stop") { state.stop = true; state.userStop = true; for (const w of state.workers) w.child?.kill(); }
+    else if (action === "stop") { state.stop = true; state.userStop = true; for (const w of state.workers) w.child?.kill(); killProof(); }
     else if (action === "add" && state.workers.length < 16) {
       if (state.stop && !state.userStop) state.stop = false; // revive after an automatic stop
       const w = { id: "w" + (state.workers.length + 1), status: "idle", row: null, activity: [], turns: 0, files: [] };

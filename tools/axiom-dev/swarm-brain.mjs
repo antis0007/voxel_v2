@@ -39,7 +39,10 @@ export function createBrain({ dir, root, childEnv, event, claude = process.env.A
     let bytes = 0;
     const target = path.join(root, "target");
     let profiles = [];
-    try { profiles = readdirSync(target, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => path.join(target, e.name, "incremental")); } catch { /* no target */ }
+    // target/<profile>/incremental plus the swarm's proof target (target/proof/<profile>/incremental).
+    for (const base of [target, path.join(target, "proof")]) {
+      try { profiles.push(...readdirSync(base, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => path.join(base, e.name, "incremental"))); } catch { /* none */ }
+    }
     for (const inc of profiles) {
       let crates = [];
       try { crates = readdirSync(inc).map(c => path.join(inc, c)); } catch { continue; }
