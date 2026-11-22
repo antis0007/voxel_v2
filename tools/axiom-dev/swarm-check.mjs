@@ -18,10 +18,15 @@ export function treeKill(child) {
   if (process.platform === "win32") spawnSync("taskkill", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
   try { child.kill(); } catch { /* gone */ }
 }
+// Cargo children still running. Stop all kills them: workers awaiting a health check otherwise held the
+// swarm open for the whole check (minutes behind a peer build's lock, up to the 25 min timeout).
+const liveChildren = new Set();
+export function killChecks() { for (const child of liveChildren) treeKill(child); }
 export function settleOnce(child, finish, timeoutMs) {
   let settled = false;
+  liveChildren.add(child);
   const timer = setTimeout(() => treeKill(child), timeoutMs);
-  const once = code => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(grace); finish(code); };
+  const once = code => { if (settled) return; settled = true; liveChildren.delete(child); clearTimeout(timer); clearTimeout(grace); finish(code); };
   let grace;
   child.once("exit", code => { grace = setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); once(code); }, 10_000); grace.unref?.(); });
   child.on("close", once);

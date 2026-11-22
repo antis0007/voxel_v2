@@ -15,13 +15,26 @@ const NOISE = /limit|resets? \d|rate.?limit|credit|quota|overloaded|ECONN|ETIMED
 // or repeat the tool rules already in every prompt; 12 of 12 live lessons were this shape. Row-specific
 // keyword hints ("grep for altar") help no other row either.
 const UNHELPFUL = /\bescalat|report (partial|blocked|the blocker)|\bblocked\b|cap (blind )?exploration|within (five|5|a few) (turns|searches)|before (reading|broad|exploring)|\b(grep|rg|search)\b[^.]{0,60}\bfirst\b|\bearly\b/i;
+// "X reads null at step 0 / until later / only after completion" misread every unfinished batch on 2026-11-19: the
+// reply omits zero fields, so null means the machine made nothing in the ticks given (status says why). The proof
+// note now carries the machine's status, progress and ticks run; these lessons only taught authors to dodge it.
+const MISREAD = /\bnull\b[^;]{0,90}\b(at step|until|only (after|once)|not 0|before expecting|hasn't yielded|after (completion|later|evaporation))|\b(status|out)\b[^;]{0,30}\bis null after step/i;
 const words = text => new Set(String(text).toLowerCase().match(/[a-z_]{4,}/g) ?? []);
 const similar = (a, b) => { const x = words(a), y = words(b); let hit = 0; for (const w of x) if (y.has(w)) hit++; return hit / Math.max(1, Math.min(x.size, y.size)); };
 
 export function createBrain({ dir, root, childEnv, event, claude = process.env.AXIOM_CLAUDE_PATH || "claude", minFreeGb = 2.5 }) {
   const lessonsFile = path.join(dir, "lessons.json");
   let lessons = [];
-  try { if (existsSync(lessonsFile)) lessons = JSON.parse(readFileSync(lessonsFile, "utf8")).filter(l => !NOISE.test(l.text) && !UNHELPFUL.test(l.text)); } catch { lessons = []; }
+  // Two kinds. "code" lessons are facts about the codebase for builders. "proof" lessons are facts about what the
+  // headless engine's ops accept and reply, learned from scenarios that ran and did not match; they reach every
+  // prompt that writes a scenario after ONE sighting, because each is an observed reply, not an opinion.
+  // Lessons saved before kinds existed are sorted by their wording.
+  const PROOFISH = /\bproofs?\b|\bdata\.\w|snapshot json|engine (yields|rejects|gave)/i;
+  try {
+    if (existsSync(lessonsFile)) lessons = JSON.parse(readFileSync(lessonsFile, "utf8"))
+      .map(l => ({ ...l, kind: l.kind ?? (PROOFISH.test(l.text) ? "proof" : "code") }))
+      .filter(l => (l.kind === "proof" || !NOISE.test(l.text)) && !UNHELPFUL.test(l.text) && !MISREAD.test(l.text));
+  } catch { lessons = []; }
   const save = () => { try { writeFileSync(lessonsFile, JSON.stringify(lessons)); } catch { /* best effort */ } };
 
   function freeGb() {
@@ -76,6 +89,18 @@ export function createBrain({ dir, root, childEnv, event, claude = process.env.A
     else if (low && gb >= minFreeGb + 1) { low = false; event?.(`disk recovered: ${gb.toFixed(1)} GB free`); }
     return { low, gb };
   }
+  // Reclaim when free space is under `need` (the proof build needs 8 GB, above the guard's own threshold).
+  // Same 20-minute session cutoff as the guard; at most once a minute.
+  let ensuredAt = 0;
+  function ensureFree(need) {
+    let gb = freeGb();
+    if (gb < need && Date.now() - ensuredAt > 60_000) {
+      ensuredAt = Date.now();
+      const freed = reclaim();
+      if (freed > 0.05) { event?.(`disk: reclaimed ${freed.toFixed(1)} GB of stale cargo incremental caches and old logs`); gb = freeGb(); }
+    }
+    return gb;
+  }
 
   function oneShot(model, system, prompt, timeoutMs = 60_000) {
     return new Promise(resolve => {
@@ -91,20 +116,24 @@ export function createBrain({ dir, root, childEnv, event, claude = process.env.A
   }
 
   // Learn only from results that cost something: blocked, failed or escalated.
-  async function learn(entry) {
-    if (!/blocked|failed|escalated/.test(entry.status) || NOISE.test(String(entry.summary)) || /explored \d+ turns without an edit|^scout:/.test(String(entry.summary))) return;
-    const text = await oneShot("haiku",
-      "Distil ONE reusable rule (max 22 words, imperative) from an agent's failure report that would help agents working on OTHER rows of this Rust voxel codebase: a concrete fact such as where a tick, table or save field lives, or a compile trap. Agents already search with Grep and must build missing owners rather than stop, so never advise searching first, stopping, escalating or reporting blocked. Reply NONE if no such fact exists.",
+  async function learn(entry, kind = "code") {
+    if (!/blocked|failed|escalated/.test(entry.status) || (kind !== "proof" && NOISE.test(String(entry.summary))) || /explored \d+ turns without an edit|^scout:/.test(String(entry.summary))) return;
+    const text = await oneShot("haiku", kind === "proof"
+      ? "A test scenario ran in a headless voxel-game engine and its expectation did not match the reply. Distil ONE fact (max 22 words) that stops the NEXT scenario author making the same mistake: the real name or shape of a reply field, an argument the engine refuses, a value that is null or 0 until something else happens. State the fact about the engine op; never tell anyone to change engine code. Reply NONE if the report shows wrong game behaviour instead of a wrong expectation."
+      : "Distil ONE reusable rule (max 22 words, imperative) from an agent's failure report that would help agents working on OTHER rows of this Rust voxel codebase: a concrete fact such as where a tick, table or save field lives, or a compile trap. Agents already search with Grep and must build missing owners rather than stop, so never advise searching first, stopping, escalating or reporting blocked. Reply NONE if no such fact exists.",
       `Row ${entry.id}: ${entry.label}\nStatus: ${entry.status}\nReport: ${String(entry.summary).slice(0, 500)}`);
     const line = text.split("\n")[0].replace(/^[-*\d.\s]+/, "").trim();
-    if (!line || /^none\b/i.test(line) || line.length > 220 || UNHELPFUL.test(line)) return;
-    const dup = lessons.find(l => similar(l.text, line) > 0.7);
-    if (dup) { dup.n++; dup.at = Date.now(); } else lessons.push({ text: line, n: 1, at: Date.now() });
+    if (!line || /^none\b/i.test(line) || line.length > 220 || UNHELPFUL.test(line) || MISREAD.test(line)) return;
+    const dup = lessons.find(l => l.kind === kind && similar(l.text, line) > 0.7);
+    if (dup) { dup.n++; dup.at = Date.now(); } else lessons.push({ text: line, n: 1, at: Date.now(), kind });
     lessons.sort((a, b) => b.n - a.n || b.at - a.at);
-    lessons = lessons.slice(0, 12);
+    // Twelve of each kind: a burst of proof mismatches no longer pushes out the code lessons, or the reverse.
+    lessons = [...lessons.filter(l => l.kind === "proof").slice(0, 12), ...lessons.filter(l => l.kind !== "proof").slice(0, 12)].sort((a, b) => b.n - a.n || b.at - a.at);
     save(); event?.("lesson: " + line);
   }
-  const note = () => lessons.length ? "Lessons from earlier rows: " + lessons.slice(0, 6).map(l => l.text).join(" | ") : "";
+  // Only lessons seen on 2+ rows reach prompts; one-off row hints cost tokens on every other row.
+  const proofNote = () => { const seen = lessons.filter(l => l.kind === "proof").slice(0, 6); return seen.length ? "Engine replies seen in earlier proof runs (write expects to match them): " + seen.map(l => l.text).join(" | ") : ""; };
+  const note = () => { const shared = lessons.filter(l => l.kind !== "proof" && l.n >= 2).slice(0, 6); return shared.length ? "Lessons from earlier rows: " + shared.map(l => l.text).join(" | ") : ""; };
 
   // One cargo check; returns { ok, errors: ["path:line: message", ...] }.
   function compile(timeoutMs = 20 * 60_000) {
@@ -122,5 +151,5 @@ export function createBrain({ dir, root, childEnv, event, claude = process.env.A
     });
   }
 
-  return { diskGuard, freeGb, learn, note, compile, lessons: () => lessons };
+  return { diskGuard, ensureFree, freeGb, learn, note, proofNote, compile, lessons: () => lessons };
 }

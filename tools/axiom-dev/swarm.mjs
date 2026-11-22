@@ -2,7 +2,7 @@
 // end to end (investigate, edit, cargo check) in the shared tree, plus a live supervisor UI.
 //
 //   node tools/axiom-dev/swarm.mjs [--workers 3] [--family f] [--port 4377] [--max-rows 0]
-//        [--sonnet sonnet] [--opus opus] [--haiku haiku] [--no-scout] [--explore-turns 15] [--reopen] [--ready-only]
+//        [--sonnet sonnet] [--opus opus] [--haiku haiku] [--fable fable] [--fable-rows id,id|none] [--no-scout] [--explore-turns 15] [--reopen] [--ready-only]
 //        [--timeout-min 25] [--dry] [--start-paused] [--budget-usd 0] [--checkpoint-every 8] [--no-context]
 // - Context: each row gets context-cli evidence from its likely files (no model) in the scout and
 //   builder prompts. UI: live Settings (agents, cap, family, toggles), per-row Log/Diff/Retry/Park,
@@ -28,7 +28,13 @@
 //   denied calls do not count toward the no-edit cap. Killed runs report an estimated cost from stream usage.
 //   The supervisor, not the agent, appends changes.md from RESULT (incl. its "tests" field).
 // - Agents never touch the ledger or git. The supervisor records `building` with the files touched.
-// - A usage limit pauses the swarm and retries every 10 minutes. UI: http://127.0.0.1:<port>
+// - A usage limit pauses the swarm until the provider's stated reset (scout, builder and design runs alike).
+// - Design stage (swarm-design.mjs): rows that wait on a decision nobody wrote (needs-design verdicts, owner
+//   systems the plan lists as design-only, epics) go to a read-only design lead that designs from the tree, the
+//   docs and its own knowledge, inside the project rules. Designs are saved under <state>/designs and handed to
+//   the builder. --design-model m (default: the opus model), --decide-max N designs an hour (default 24),
+//   --no-design-epics leaves epics to the owner, --no-decide turns the stage off.
+// UI: http://127.0.0.1:<port>
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -36,10 +42,14 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { FAMILIES, brief, filterRows, isEngineRow, loadLedger, nextRows, writeStatus } from "./parity-data.mjs";
 import { root, buildCommand, runScenarios } from "./factory-lab.mjs";
-import { blameContent, pendingProof, scenarioFile, settleProof, shouldProve, tolerantScenarios, validateScenario } from "./swarm-proof.mjs";
+import { blameContent, engineOps, normalizeScenario, pendingProof, scenarioFile, settleProof, shouldProve, tolerantScenarios, validateScenario } from "./swarm-proof.mjs";
+// Read once at start; a restart picks up ops the engine gained since.
+const ENGINE_OPS = engineOps(root);
 import { createBrain } from "./swarm-brain.mjs";
-import { APP, runCheck, runTables, settleOnce, treeKill, validPackage } from "./swarm-check.mjs";
+import { APP, killChecks, runCheck, runTables, settleOnce, treeKill, validPackage } from "./swarm-check.mjs";
 import { planView } from "./swarm-plan.mjs";
+import { PERF_IDS, ensureOwnerRows, ensurePerfRows, feedChores, feedPerf, perfNextAt } from "./swarm-feeder.mjs";
+import { DESIGN_VERSION, createDesignStore, designNote, designPrompt, designTargets, noteOf, ownerKey, parseDesign } from "./swarm-design.mjs";
 
 const argv = process.argv.slice(2);
 const opt = (name, fallback) => { const i = argv.indexOf("--" + name); return i < 0 ? fallback : argv[i + 1]; };
@@ -50,15 +60,42 @@ const cfg = { workers: Math.min(16, Math.max(1, Number(opt("workers", 5)))), por
   maxRows: Number(opt("max-rows", 0)), timeoutMs: Number(opt("timeout-min", 25)) * 60_000,
   sonnet: opt("sonnet", "sonnet"), opus: opt("opus", "opus"), haiku: opt("haiku", "haiku"), family: family ?? "all",
   scout: !flag("no-scout"), readyOnly: flag("ready-only"), budget: Number(opt("budget-usd", 0)),
-  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire"), maxCont: Number(opt("max-cont", 4)), familyFallback: !flag("no-family-fallback") };
+  checkpointEvery: Number(opt("checkpoint-every", 8)), context: !flag("no-context"), prove: !flag("no-prove"), proveBatch: Number(opt("prove-batch", 3)), breaker: Number(opt("breaker", 6)), exploreTurns: Number(opt("explore-turns", 15)), wire: !flag("no-wire"), maxCont: Number(opt("max-cont", 4)), maxContDry: Number(opt("max-cont-dry", 8)), familyFallback: !flag("no-family-fallback"),
+  chores: !flag("no-chores"), perfFeed: !flag("no-perf-feed"), decide: !flag("no-decide"), decideMax: Number(opt("decide-max", 24)), designEpics: !flag("no-design-epics"), designParallel: 3, proofPerHour: Number(opt("proof-per-hour", 12)), proofDebt: Number(opt("proof-debt", 40)),
+  budgetWindowH: Math.max(0, Number(opt("budget-window-h", 0)) || 0) };
+// Live settings outlive a restart: a value changed in Settings is reloaded unless its flag is on the command line.
+// Each key names the flag that overrides it.
+const SETTING_FLAGS = { workers: "workers", family: "family", budget: "budget-usd", scout: "no-scout", readyOnly: "ready-only", context: "no-context",
+  prove: "no-prove", wire: "no-wire", decide: "no-decide", designEpics: "no-design-epics", decideMax: "decide-max", exploreTurns: "explore-turns",
+  checkpointEvery: "checkpoint-every", proveBatch: "prove-batch", breaker: "breaker", proofPerHour: "proof-per-hour", budgetWindowH: "budget-window-h" };
 // Cost ladder (history: failed runs cost as much as successes, and turns drive cost because every
 // turn re-reads context). A haiku scout triages first; the builder starts cheap with a tight turn
 // cap; ONE escalation to opus, only for failures a stronger model can fix.
 const tiers = [
   // Caps bound the tail only: sonnet runs average 8.8 turns, landed opus runs 21-28.
   { name: "sonnet·low", model: cfg.sonnet, effort: "low", maxTurns: 24, budget: 0.5 },
-  { name: "opus·medium", model: cfg.opus, effort: "medium", maxTurns: 40, budget: 1.2 },
+  // Opus escalation landed 0 of 3 (2026-11-18); opt in with --escalate.
+  ...(flag("escalate") ? [{ name: "opus·medium", model: cfg.opus, effort: "medium", maxTurns: 40, budget: 1.2 }] : []),
 ];
+// Fable rows: determinism-, layout- or save-sensitive rows where a wrong guess costs more than the model.
+// Listed rows skip the sonnet start and the opus escalation and build on Fable directly; every other row
+// stays on the cheap ladder. --fable-rows id,id replaces the list; --fable-rows none turns it off.
+// Owner 2026-11-18: Fable only for determinism/thread-safety rows; capped low so a row costs <= $1.2.
+const FABLE_DEFAULT = "ENG-SIM-16,ENG-SIM-11,ENG-JOB-10";
+cfg.fable = opt("fable", "fable");
+cfg.fableRows = new Set(String(opt("fable-rows", FABLE_DEFAULT)).split(",").map(s => s.trim()).filter(s => s && s !== "none"));
+const fableTier = { name: "fable·low", model: cfg.fable, effort: "low", maxTurns: 25, budget: 1.2 };
+// Owner-system rows (ENG-OWN-*, swarm-feeder ensureOwnerRows) build a whole subsystem from a design: owner
+// 2026-11-19 asked for the most capable model there, so they run on Fable at medium effort with room to finish.
+// --no-owner-fable sends owner rows down the cheap sonnet ladder instead (2026-11-20: owner rows were ~95% of spend).
+cfg.ownerFable = !flag("no-owner-fable");
+const isOwnerRow = id => cfg.ownerFable && /^ENG-OWN-/.test(id);
+// exploreTurns: a subsystem build reads its design and several owner files before the first edit; the 15-call
+// cap (tool calls, and Fable issues them in parallel) stopped all 9 owner rows on 2026-11-19 within 35 s.
+const ownerTier = { name: "fable·owner", model: cfg.fable, effort: "medium", maxTurns: 60, budget: 4, exploreTurns: 45 };
+const isFableRow = id => cfg.fableRows.has(id) || isOwnerRow(id);
+const fableLimited = () => (state?.fableUntil ?? 0) > Date.now();
+cfg.fableRepair = !flag("no-fable-repair");
 // Wire passes add one call site to code that already compiles: haiku (~$0.004 a pass vs ~$0.09 on sonnet).
 // --wire-model sonnet uses sonnet instead.
 const wireTier = { name: "haiku·wire", model: cfg.haiku, effort: "low", maxTurns: 16, budget: 0.2 };
@@ -67,8 +104,13 @@ const wireTier = { name: "haiku·wire", model: cfg.haiku, effort: "low", maxTurn
 const dataTier = { name: "haiku·data", model: cfg.haiku, effort: "low", maxTurns: 16, budget: 0.2 };
 cfg.haikuData = !flag("no-haiku-data");
 const dataOnly = files => files?.length > 0 && files.every(f => /^assets\/[\w./-]+\.ron$/.test(f));
-cfg.wireModel = opt("wire-model", "haiku") === "sonnet" ? "sonnet" : "haiku";
+// Haiku wire passes wired 0 of 4 (2026-11-18): sonnet is the default; --wire-model haiku opts back in.
+cfg.wireModel = opt("wire-model", "sonnet") === "haiku" ? "haiku" : "sonnet";
 const scoutTier = { name: "haiku·scout", model: cfg.haiku, effort: "low", maxTurns: 10, budget: 0.15, tools: "Read,Grep,Glob", scout: true };
+// Design lead: read-only, the strongest judgment in the ladder, because one design steers every build that
+// follows it. The 48 earlier decisions cost $0.044 each on this model; a design reads a little more.
+cfg.designModel = opt("design-model", cfg.opus);
+const designTier = { name: (String(cfg.designModel).match(/[a-z]+/)?.[0] ?? "opus") + "·design", model: cfg.designModel, effort: "medium", maxTurns: 14, budget: 0.8, tools: "Read,Grep,Glob", scout: true };
 // A stronger model cannot invent a missing spec, owner decision or protocol: those stop at once.
 const designBlock = /\b(spec|design decision|owner decision|needs? (a |an )?(decision|design|approval)|protocol|lore|proper noun)\b/i;
 // Scout needs-design verdicts quote "[design]" owners, which designBlock misses; Requeue used to pay a builder for each.
@@ -79,9 +121,58 @@ const dir = opt("state-dir") ? path.resolve(opt("state-dir")) : path.join(root, 
 mkdirSync(path.join(dir, "logs"), { recursive: true });
 const resultsFile = path.join(dir, "results.jsonl");
 const stateFile = path.join(dir, "state.json");
+const settingsFile = path.join(dir, "settings.json");
+const spendFile = path.join(dir, "spend.json");
+const readJson = (file, fallback) => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return fallback; } };
+{
+  const saved = readJson(settingsFile, {});
+  for (const [key, flagName] of Object.entries(SETTING_FLAGS)) {
+    if (!(key in saved) || argv.includes("--" + flagName)) continue;
+    const v = saved[key];
+    if (key === "family" ? (v === "all" || v in FAMILIES) : typeof v === typeof cfg[key]) cfg[key] = v;
+  }
+  cfg.workers = Math.min(16, Math.max(1, Number(cfg.workers) || 1));
+}
+const saveSettings = () => { try { writeFileSync(settingsFile, JSON.stringify(Object.fromEntries(Object.keys(SETTING_FLAGS).map(k => [k, cfg[k]])))); } catch { /* best effort */ } };
+// The spend cap is cumulative across restarts: totals.cost is this process only, spend.total is every run since
+// the last reset (Settings "reset spend"). A restart used to zero the counter and silently double the cap.
+const spend = { total: 0, since: Date.now(), ...readJson(spendFile, {}) };
+const saveSpend = () => { try { writeFileSync(spendFile + ".tmp", JSON.stringify(spend)); renameSync(spendFile + ".tmp", spendFile); } catch { /* best effort */ } };
+// Optional rolling window (--budget-window-h N or Settings budgetWindowH): the cap then applies per N hours, so an
+// unattended swarm pauses at the cap and resumes by itself when the window rolls. 0 keeps it cumulative until
+// "reset spend". The window starts at spend.since, which survives restarts like the total does.
+const budgetWindowMs = () => cfg.budgetWindowH > 0 ? cfg.budgetWindowH * 3600_000 : 0;
+function rollSpend() {
+  const win = budgetWindowMs();
+  if (!win || Date.now() - spend.since < win) return;
+  event(`budget window rolled: $${spend.total.toFixed(2)} spent in the last ${cfg.budgetWindowH} h`);
+  spend.total = 0; spend.since = Date.now(); saveSpend();
+  if (state.paused?.startsWith("budget cap")) state.paused = null;
+}
+const overBudget = () => cfg.budget > 0 && spend.total >= cfg.budget;
 const finished = new Map(); // id -> last result (only terminal ones block re-pick)
 if (existsSync(resultsFile)) for (const line of readFileSync(resultsFile, "utf8").split("\n").filter(Boolean)) {
-  try { const r = JSON.parse(line); if (r.final) finished.set(r.id, r); } catch { /* skip */ }
+  try {
+    const r = JSON.parse(line);
+    if (!r.final) continue;
+    // Rows blocked only because their proof scenario asked the engine the wrong question (a reply field that
+    // does not exist, a request the engine refused) compiled and landed; before 2026-11-19 such a mismatch was
+    // sent to a builder twice and then recorded as blocked. Keep the landed result and let the read-only proof
+    // pass write one new scenario with the engine's answer in hand (rescript() does the same for new runs).
+    const landed = finished.get(r.id);
+    const mismatch = r.tier === "engine·proof" && r.status === "blocked" && /^live proof failed twice: /.test(r.summary ?? "")
+      && /step \d+ ok: want true, engine gave "|engine gave null/.test(r.summary) && !/: want (?:\w+ )?-?\d/.test(r.summary);
+    if (mismatch && landed && /^(building|playable)$/.test(landed.status ?? "")) {
+      if (!landed.proofRescripted) {
+        const slug = String(r.id).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+        if (!flag("dry")) { try { rmSync(path.join(root, "tools/axiom-dev/scenarios", `swarm-${slug}.json`), { force: true }); } catch { /* gone */ } }
+        finished.set(r.id, { ...landed, scenario: undefined, proofPass: undefined, proofRetried: undefined, needsProof: true, proofRescripted: true,
+          proofWhy: "it ran in the built engine and the reply did not have what it expected: " + r.summary.replace(/^live proof failed twice: /, "").slice(0, 260) });
+      }
+      continue;
+    }
+    finished.set(r.id, r);
+  } catch { /* skip */ }
 }
 
 // --allow-save-bump: rows earlier blocked only by the save-format rule get ONE serialized retry on
@@ -111,18 +202,40 @@ if (allowBump) for (const [id, r] of [...finished]) {
   if (r.status === "blocked" || r.status === "failed") { finished.delete(id); reopened.add(id); reopenedRows.set(id, r); if (/save|bump|migration/i.test(r.summary)) bumpRows.add(id); }
 }
 const history = [...finished.values()].slice(-60).reverse();
-const state = { startedAt: Date.now(), cfg, paused: null, stop: false, workers: [], results: history, totals: { in: 0, out: 0, cost: 0, done: 0, blocked: 0, cached: 0, proven: 0 }, tierStats: {} };
+const state = { startedAt: Date.now(), cfg, paused: null, stop: false, workers: [], results: history, totals: { in: 0, out: 0, cost: 0, done: 0, blocked: 0, cached: 0, proven: 0 }, tierStats: {}, spend };
+// A pause outlives a dashboard restart: state.json is never read back, so without this a paused swarm resumed
+// spending as soon as the new code started.
+const keepPausedFile = path.join(dir, "restart-paused.json");
+try { if (existsSync(keepPausedFile)) { state.paused = String(JSON.parse(readFileSync(keepPausedFile, "utf8")).paused || "paused") + " (kept across restart)"; unlinkSync(keepPausedFile); } } catch { /* start unpaused */ }
+// Every model cost goes through here so the per-process total and the cumulative cap ledger never drift.
+// Restarts used to show "0 proven" although proven results are on disk.
+state.totals.proven = [...finished.values()].filter(r => r.status === "proven").length;
+// Where landed rows stand on proof, so "0 proven" is never mistaken for "proof is broken".
+Object.defineProperty(state, "proof", { enumerable: true, get: () => { try {
+  const n = { landed: 0, scenario: 0, waiting: 0, none: 0, proven: 0, hour: proofsThisHour(), cap: cfg.proofPerHour };
+  for (const r of finished.values()) {
+    if (r.status === "proven") { n.proven++; continue; }
+    if (!/^(building|playable)$/.test(r.status)) continue;
+    n.landed++;
+    if (r.scenario || taggedIds().has(r.id)) n.scenario++; else if (r.noProof) n.none++; else n.waiting++;
+  }
+  return n;
+  } catch { return null; } // read before the proof helpers below are initialised (early persist)
+} });
+const addCost = c => { const v = Number(c) || 0; if (!v) return v; state.totals.cost += v; spend.total += v; saveSpend(); return v; };
 const retry = new Map(); // id -> next tier
 const wireStats = { n: 0, wired: 0 };
 let sinceCheckpoint = 0; // landed rows + wire passes since the last auto checkpoint
 const forced = new Set(); // rows already given their one narrower sonnet retry after a zero-edit failure
-let failStreak = 0, idleProved = false;
+let failStreak = 0, idleProved = false, breakerTrips = 0, breakerTimer = null;
 const lastFail = new Map(); // id -> previous failure summary; an identical repeat is deterministic, so do not pay to retry it
 const sameFailure = (a, b) => { const x = new Set(String(a).toLowerCase().match(/[a-z_]{4,}/g) ?? []), y = new Set(String(b).toLowerCase().match(/[a-z_]{4,}/g) ?? []); let h = 0; for (const w of x) if (y.has(w)) h++; return h / Math.max(1, Math.min(x.size, y.size)) > 0.8; };
 const parkedFile = path.join(dir, "parked.json");
 const parked = new Set((() => { try { return JSON.parse(readFileSync(parkedFile, "utf8")); } catch { return []; } })());
 const saveParked = () => { try { writeFileSync(parkedFile, JSON.stringify([...parked])); } catch { /* best effort */ } };
 const priority = []; // row ids the supervisor pushed to the front
+ensurePerfRows({ root });
+if (!flag("no-perf-first")) priority.push(...PERF_IDS); // measured performance rows lead the queue (--no-perf-first to skip)
 const familyOf = () => (cfg.family === "all" ? undefined : cfg.family);
 // POLICY is already in every prompt; the note carries only the reason. Retries start on the cheap tier.
 const requeue = (id, tier, why) => { finished.delete(id); retry.set(id, tier); retry.set(id + ":note", why ?? ""); };
@@ -139,11 +252,47 @@ for (const id of bumpRows) {
   else { finished.set(id, reopenedRows.get(id) ?? { id, status: "blocked", final: true }); }
 }
 if (!flag("reopen")) bumpRows.clear();
+// In-flight work outlives a restart: rows waiting to retry (with their scout plan or failure note) and rows a
+// worker held when the process stopped come back first, with what that worker had done. A restart used to drop
+// both, and the rows started from scratch (scout and exploration paid again).
+const inflightFile = path.join(dir, "inflight.json");
+const saveInflight = () => {
+  try {
+    const held = state.workers.filter(w => w.row && w.status !== "idle" && !finished.has(w.row)).map(w => ({ id: w.row, tier: w.tier,
+      files: (w.files ?? []).slice(0, 8), last: (w.activity ?? []).slice(-4).map(a => String(a.text).slice(0, 160)) }));
+    const waiting = [...retry.entries()].filter(([k]) => !k.endsWith(":note")).map(([id, tier]) => ({ id, tier, note: String(retry.get(id + ":note") ?? "").slice(0, 1500) }));
+    writeFileSync(inflightFile + ".tmp", JSON.stringify({ at: Date.now(), held, waiting, resumeAt: state.resumeAt ?? null }));
+    renameSync(inflightFile + ".tmp", inflightFile);
+  } catch { /* best effort */ }
+};
+{
+  const saved = readJson(inflightFile, null);
+  let n = 0;
+  for (const w of saved?.waiting ?? []) {
+    if (finished.has(w.id) || retry.has(w.id)) continue;
+    retry.set(w.id, Number(w.tier) || 0); retry.set(w.id + ":note", w.note ?? ""); n++;
+  }
+  for (const h of saved?.held ?? []) {
+    if (finished.has(h.id) || retry.has(h.id)) continue;
+    requeue(h.id, 0, (`Resumed after a supervisor restart; the earlier run stopped mid-row.${h.files?.length ? " It had edited " + h.files.join(", ") + ": read those hunks first and finish them, do not redo them." : ""}${h.last?.length ? " Its last notes: " + h.last.join(" | ") : ""}`).slice(0, 1200));
+    if (!priority.includes(h.id)) priority.unshift(h.id);
+    n++;
+  }
+  // A provider usage limit outlives the restart too; agents launched before it lifts only fail.
+  if (saved?.fableUntil > Date.now()) state.fableUntil = saved.fableUntil;
+  if (saved?.resumeAt && saved.resumeAt > Date.now()) {
+    state.paused = "usage limit hit; resumes " + new Date(saved.resumeAt).toLocaleString(); state.resumeAt = saved.resumeAt;
+    setTimeout(() => { if (String(state.paused ?? "").startsWith("usage limit")) { state.paused = null; state.resumeAt = null; } }, Math.max(60_000, saved.resumeAt - Date.now())).unref?.();
+  }
+  if (n) console.log(`resumed ${n} in-flight row(s) from the last run`);
+  // Workers change rows without a persist; a hard kill must still find the row it held.
+  if (!flag("dry")) setInterval(saveInflight, 15_000).unref();
+}
 // rev: results, events, settings; act: worker activity. The broadcaster pushes both to open pages.
 let rev = 0, act = 0;
 const logTail = (w, text) => { act++; w.activity.push({ t: Date.now(), text }); if (w.activity.length > 60) w.activity.shift(); };
 // Atomic: a crash mid-write must not leave a truncated state file for the next start.
-const persist = () => { rev++; try { writeFileSync(stateFile + ".tmp", JSON.stringify(state)); renameSync(stateFile + ".tmp", stateFile); } catch { /* ui still has memory */ } };
+const persist = () => { rev++; try { writeFileSync(stateFile + ".tmp", JSON.stringify(state)); renameSync(stateFile + ".tmp", stateFile); } catch { /* ui still has memory */ } try { saveInflight(); } catch { /* defined below; early persist */ } };
 // One swarm per tree: two supervisors would hand the same rows to two sets of agents.
 const lockFile = path.join(dir, "swarm.lock");
 if (!flag("dry")) {
@@ -166,6 +315,26 @@ process.on("uncaughtException", e => { event("fatal: " + String(e?.message ?? e)
 for (const h of history) tierRoi(h); // the Cost panel starts from saved results, not from zero
 for (const h of history) { if (/blocked|failed|escalated/.test(h.status ?? "") && !lastFail.has(h.id)) lastFail.set(h.id, h.summary ?? ""); }
 const brain = createBrain({ dir, root, childEnv: () => childEnv(), event });
+// Designs and owner decisions made so far (decisions.jsonl + designs/). See the design stage below.
+const designs = createDesignStore(dir);
+// Owner systems with a design get a build row (ENG-OWN-*), built on Fable (see ownerTier). --no-owner-rows: off.
+if (!flag("no-owner-rows")) {
+  try {
+    const owners = [...loadLedger().systems.values()]
+      .filter(s => s.substrate === "design-only" && designs.get(ownerKey(s.id))?.verdict === "decide")
+      .map(s => ({ id: s.id, name: s.name, milestone: s.milestone, prerequisites: s.prerequisites ?? [],
+        design: path.relative(root, designs.pathOf(ownerKey(s.id))).replaceAll("\\", "/") }));
+    const added = ensureOwnerRows({ root, owners });
+    if (added) event(`feeder: ${added} owner-system build row(s) added (ENG-OWN-*, Fable)`);
+  } catch (e) { event("owner rows not added: " + String(e?.message ?? e).slice(0, 120)); }
+}
+// A design is only worth its cost once a builder has used it. A restart used to forget that a decided row was
+// waiting for its build (the retry list lives in memory), so the row stayed blocked for good. Queue those again.
+for (const d of designs.all()) {
+  if (d.verdict !== "decide" || d.kind === "owner" || parked.has(d.id)) continue;
+  const f = finished.get(d.id);
+  if (f ? f.status === "blocked" && (f.at ?? 0) < d.at : d.kind === "epic") requeue(d.id, 0, noteOf(d));
+}
 
 // Bash is limited to cargo check and read-only git. Search uses the built-in Grep tool, not rg
 // (rg --pre runs arbitrary programs). Build scripts and cargo config are protected because
@@ -193,6 +362,9 @@ const childEnv = () => ({ ...Object.fromEntries(Object.entries(process.env).filt
 // Each one costs a full-context turn and counts toward the no-edit cap, so the exact allowed forms are stated up front.
 const TOOL_RULES = "TOOLS: search with the Grep and Glob tools, read with Read, edit with Edit/Write; paths are relative to the repo root (already the cwd). Bash accepts ONLY these exact forms: `node tools/axiom-dev/swarm-check.mjs [package]` (the compile check: it shares one cargo run with the other agents and prints only errors, or OK; default package is the app), `git status --short`, `git diff -- <path>`. No cd, no pipes, no 2>&1, no &&/;, no cargo/rg/grep/sed/cat/echo/mkdir/python through Bash: everything else is denied or wasted. The check can take several minutes; run it once and wait for it. Every tool result is re-sent on each later turn, so Read with offset/limit around a Grep -n hit (at most 150 lines), never a whole large file, and never re-read a range you already have.";
 const SYSTEM = "You are a fast Rust/wgpu voxel-game coding agent in a shared tree. Be terse; no preamble. " + TOOL_RULES + " Rules: no unwrap/expect outside tests; no content tables in Rust (use assets/*.ron); simulation uses fixed steps and seeded hashes, no wall-clock; no new dependencies; player text follows crates/app/src/egui_ui/UI_RULES.md and adds no new proper nouns; host/WGSL structs are one contract.";
+// One proof rule for both build prompts (ENGINE_TASK rows never saw the old machine-only rule, so 0 engine rows
+// carried a scenario). Ops come from the workbench's own list; validateScenario rejects anything else at landing.
+const SCENARIO_RULE = `Make it provable: add "scenario":{"steps":[...]} to RESULT (keep RESULT on ONE line). The supervisor stores it, runs it headless in the real engine after the next build (a "reset" runs first) and returns any mismatch to you. Each step is an engine op request plus an optional "expect" {"dotted.path.in.reply.data": value | {"eq|ne|lt|le|gt|ge|has|absent": value}}; "sum:a.b+c.d" adds paths. Ops: ${ENGINE_OPS ? [...ENGINE_OPS].join(", ") : "see tools/axiom-dev/ENGINE_WORKBENCH.md"}. Machines: {"op":"machine_test","position":[0,40,0],"kind":"Crusher","set":{"energy":5000,"input":{"Tin ingots":64}},"ticks":600,"expect":{"end.out.Tin dust":64}}. UNITS: a step's "ticks" are 120 Hz engine steps, but recipe tables (factory-lab-cli recipes Kind, processes.ron) give ticks in 0.25 s factory ticks: set ticks >= recipe ticks x 30 per batch, plus margin (an unfinished batch shows status "Processing" and no "out" key). Other systems: "systems"/"command" to switch the row's world system on, then "inspect" (sections world, civilization, objectives, ...), "residents", "probe", or "replay" {"ticks":N,"sections":[...]} to check that factory/machine stepping is deterministic (expect {"same":true,"restored":true}; it steps and rewinds only factory state, so it cannot prove farming, civ or day-schedule claims). Read tools/axiom-dev/ENGINE_WORKBENCH.md for reply fields before writing expects. HEADLESS RUN (most failed proofs broke these): no window renders, so "perf", frame and "capture" ops reply "No frames measured" and "model" replies "not loaded"; no chunks stream (world.resident_chunks is 0); "inspect" takes at most nine sections; "player" reports feet_m (not position/position_m); expect paths index the reply itself ("same", "end.chemical"), never a "data." prefix; "has" works on strings and arrays only. Expect only values your change produces; at most 12 steps. Omit the key ONLY for pure refactors with no observable effect, and then say "no observable effect" in the summary. Do not write files under tools/.`;
 const STATIC_TASK = `${"Implement ONE parity row end to end, fast. Never stop on a missing owner."} Steps:
 1. Use the work order below; do not re-run describe.
 2. Pick the smallest playable slice (<300 changed lines). Data first: rows in assets/*.ron or modes/fields on existing kinds. New resources, machine kinds, save fields, generator gates and shader fields are APPROVED: build them (see OWNER POLICY).
@@ -201,7 +373,7 @@ const STATIC_TASK = `${"Implement ONE parity row end to end, fast. Never stop on
 5. Verify once at the end with exactly: node tools/axiom-dev/swarm-check.mjs (fix errors you caused; re-run once after fixing). No tests, no cargo fmt.
 6. If the behaviour already exists and works, edit nothing: report already-implemented with the owner files you verified.
 7. If source context is absent after ~20 lookups, create the owner yourself per OWNER POLICY; do not stop.
-8. Machine or factory rows only: make it provable. Add a "scenario" key to RESULT (keep RESULT on ONE line), e.g. "scenario":{"steps":[{"op":"machine_test","position":[0,40,0],"kind":"Crusher","set":{"energy":5000,"input":{"Tin ingots":64}},"ticks":600,"expect":{"end.out.Tin dust":64}}]}. The supervisor stores it, runs it headless in the real engine after the next build and returns any mismatch to you. Expect only values your change produces; at most 12 steps; omit the key for rows with no machine behaviour. Do not write files under tools/.
+8. ${SCENARIO_RULE}
 Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","tests":"<owner checks, or empty>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
 
 // Engine-overhaul rows (ENG-*, --family engine|engperf|engsim|engnet|enggame|engarch) change shared
@@ -215,6 +387,7 @@ const ENGINE_TASK = `Implement ONE engine-overhaul row as its smallest safe slic
 5. Edit with Edit/Write only. Others edit this tree concurrently: never run git checkout/stash/reset/restore/clean, never revert or reformat, keep unrelated hunks. Do not touch wand_xmb.rs, adventure/growth.rs, the parity ledger or any test.
 6. Verify once at the end with exactly: node tools/axiom-dev/swarm-check.mjs <the package you edited> (package names are in each crates/*/Cargo.toml; the app is minecraft_style_voxel_prototype). No tests, no cargo fmt, no benchmarks.
 7. Summary must say what the owner has to measure (the row's acceptance check) and that it was NOT measured here.
+8. ${SCENARIO_RULE} For engine rows, turn the row's acceptance check into the scenario where an op can observe it.
 Last line exactly: RESULT {"status":"building|playable|already-implemented|blocked","files":["path"],"summary":"<=200 chars","wired":true,"entry":"<file:fn or data row that reaches the change>","tests":"<owner checks, or empty>","why":"<only when not landed: no_owner|too_wide|compile|design|other>"}`;
 
 function prompt(row, tier, note, order, ctx = "") {
@@ -222,7 +395,7 @@ function prompt(row, tier, note, order, ctx = "") {
 
 ${POLICY}
 
-${brain.note()}
+${[brain.note(), brain.proofNote()].filter(Boolean).join("\n")}
 Row: ${row.id} ${row.label}
 ${note ? "Notes (scout plan, retries, peers): " + note + " " : ""}
 Work order: ${order}${ctx ? "\nPre-retrieved source evidence (re-read before editing):\n" + ctx : ""}`;
@@ -253,7 +426,8 @@ function parseScout(text) {
 function parseResult(text) {
   const hit = [...String(text ?? "").matchAll(/RESULT\s*(\{[\s\S]*?\})\s*$/gm)].pop();
   if (!hit) return null;
-  try { return JSON.parse(hit[1]); } catch { return null; }
+  // One scenario shape from here on: a bare array of steps used to be rejected and paid for again as a proof pass.
+  try { const r = JSON.parse(hit[1]); if (r && r.scenario !== undefined) r.scenario = normalizeScenario(r.scenario); return r; } catch { return null; }
 }
 
 // Spend: every cache write used the 1-hour TTL (2x input price); 5-minute writes cost 1.25x. Runs take 34 s
@@ -265,7 +439,8 @@ function parseResult(text) {
 const LEAN_ENV = { BASH_DEFAULT_TIMEOUT_MS: "900000", BASH_MAX_TIMEOUT_MS: "1200000", FORCE_PROMPT_CACHING_5M: "1", ENABLE_CLAUDEAI_MCP_SERVERS: "false", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", DISABLE_TELEMETRY: "1" };
 const DENIAL = /requires approval|permission to use|was blocked|denied/i;
 // USD per million tokens [input, output]; cache reads bill at 0.1x input, cache writes at 1.25x. Estimates only.
-const PRICE = { opus: [5, 25], sonnet: [3, 15], haiku: [1, 5] };
+// fable: placeholder at opus rates (unverified); finished runs use the CLI's reported cost, not this.
+const PRICE = { fable: [5, 25], opus: [5, 25], sonnet: [3, 15], haiku: [1, 5] };
 function estimateCost(model, u) {
   const [i, o] = PRICE[Object.keys(PRICE).find(k => String(model).includes(k)) ?? "sonnet"];
   return ((u.input_tokens ?? 0) * i + (u.cache_read_input_tokens ?? 0) * i * 0.1 + (u.cache_creation_input_tokens ?? 0) * i * 1.25 + (u.output_tokens ?? 0) * o) / 1e6;
@@ -327,7 +502,7 @@ function runAgent(worker, row, tier, note, order, ctx = "") {
           // starting its own cargo run that competes with the agents for the build lock.
           for (const b of results) if (cargoCalls.has(b.tool_use_id)) {
             const c = typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "");
-            if (/Finished/.test(c) && !/\berror(\[E\d+\])?:/.test(c)) Object.assign(health, { ok: true, at: Date.now(), errors: [] });
+            if (/Finished/.test(c) && !/\berror(\[E\d+\])?:/.test(c)) setHealth(true, [], Date.now(), treeSignature());
           }
           for (const b of results) if (b.is_error && DENIAL.test(typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? ""))) { denied++; worker.denied = (worker.denied ?? 0) + 1; }
         }
@@ -339,7 +514,7 @@ function runAgent(worker, row, tier, note, order, ctx = "") {
             if (b.name === "Bash" && /^cargo check\b/.test(String(i.command ?? ""))) cargoCalls.add(b.id);
             // Exploration spiral: many turns, no edit. Every extra turn re-reads the whole context.
             // Denied calls are a prompt/sandbox mismatch, not exploration, so they do not count here.
-            if (!tier.scout && !explored && turns - denied >= cfg.exploreTurns && !touched.size && !/^(Edit|Write)$/.test(b.name)) {
+            if (!tier.scout && !explored && turns - denied >= (tier.exploreTurns ?? cfg.exploreTurns) && !touched.size && !/^(Edit|Write)$/.test(b.name)) {
               explored = true; logTail(worker, `no edit after ${worker.turns} turns: stopping`); child.kill();
             }
             if (/^(Edit|Write)$/.test(b.name) && i.file_path) { touched.add(path.relative(root, i.file_path).replaceAll("\\", "/")); logTail(worker, "✎ " + path.basename(i.file_path)); }
@@ -358,7 +533,7 @@ function runAgent(worker, row, tier, note, order, ctx = "") {
       resolve({ ok: !explored && !!final && !final.is_error, code, stalled: stalled && !final, explored, noResult: !final && !explored, text, usage: final?.usage ?? usage, cost: final?.total_cost_usd ?? estimateCost(tier.model, usage), estimated: !final, denied, files: [...touched], err, error: final?.is_error ? text : (!final && code ? err : "") });
     });
     child.stdin.on("error", () => {});
-    child.stdin.end(tier.scout ? scoutPrompt(row, order, ctx) : prompt(row, tier, note, order, ctx));
+    child.stdin.end(tier.prompt ?? (tier.scout ? scoutPrompt(row, order, ctx) : prompt(row, tier, note, order, ctx)));
   });
 }
 
@@ -391,56 +566,122 @@ function rowContext(row, files) {
   });
 }
 
+// Responsiveness. The supervisor is one thread: the page, the agents' shared compile check and every worker's
+// pick share it, so nothing on the pick path may block.
+// - One ledger read serves all of them for a second and a half; the swarm's own status writes drop it.
+// - brief() runs a synchronous ripgrep for parity rows (up to 6 s each). pick() and the queue view asked for it
+//   for every candidate on every pass, which froze the page of an idle swarm. One brief per row state, kept
+//   for ten minutes.
+let ledgerCache = { at: 0, value: null };
+const ledgerNow = () => { if (!ledgerCache.value || Date.now() - ledgerCache.at > 1500) ledgerCache = { at: Date.now(), value: loadLedger() }; return ledgerCache.value; };
+const ledgerChanged = () => { ledgerCache.at = 0; };
+const briefCache = new Map();
+function briefOf(row, ledger) {
+  const key = `${row.status}|${(row.evidence ?? []).length}|${String(row.note ?? "").length}`;
+  const hit = briefCache.get(row.id);
+  if (hit && hit.key === key && Date.now() - hit.at < 600_000) return hit.value;
+  const value = brief(row, ledger.systems);
+  briefCache.set(row.id, { key, at: Date.now(), value });
+  return value;
+}
 function prewarm() {
   try {
-    const ledger = loadLedger();
-    for (const q of peek().slice(0, 3)) {
+    const ledger = ledgerNow();
+    for (const q of peekCached().slice(0, 3)) {
       const row = ledger.rows.find(r => r.id === q.id);
-      if (row && !contextCache.has(row.id) && !active.has(row.id)) rowContext(row, brief(row, ledger.systems).files ?? []);
+      if (row && !contextCache.has(row.id) && !active.has(row.id)) rowContext(row, briefOf(row, ledger).files ?? []);
     }
   } catch { /* best effort */ }
 }
 const active = new Map(); // id -> { files }
+const deadOwners = new Set(); // owner systems parked by design blocks; refreshed by eligible()
 // Rows a worker may take. A missing owner system that already blocked two rows parks every row that
 // needs it, so no model is paid to rediscover the same gap. Pinned rows bypass the family filter.
 function eligible(ledger) {
-  const open = r => !["verified", "blocked", "parked", "design"].includes(r.status) && !parked.has(r.id) && !active.has(r.id) && (!finished.has(r.id) || retry.has(r.id));
+  // An epic (ledger status "design") opens once the design lead has written its design.
+  const open = r => !["verified", "blocked", "parked"].includes(r.status) && (r.status !== "design" || designs.decided(r.id))
+    && !parked.has(r.id) && !active.has(r.id) && (!finished.has(r.id) || retry.has(r.id));
   const blocks = new Map();
   // Only design blocks kill an owner: "explored N turns" blocks came from tool bugs, and counting them
   // parked whole owners whose rows had never really been tried.
   for (const r of ledger.rows) { const f = finished.get(r.id); if (f?.status === "blocked" && isDesignBlock(f)) for (const o of r.readiness.missing) blocks.set(o, (blocks.get(o) ?? 0) + 1); }
   const dead = new Set([...blocks].filter(([, n]) => n >= 2).map(([o]) => o));
-  state.deadOwners = [...dead].sort().map(o => `${o}×${blocks.get(o)}`);
-  const usable = r => open(r) && !r.readiness.missing.some(o => dead.has(o));
+  deadOwners.clear(); for (const o of dead) deadOwners.add(o);
+  // An owner system with a design is no longer parked: its rows run and carry that design in their note.
+  const stillDead = o => dead.has(o) && !designs.decided(ownerKey(o));
+  state.deadOwners = [...dead].filter(stillDead).sort().map(o => `${o}×${blocks.get(o)}`);
+  // A row whose own question was designed runs even when its owner system is parked.
+  const usable = r => open(r) && (designs.decided(r.id) || !r.readiness.missing.some(stillDead));
   let rows = filterRows(ledger.rows, { family: familyOf(), ready: cfg.readyOnly || undefined }).filter(usable);
   // Family "all" means the parity ledger and leaves ENG-* rows out; a single family can run dry too. When the
   // chosen family has nothing left, take the rest of the ledger (engine rows included) instead of idling.
-  if (!rows.length && cfg.familyFallback) {
+  if ((!rows.length || scopeAll) && cfg.familyFallback) {
     rows = ledger.rows.filter(r => usable(r) && (!cfg.readyOnly || r.readiness.ready));
     if (rows.length && state.fallbackFamily !== true) { state.fallbackFamily = true; event(`family ${cfg.family} has no open rows; taking ${rows.length} from the rest of the ledger (engine rows included)`); }
-  } else if (rows.length) state.fallbackFamily = false;
+  }
   const pushed = priority.map(id => ledger.rows.find(r => r.id === id)).filter(r => r && open(r));
   return { rows, pushed };
 }
-function pick() {
-  const ledger = loadLedger();
+// `dry` only answers "is there work?": it takes nothing off the pinned list and requeues nothing. The refill
+// used the real pick for that test, which dropped a pinned row's place and threw the picked row away.
+// Every stage (new rows, wire, proof, continue, retry) honours the chosen family. When none of them can start
+// anything there, the same selection runs over the whole ledger instead of idling: 2026-11-19 family "engine"
+// had every row landed while ~400 parity rows waited for proof, and five workers sat on "nothing to start".
+let scopeAll = false;
+const inFamily = row => scopeAll || cfg.family === "all" || filterRows([row], { family: cfg.family }).length > 0;
+function pick(dry = false) {
+  if (state.restartPending && !dry) return undefined; // draining for a restart: running rows finish, nothing new starts
+  const own = pickIn(dry);
+  if (own && !dry && !scopeAll) state.fallbackFamily = false;
+  if (own || !cfg.familyFallback || cfg.family === "all" || scopeAll) return own;
+  scopeAll = true;
+  try {
+    const wide = pickIn(dry);
+    if (wide && !dry && state.fallbackFamily !== true) { state.fallbackFamily = true; event(`family ${cfg.family} has nothing to start; taking work from the rest of the ledger`); }
+    return wide;
+  } finally { scopeAll = false; }
+}
+function pickIn(dry = false) {
+  const ledger = ledgerNow();
   const { rows, pushed } = eligible(ledger);
   const busy = new Set(state.workers.flatMap(w => w.row ? [...(w.likely ?? []).slice(0, 2), ...(w.files ?? [])] : []));
+  // A row that just landed without a usable scenario gets its one proof pass before new work starts.
+  const freshProof = proofCandidates(ledger, { fresh: true })[0];
+  if (freshProof) return dry ? { row: freshProof.row } : freshProof;
+  // Proof debt first. 2026-11-20: 700 landed rows had no scenario and the board read 0 playable, because new
+  // rows always outranked proving old ones. Past the debt limit a worker proves landed work (cheaper than a
+  // build and the only path to "playable") before it starts anything new; new rows resume once debt drops.
+  const debt = [...finished.values()].filter(needsScenario).length;
+  if (debt > cfg.proofDebt) {
+    const owed = proofCandidates(ledger, { fresh: false, idle: true })[0];
+    if (owed) return dry ? { row: owed.row } : owed;
+  }
   for (const row of [...pushed, ...nextRows(rows, 80)]) {
     if (active.has(row.id) || (finished.has(row.id) && !retry.has(row.id))) continue;
+    if (isFableRow(row.id) && fableLimited()) continue;
     if (bumpRows.has(row.id) && [...active.keys()].filter(id => bumpRows.has(id)).length >= 5) continue; // at most 5 save-format editors at once
-    const files = (brief(row, ledger.systems).files ?? []);
+    const work = briefOf(row, ledger), files = work.files ?? [];
     if (files.slice(0, 2).some(f => busy.has(f))) continue;
+    if (dry) return { row };
     const at = priority.indexOf(row.id); if (at >= 0) priority.splice(at, 1);
-    return { row, files, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 3500) };
+    return { row, files, order: JSON.stringify(work).slice(0, 3500) };
   }
   // Nothing new to build: wire what already landed, then grow wired rows, instead of idling.
   const wire = wireCandidates(ledger, busy)[0];
   if (wire) return wire;
+  const backfill = proofCandidates(ledger, { fresh: false })[0];
+  if (backfill) return backfill;
   const cont = contCandidates(ledger, busy)[0];
   if (cont) return cont;
+  // Hourly proof cap reached and nothing else to do: keep proving instead of idling.
+  const idleProof = proofCandidates(ledger, { fresh: false, idle: true })[0];
+  if (idleProof) return idleProof;
+  // Still nothing: wired rows that used their continue passes but never reported "nothing left" get more slices.
+  const deeper = cfg.maxContDry > cfg.maxCont ? contCandidates(ledger, busy, cfg.maxContDry)[0] : null;
+  if (deeper) return deeper;
   const again = retryCandidate(ledger);
   if (again) {
+    if (dry) return { row: again };
     retryPassIds.add(again.id);
     requeue(again.id, 0, "Earlier run stopped after exploring without an edit, mostly from tool-permission bugs fixed since. Start from the work order's owner files and make your first Edit within 8 tool calls.");
     return pick();
@@ -449,17 +690,18 @@ function pick() {
 // Continue pass. Once new rows and wire passes run out (every open row waiting on a design-only owner left
 // all seven workers idle), a wired row that landed only its first slice gets its NEXT slice, taken from the
 // remainder its own summary lists. At most cfg.maxCont passes per row; the count is saved on the result.
-function contCandidates(ledger, busy = new Set()) {
-  if (!cfg.maxCont) return [];
+function contCandidates(ledger, busy = new Set(), limit = cfg.maxCont) {
+  if (!limit) return [];
   const byId = new Map(ledger.rows.map(r => [r.id, r]));
   const out = [];
   for (const r of [...finished.values()].sort((a, b) => (a.cont ?? 0) - (b.cont ?? 0) || (b.at ?? 0) - (a.at ?? 0))) {
     const row = byId.get(r.id);
-    if (!row || row.status === "verified" || r.wired !== true || !/^(building|playable)$/.test(r.status) || (r.cont ?? 0) >= cfg.maxCont
-      || active.has(r.id) || parked.has(r.id) || (cfg.family !== "all" && !filterRows([row], { family: cfg.family }).length)) continue;
+    if (!row || row.status === "verified" || r.wired !== true || !/^(building|playable)$/.test(r.status) || (r.cont ?? 0) >= limit || (limit > cfg.maxCont && r.contDone)
+      || (r.contAfter ?? 0) > Date.now() // a peer held its file last time; wait before trying again
+      || active.has(r.id) || parked.has(r.id) || !inFamily(row)) continue;
     const files = (r.files ?? []).filter(f => /^[\w./-]+$/.test(f)).slice(0, 6);
     if (!files.length || files.slice(0, 2).some(f => busy.has(f))) continue;
-    out.push({ row, files, cont: true, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 2500),
+    out.push({ row, files, cont: true, order: JSON.stringify(briefOf(row, ledger)).slice(0, 2500),
       note: `CONTINUE PASS ${(r.cont ?? 0) + 1}. Earlier slices of this row landed and are wired, in ${files.join(", ")}; the last report said: ${String(r.summary).slice(0, 300)} Build the NEXT smallest playable slice of what that report says remains, reusing the existing code and keeping it reachable (wired). Do not redo or restructure what exists. Start from those files; first Edit within 8 tool calls. If everything that remains needs an owner decision, edit nothing and report blocked with why "design".` });
     if (out.length >= 12) break;
   }
@@ -479,10 +721,10 @@ function wireCandidates(ledger, busy = new Set()) {
   const out = [];
   for (const r of [...finished.values()].sort((a, b) => (b.at ?? 0) - (a.at ?? 0))) {
     const row = byId.get(r.id);
-    if (!row || !isUnwired(r) || active.has(r.id) || parked.has(r.id) || (cfg.family !== "all" && !filterRows([row], { family: cfg.family }).length)) continue;
+    if (!row || !isUnwired(r) || active.has(r.id) || parked.has(r.id) || !inFamily(row)) continue;
     const files = (r.files ?? []).filter(f => /^[\w./-]+$/.test(f)).slice(0, 6);
     if (files.slice(0, 2).some(f => busy.has(f))) continue;
-    out.push({ row, files, wire: true, order: JSON.stringify(brief(row, ledger.systems)).slice(0, 2500),
+    out.push({ row, files, wire: true, order: JSON.stringify(briefOf(row, ledger)).slice(0, 2500),
       note: `WIRE PASS. An earlier slice of this row landed in ${files.join(", ")} and reported: ${String(r.summary).slice(0, 260)} Nothing reaches it yet. Do NOT add features: wire the smallest real caller so a player action, a tick or a loaded table reaches the existing code (one call site, one RON row read, or one UI line), behind the row's system switch. Start from those files; first Edit within 6 tool calls. If no caller is possible without an owner decision, edit nothing and report blocked with why "design". If a player action, tick or loaded table ALREADY reaches it, edit nothing and report already-implemented with that entry point in "entry".` });
     if (out.length >= 12) break;
   }
@@ -498,13 +740,129 @@ function retryCandidate(ledger) {
     const row = byId.get(r.id);
     if (!row || r.status !== "blocked" || r.retryPass || isDesignBlock(r) || !/explored \d+ turns without an edit/.test(r.summary ?? "")
       || active.has(r.id) || parked.has(r.id) || row.readiness?.missing?.some(o => (state.deadOwners ?? []).some(d => d.startsWith(o + "×")))) continue;
-    if (cfg.family !== "all" && !filterRows([row], { family: cfg.family }).length) continue;
+    if (!inFamily(row)) continue;
     return row;
   }
 }
+// Proof pass. A landed row with no stored scenario can never reach "proven" (2026-11-18: 490 engine rows landed,
+// none provable, because the engine prompt never asked for a scenario). A read-only sonnet run reads the row's
+// own files and returns ONLY a scenario; it has no Edit tool, so it cannot change code. Fresh landings that came
+// back without a valid scenario go first (item: send back once); older landed rows are backfilled lowest
+// milestone first. At most cfg.proofPerHour passes an hour, so backfill never crowds out building. When pick()
+// has nothing else for a worker (no new, wire or continue work), backfill runs uncapped (idle: true) and does not
+// count against the hour: 2026-11-18 five workers sat idle with 733 rows waiting behind a 12/h cap. The spend
+// cap still bounds it.
+const proofTier = { name: "sonnet·proof", model: cfg.sonnet, effort: "low", maxTurns: 12, budget: 0.3, tools: "Read,Grep,Glob", scout: true };
+const proofRuns = []; // start times of proof passes, pruned to the last hour
+const proofsThisHour = () => { const cut = Date.now() - 3600_000; while (proofRuns.length && proofRuns[0] < cut) proofRuns.shift(); return proofRuns.length; };
+const milestoneOf = row => Number(String(row?.milestone ?? "").match(/M(\d+(?:\.\d+)?)/)?.[1] ?? 9);
+// Rows that already have a tagged scenario file (older machine scenarios carry no `scenario` field on the result).
+let taggedCache = { at: 0, ids: new Set() };
+const taggedIds = () => {
+  if (Date.now() - taggedCache.at > 60_000) taggedCache = { at: Date.now(), ids: new Set(tolerantScenarios(scenarioPath).scenarios.flatMap(s => s.parity ?? [])) };
+  return taggedCache.ids;
+};
+// Unwrap/TODO chores (ENG-ARCH-C*) change error paths only; their proof passes came back "no observable effect"
+// almost every time, so they are not offered one (the builder may still attach a scenario itself).
+const isChore = id => /^ENG-ARCH-C[0-9A-F]/.test(id);
+// deadCode: the proof pass found the landed code has no caller. A wire pass runs first; once it lands, the row gets
+// one fresh proof pass (its earlier "no op reaches it" verdict described unreachable code, not the feature).
+const rewired = r => r?.deadCode && r.wirePass && r.wired === true;
+const needsScenario = r => r && /^(building|playable)$/.test(r.status) && !r.scenario && (!r.proofPass || rewired(r)) && (!r.noProof || rewired(r)) && (r.files ?? []).length > 0 && !taggedIds().has(r.id) && !isChore(r.id);
+// A proof that failed only on the answer's shape (no scenario, wrong JSON shape, no expect) gets ONE more pass when
+// workers would otherwise idle: 58 rows lost their only pass that way before normalizeScenario accepted every shape.
+const FORMAT_FAIL = /^(no scenario|scenario must be an object|scenario needs at least one step|scenario asserts nothing)/;
+const needsReproof = r => r && /^(building|playable)$/.test(r.status) && r.proofPass && !r.scenario && !r.reproof
+  && FORMAT_FAIL.test(String(r.noProof ?? "")) && (r.files ?? []).length > 0 && !taggedIds().has(r.id)
+  && !isChore(r.id);
+function proofCandidates(ledger, { fresh, idle = false }) {
+  if (!cfg.prove || !(cfg.proofPerHour > 0) || (!idle && proofsThisHour() >= cfg.proofPerHour)) return [];
+  const byId = new Map(ledger.rows.map(r => [r.id, r]));
+  const out = [];
+  for (const r of finished.values()) {
+    const again = idle && !fresh && needsReproof(r);
+    // Idle backfill takes rows flagged needsProof too: those are only offered on the fresh path, which the hourly
+    // cap closes, so on 2026-11-19 130 flagged rows waited while five workers sat on "No row can start".
+    if (!again && (!needsScenario(r) || (!idle && !!r.needsProof !== fresh))) continue;
+    const row = byId.get(r.id);
+    if (!row || row.status === "verified" || active.has(r.id) || parked.has(r.id) || !inFamily(row)) continue;
+    // Read-only: a file a builder holds does not block it.
+    out.push({ row, files: (r.files ?? []).filter(f => /^[\w./-]+$/.test(f)).slice(0, 6), proof: true, idle, rank: milestoneOf(row), at: r.at ?? 0,
+      order: JSON.stringify(briefOf(row, ledger)).slice(0, 2000) });
+  }
+  return out.sort((a, b) => a.rank - b.rank || b.at - a.at).slice(0, 12);
+}
+function proofPrompt(row, files, prior) {
+  return `PROOF PASS for ONE row that already landed in a Rust voxel game. Do NOT edit anything: you only have Read, Grep and Glob. Your only output is a headless engine scenario that proves the landed behaviour.
+Row: ${row.id} ${row.label}
+It landed in: ${files.join(", ") || "(files unknown)"}. Its report said: ${String(prior?.summary ?? "").slice(0, 300)}
+${prior?.proofWhy ? "The last attempt was rejected: " + String(prior.proofWhy).slice(0, 300) + ". Fix exactly that.\n" : ""}Steps (at most 10 lookups, Grep first, small Read ranges):
+1. Find the landed hunks in those files and the world system switch (world.rules.systems.enabled("...")) they are gated on, if any.
+2. Read tools/axiom-dev/ENGINE_WORKBENCH.md for the request and reply fields of the ops you use; expects must name fields the reply really has.
+3. Write the smallest scenario that observes the change: switch the system on if needed, act, then assert.
+${SCENARIO_RULE}
+${brain.proofNote()}
+If no op can observe it (pure refactor, render-only, or nothing an op reaches), report status "blocked" with why "no_observable" and name the op that is missing in the summary.
+Last line exactly: RESULT {"status":"building|blocked","files":[],"summary":"<=200 chars: what the scenario checks","scenario":{"steps":[...]},"why":"<only when blocked>"}`;
+}
+async function proofPass(worker, row, next, prior) {
+  if (!next.idle) proofRuns.push(Date.now());
+  const tier = { ...proofTier, prompt: proofPrompt(row, next.files, prior) };
+  Object.assign(worker, { tier: tier.name, startedAt: Date.now(), activity: [], turns: 0, files: [], likely: next.files, phase: "proof" });
+  logTail(worker, `proof pass ${row.id}`);
+  const out = await runAgent(worker, row, tier, "", next.order, "");
+  active.delete(row.id); worker.child = null;
+  const cost = addCost(out.cost);
+  state.totals.in += (out.usage?.input_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0) + (out.usage?.cache_creation_input_tokens ?? 0);
+  state.totals.out += out.usage?.output_tokens ?? 0; state.totals.cached += out.usage?.cache_read_input_tokens ?? 0;
+  if (limit.test((out.error || "") + " " + (out.text || ""))) { if (!next.idle) proofRuns.pop(); pauseForLimit((out.error || "") + " " + (out.text || ""), "proof"); return; }
+  if (state.stop && !out.ok) return;
+  const parsed = parseResult(out.text);
+  // Models write why as "no_observable" or "no_observable: needs an op that ..."; keep the trailing detail.
+  const whyText = String(parsed?.why ?? "");
+  const noObservable = /^\s*no_observable\b/i.test(whyText);
+  const whyDetail = whyText.replace(/^\s*no_observable\b[\s:;,-]*/i, "");
+  let bad = parsed?.scenario ? validateScenario(parsed.scenario, ENGINE_OPS) : noObservable ? null : "no scenario returned";
+  const kept = { ...prior, needsProof: undefined, final: true, reproof: prior?.proofPass ? true : prior?.reproof };
+  if (parsed?.scenario && !bad) {
+    try {
+      const f = scenarioFile(row.id, parsed.scenario, parsed.summary ?? prior?.summary);
+      mkdirSync(scenarioPath, { recursive: true });
+      writeFileSync(path.join(scenarioPath, f.name), f.body);
+      kept.scenario = "tools/axiom-dev/scenarios/" + f.name; kept.proofPass = true; kept.noProof = undefined; idleProved = false; taggedCache.at = 0;
+      state.totals.scenarios = (state.totals.scenarios ?? 0) + 1;
+    } catch (error) { bad = "not stored: " + String(error.message).slice(0, 80); }
+  }
+  kept.deadCode = undefined; // the post-wire proof is a dead-code row's one extra pass
+  if (!kept.scenario) {
+    // One retry for a scenario that came back but failed validation (unknown op or test): the reason goes into
+    // the next prompt. A missing scenario or a "no_observable" verdict is final for the row.
+    if (bad && parsed?.scenario && !prior?.proofRetried) Object.assign(kept, { needsProof: true, proofRetried: true, proofWhy: bad });
+    else Object.assign(kept, { proofPass: true, noProof: String(noObservable ? [parsed?.summary, whyDetail].filter(Boolean).join(" ") || "no observable effect" : bad ?? "no scenario").slice(0, 200) });
+  }
+  finished.set(row.id, kept);
+  appendFileSync(resultsFile, JSON.stringify(kept) + "\n");
+  rev++;
+  state.results.unshift({ id: row.id, label: row.label, tier: tier.name, at: Date.now(), ms: Date.now() - worker.startedAt, files: kept.scenario ? [kept.scenario] : [], log: worker.log,
+    cost, turns: worker.turns, status: kept.scenario ? "building" : "blocked", final: false,
+    summary: kept.scenario ? "proof pass: scenario stored: " + String(parsed?.summary ?? "").slice(0, 160) : `proof pass: no scenario (${kept.noProof ?? kept.proofWhy})` });
+  if (state.results.length > 200) state.results.pop();
+  persist();
+}
 let resumeTimer;
 // "resets 2pm" or "resets 2:30 pm": next occurrence of that local time; otherwise retry in 30 minutes.
+// A weekly limit names a date ("resets Nov 23, 2pm"). Read as "no time given" it retried every 30 minutes for
+// days, launching every worker into the same refusal.
 function limitResetAt(message, now = Date.now()) {
+  const dated = String(message).match(/resets?\s+(?:on\s+)?([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b/i);
+  const month = dated ? ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(dated[1].slice(0, 3).toLowerCase()) : -1;
+  if (month >= 0) {
+    const when = new Date(now);
+    when.setMonth(month, Number(dated[2]));
+    when.setHours(Number(dated[3]) % 12 + (dated[5].toLowerCase() === "pm" ? 12 : 0), Number(dated[4] ?? 0), 0, 0);
+    if (when.getTime() <= now) when.setFullYear(when.getFullYear() + 1);
+    return when.getTime();
+  }
   const at = String(message).match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b/i);
   if (!at) return now + 30 * 60_000;
   const when = new Date(now);
@@ -514,6 +872,20 @@ function limitResetAt(message, now = Date.now()) {
 }
 const startTier = () => 0;
 const limit = /weekly limit|usage limit|rate limit|out of credits|credit balance|hit your [\w -]{0,20}limit|\d+-hour limit|limit resets/i;
+// One pause for every kind of run. The scout path used to set the pause with no timer, so a limit that arrived
+// during a scout held the swarm until someone pressed Resume. The timer lifts only a limit pause: a pause the
+// supervisor or the owner set in the meantime stays.
+function pauseForLimit(text, where) {
+  const until = limitResetAt(text);
+  state.paused = "usage limit hit; resumes " + new Date(until).toLocaleString();
+  state.resumeAt = until;
+  clearTimeout(resumeTimer);
+  resumeTimer = setTimeout(() => {
+    if (!String(state.paused ?? "").startsWith("usage limit")) return;
+    state.paused = null; state.resumeAt = null; event("usage limit window passed; resumed");
+  }, Math.max(60_000, until - Date.now()));
+  event(`usage limit hit (${where}); resumes ${new Date(until).toLocaleTimeString()}`);
+}
 
 // Per-tier ROI: spend and outcomes by tier, so a tier that burns money without landing rows is visible.
 function tierRoi(entry) {
@@ -529,13 +901,66 @@ function record(entry) {
   tierRoi(entry);
   state.results.unshift(entry); if (state.results.length > 200) state.results.pop();
   appendFileSync(resultsFile, JSON.stringify(entry) + "\n");
+  // An already-implemented verdict is a landing too: without this the ledger kept such rows "open",
+  // the board showed a full queue while every agent idled, and a fresh swarm paid to re-scout them.
+  if (entry.final && entry.status === "already-implemented") markImplemented(entry);
+}
+function markImplemented(entry) {
+  try {
+    const ledger = loadLedger(), row = ledger.rows.find(r => r.id === entry.id);
+    if (!row || row.status !== "open") return;
+    writeStatus(entry.id, { status: "building", evidence: (entry.files ?? []).slice(0, 6), note: "swarm (already implemented): " + String(entry.summary ?? "").slice(0, 150) }, ledger.revision, new Set(ledger.rows.map(r => r.id)));
+    ledgerChanged();
+  } catch (error) { entry.ledger = "not recorded: " + String(error.message).slice(0, 80); }
 }
 
 // Build-health gate: new rows start only while the shared tree compiles. A red tree means every agent's
 // final `cargo check` fails and they burn budget "fixing" someone else's break. Checked at most every
 // 3 minutes (single flight); rows already running continue, and agents are told nothing about it.
 const useHealthGate = !flag("no-health");
-const health = { ok: true, at: 0, errors: [], checking: null };
+const health = { ok: true, at: 0, errors: [], checking: null, sig: "" };
+// What the compiler reads, as one cheap value (about 2,500 stats, under 0.1 s): file count and newest mtime of
+// the Rust, RON, WGSL and manifest files. A red result carries the signature of the tree it was taken on.
+function treeSignature() {
+  let n = 0, newest = 0;
+  const walk = d => {
+    let entries; try { entries = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name === "target" || e.name.startsWith(".")) continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(rs|ron|wgsl|toml)$/.test(e.name)) { n++; try { const m = statSync(p).mtimeMs; if (m > newest) newest = m; } catch { /* vanished */ } }
+    }
+  };
+  walk(path.join(root, "crates")); walk(path.join(root, "assets"));
+  return `${n}:${newest}`;
+}
+// The one place health changes, so the page's copy (state.health) can never disagree with the gate.
+const breakerRed = () => /^circuit breaker\b.*does not compile/.test(String(state.paused ?? ""));
+function setHealth(ok, errors = [], at = Date.now(), sig = health.sig) {
+  const was = health.ok;
+  Object.assign(health, { ok, at, errors: errors.slice(0, 6).map(l => String(l).slice(0, 200)), sig });
+  state.health = { ok: health.ok, at: health.at, errors: health.errors };
+  if (ok === was) return;
+  rev++;
+  // The breaker paused because the tree was red and the repair failed. Someone (a peer session, the owner) has
+  // fixed it since: that was the only thing the pause waited for, so it ends here instead of on a click.
+  if (ok && breakerRed()) { state.paused = null; event("circuit breaker: the tree compiles again; resumed"); }
+}
+// Stale red self-heals. Health was refreshed only by a builder about to start a row or by a checkpoint after
+// 8 more landings, so with every worker idle or paused a red result outlived its fix: the page said "builders
+// wait for green", no builder was there to recheck, and it took a click on Checkpoint (2026-11-19). While the
+// result is red, recheck as soon as the sources differ from the tree that failed, and every 15 minutes anyway
+// (a fix can also be a deleted file or a peer's finished build). Nothing runs while green.
+if (useHealthGate && !flag("dry")) setInterval(() => {
+  if (state.stop || health.ok || health.checking || state.checkpointing || (state.paused && !breakerRed())) return;
+  const age = Date.now() - health.at;
+  if (age < 120_000) return;
+  const changed = treeSignature() !== health.sig;
+  if (!changed && age < 15 * 60_000) return;
+  event(changed ? "health: the sources changed since the failing check; rechecking" : "health: red for 15 minutes; rechecking");
+  checkHealth();
+}, 60_000).unref();
 function checkHealth() {
   if (health.checking) return health.checking;
   health.checking = sharedCheck(APP).then(() => { health.checking = null; });
@@ -561,10 +986,39 @@ async function tablesCheck() {
   if (!result.ok) event(`content tables fail at runtime: ${result.failures.join(" ; ").slice(0, 200)}`);
   return result;
 }
+// The workspace globs `crates/*`, so a builder that creates crates/<x>/src before its Cargo.toml makes
+// every cargo command fail with "failed to load manifest" (ENG-META-10's crates/server held all builders,
+// itself included, since the error names a directory no worker's file list matches). Write a dependency-free
+// stub manifest instead: the tree loads, and anything missing becomes an ordinary error inside that crate's
+// own files, which the half-done-edit rule attributes to its author. The builder may rewrite the stub.
+function stubMissingManifests() {
+  const crates = path.join(root, "crates");
+  let dirs = [];
+  try { dirs = readdirSync(crates, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name); } catch { return; }
+  for (const dir of dirs) {
+    const base = path.join(crates, dir);
+    if (existsSync(path.join(base, "Cargo.toml")) || !existsSync(path.join(base, "src"))) continue;
+    // Prefer the name the crate's own binaries already use (`engine_server::paths`), else the house prefix.
+    let name = `engine_${dir.replace(/[^A-Za-z0-9_]/g, "_")}`;
+    try {
+      const bins = path.join(base, "src", "bin");
+      for (const f of existsSync(bins) ? readdirSync(bins) : []) {
+        const m = /\b(engine_\w+)::/.exec(readFileSync(path.join(bins, f), "utf8"));
+        if (m) { name = m[1]; break; }
+      }
+    } catch { /* keep the default name */ }
+    try {
+      writeFileSync(path.join(base, "Cargo.toml"), `# Stub written by the swarm health gate: src/ existed without a manifest.\n# Replace with the real manifest.\n[package]\nname = "${name}"\nversion.workspace = true\nedition.workspace = true\n\n[dependencies]\n`, { flag: "wx" });
+      event(`stub Cargo.toml written for crates/${dir} (${name}): src/ had no manifest and broke the workspace`);
+    } catch { /* written meanwhile by its builder */ }
+  }
+}
 function sharedCheck(pkg) {
   let s = checks.get(pkg);
   if (!s) checks.set(pkg, s = { running: null, next: null });
   const start = () => {
+    stubMissingManifests();
+    const sig = pkg === APP ? treeSignature() : "";
     s.running = runCheck(pkg, { root, env: childEnv() }).then(async r => {
       if (pkg === APP && r.ok) {
         const t = await tablesCheck();
@@ -572,8 +1026,7 @@ function sharedCheck(pkg) {
       }
       if (pkg === APP) {
         // A spawn/lock failure with no compiler error is not "red".
-        Object.assign(health, { ok: r.ok || !r.errors.length, at: r.at, errors: r.errors.slice(0, 6).map(l => l.slice(0, 200)) });
-        state.health = { ok: health.ok, at: health.at, errors: health.errors };
+        setHealth(r.ok || !r.errors.length, r.errors, r.at, sig);
       }
       return r;
     }).catch(e => ({ ok: false, errors: [], warnings: 0, text: "FAILED (check did not run): " + String(e?.message ?? e).slice(0, 200), at: Date.now() }))
@@ -626,6 +1079,170 @@ async function work(worker) {
     }
   }
 }
+// Self-feeding. When no row is pickable the queue used to sit empty (design-blocked rows, parked owner systems,
+// epics, spent continue passes). Two feeders keep the workers busy. A refill starts when a worker finds nothing
+// and also when the queue runs low, so it rarely runs dry; one refill at a time, at most every 30 s:
+//  1. designStage: a read-only design lead designs what waits on a decision (see swarm-design.mjs for the
+//     order and the rules it designs within) and the item goes back to the queue with that design as its note.
+//     Up to cfg.designParallel at once and cfg.decideMax an hour.
+//  2. feedChores: improve-cli rule hits (unwrap, stale TODO, wall-clock) become ENG-ARCH-C* rows in a generated
+//     matrix, which the normal pipeline then works.
+// --no-decide / --no-chores turn them off.
+const designing = new Map(); // key -> { kind, since, slot }
+const designTries = new Map(); // key -> replies that could not be read as a design
+let designTimes = []; // when designs were made (hourly cap)
+let designWaiting = { owner: 0, row: 0, epic: 0 };
+let refilling = null, lastRefill = 0;
+const designsThisHour = () => { const from = Date.now() - 3_600_000; designTimes = designTimes.filter(t => t > from); return designTimes.length; };
+async function designOne(item, ledger) {
+  if (state.restartPending) return;
+  const slot = { id: "design", activity: [], turns: 0, files: [] };
+  designing.set(item.key, { kind: item.kind, since: Date.now(), slot }); rev++;
+  try {
+    const briefText = item.row ? JSON.stringify(briefOf(item.row, ledger)).slice(0, 2200) : "";
+    const out = await runAgent(slot, { id: item.key.replace(/[^\w.-]/g, "-"), label: "design" },
+      { ...designTier, prompt: designPrompt({ ...item, brief: briefText }) }, "", "");
+    const tokens = (out.usage?.input_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0) + (out.usage?.cache_creation_input_tokens ?? 0);
+    state.totals.in += tokens; state.totals.out += out.usage?.output_tokens ?? 0; addCost(out.cost);
+    state.totals.cached += out.usage?.cache_read_input_tokens ?? 0;
+    if (state.stop) return 0;
+    if (limit.test((out.error || "") + " " + (out.text || ""))) { pauseForLimit(out.error || out.text || "", "design"); return 0; }
+    const parsed = parseDesign(out.text);
+    tierRoi({ tier: designTier.name, status: parsed?.verdict === "decide" ? "building" : parsed ? "blocked" : "escalated", cost: out.cost ?? 0, tokens });
+    const base = { id: item.key, kind: item.kind, at: Date.now(), v: DESIGN_VERSION, cost: out.cost ?? 0, log: slot.log };
+    if (!parsed) {
+      // An unreadable reply used to be retried on every refill with no limit. Two tries, then say so and stop.
+      const tries = (designTries.get(item.key) ?? 0) + 1; designTries.set(item.key, tries);
+      if (tries < 2) { event(`design ${item.key}: no usable answer; one more try later`); return 0; }
+      designs.save({ ...base, verdict: "defer", text: "The design lead gave no usable design in two attempts. Read its log, or press Redesign to try again." });
+      event(`design ${item.key}: no usable design in two attempts; left for the owner`);
+      return 0;
+    }
+    designTimes.push(Date.now());
+    if (parsed.verdict === "defer") {
+      designs.save({ ...base, verdict: "defer", text: parsed.text });
+      event(`design ${item.key}: left for the owner (${parsed.text.slice(0, 100)})`);
+      return 0;
+    }
+    const earlier = designs.get(item.key);
+    const round = earlier?.verdict === "decide" && (earlier.v ?? 1) >= DESIGN_VERSION ? (earlier.round ?? 1) + 1 : 1;
+    const rel = path.relative(root, designs.pathOf(item.key)).replaceAll("\\", "/");
+    const note = designNote(item.kind, item.key, parsed.parts, rel);
+    const title = item.kind === "owner" ? `Owner system ${item.owner} ${item.system?.name ?? ""}` : `${item.key} ${item.row?.label ?? ""}`;
+    const text = parsed.parts.DESIGN.replace(/\s+/g, " ").slice(0, 600);
+    designs.save({ ...base, verdict: "decide", round, text, note },
+      `# ${title.trim()}\n\nWritten by the swarm design lead (${designTier.name}) at ${new Date().toISOString().slice(0, 16)}Z. The owner has not reviewed it.\n\n${parsed.body}\n`);
+    if (item.kind === "owner") {
+      // Rows that stopped on this owner go back with its design. Rows never tried pick it up from the owner
+      // note the worker adds to every row that needs this system.
+      const byId = new Map(ledger.rows.map(r => [r.id, r]));
+      let back = 0;
+      for (const f of [...finished.values()]) {
+        if (f.status !== "blocked" || parked.has(f.id) || active.has(f.id) || !byId.get(f.id)?.readiness.missing.includes(item.owner)) continue;
+        requeue(f.id, 0, note); back++;
+      }
+      event(`design ${item.key}: ${text.slice(0, 90)} (${back} blocked row(s) requeued, ${item.rows.length} were waiting)`);
+    } else {
+      requeue(item.key, 0, note);
+      event(`design ${item.key}: ${text.slice(0, 110)}`);
+    }
+    return 1;
+  } catch (e) { event(`design ${item.key} failed: ${String(e?.message ?? e).slice(0, 120)}`); return 0; }
+  finally { designing.delete(item.key); rev++; peekCache.at = 0; persist(); }
+}
+// What the design lead would take next (`limit` items) and how much waits in all.
+function findDesignTargets(ledger, limit) {
+  eligible(ledger); // refreshes deadOwners
+  const args = { ledger, finished, store: designs, skip: id => parked.has(id) || active.has(id) || designing.has(id) || retry.has(id),
+    order: rows => nextRows(rows, rows.length), isDesignBlock, dead: deadOwners, epics: cfg.designEpics, limit: Math.max(0, limit) };
+  const found = designTargets({ ...args, scope: rows => filterRows(rows, { family: familyOf() }) });
+  // Same rule as the row queue: a family with nothing left to design takes from the rest of the ledger.
+  if (found.counts.owner + found.counts.row + found.counts.epic || !cfg.familyFallback) return found;
+  return designTargets({ ...args, scope: rows => rows });
+}
+// The page shows the waiting counts while paused and before the first refill too; recount at most every 10 s.
+let designCountedAt = 0;
+function countDesignWaiting() {
+  if (Date.now() - designCountedAt < 10_000) return;
+  designCountedAt = Date.now();
+  try { designWaiting = findDesignTargets(ledgerNow(), 0).counts; } catch { /* keep the last count */ }
+}
+async function designStage() {
+  if (!cfg.decide || state.stop || state.paused || overBudget()) return 0;
+  const room = Math.min(cfg.designParallel, cfg.decideMax - designsThisHour()) - designing.size;
+  const ledger = ledgerNow();
+  const found = findDesignTargets(ledger, room);
+  designWaiting = found.counts; designCountedAt = Date.now();
+  if (room <= 0 || !found.items.length) return 0;
+  const made = await Promise.all(found.items.map(item => designOne(item, ledger)));
+  return made.reduce((a, b) => a + b, 0);
+}
+// Measured perf rows: build, bench, write ENG-REN-PF* rows for the worst stages. Runs in the background (a
+// release-fast build plus bench takes many minutes) so designs and chores are not held behind it.
+let perfFeeding = null;
+function startPerfFeed() {
+  // A stage waits while its last row is running or not started; once it lands or blocks, the next bench judges it.
+  const isOpen = id => active.has(id) || !finished.has(id);
+  perfFeeding = feedPerf({ root, isOpen, log: m => event(m) })
+    .then(added => { if (added) { ledgerChanged(); event(`perf feeder: ${added} measured row(s) added`); } })
+    .catch(e => event("perf feeder error: " + String(e?.message ?? e).slice(0, 120)))
+    .finally(() => { perfFeeding = null; });
+}
+// The chore scan is a full-tree ripgrep (improve-cli scan). An idle swarm ran it every 30 s and it found nothing
+// for hours (2026-11-21), so an empty scan waits CHORE_EMPTY_MS before the next. `choreScan` feeds the idle message.
+const CHORE_EMPTY_MS = 15 * 60_000;
+let choreScan = { at: 0, added: 0 };
+function refill() {
+  if (refilling) return refilling;
+  if (Date.now() - lastRefill < 30_000) return Promise.resolve();
+  refilling = (async () => {
+    try {
+      lastRefill = Date.now();
+      let added = await designStage();
+      if (!added && cfg.perfFeed && !perfFeeding && !designing.size && !pick(true)) startPerfFeed();
+      const choreDue = choreScan.added > 0 || Date.now() - choreScan.at >= CHORE_EMPTY_MS;
+      if (!added && cfg.chores && choreDue && !designing.size && !pick(true)) {
+        added = await feedChores({ root, limit: 8, log: m => event(m) });
+        choreScan = { at: Date.now(), added };
+        if (added) { ledgerChanged(); event(`feeder: ${added} chore row(s) added from improve-cli`); }
+      }
+    } catch (e) { event("feeder error: " + String(e?.message ?? e).slice(0, 120)); }
+    finally { refilling = null; }
+  })();
+  return refilling;
+}
+// Why nothing is running, in the owner's terms. The page used to say "Queue empty for this family" beside
+// "516 open rows", which read as a hang; the real state is almost always "everything left needs a design".
+function idleReason() {
+  const ledger = ledgerNow();
+  const n = { landed: 0, design: 0, owner: 0, blocked: 0, parked: 0 };
+  for (const r of filterRows(ledger.rows, { family: familyOf() })) {
+    if (r.status === "verified") continue;
+    const f = finished.get(r.id);
+    if (parked.has(r.id) || r.status === "parked") n.parked++;
+    else if (r.status === "design" && !designs.decided(r.id)) n.design++;
+    else if (f?.status === "blocked") { if (isDesignBlock(f)) n.design++; else n.blocked++; }
+    else if (f) n.landed++;
+    else if (r.readiness.missing.some(o => deadOwners.has(o) && !designs.decided(ownerKey(o)))) n.owner++;
+  }
+  const parts = [n.landed && `${n.landed} landed and wait for proof or review`, n.design && `${n.design} wait on a design`,
+    n.owner && `${n.owner} wait on a parked owner system`, n.blocked && `${n.blocked} blocked`, n.parked && `${n.parked} parked`].filter(Boolean);
+  // Every source that can still bring work back, with its time, so a quiet swarm never reads as a hang
+  // (2026-11-21: the page said only "design stage is off" while the perf bench sat on its 2 h cooldown).
+  const waiting = designWaiting.owner + designWaiting.row + designWaiting.epic;
+  const clock = t => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const design = !cfg.decide ? `The design stage is off${waiting ? ` (${waiting} item${waiting === 1 ? "" : "s"} wait for it)` : ""}; turn it on in Settings.`
+    : designing.size ? `Designing now: ${[...designing.keys()].join(", ")}.`
+    : designsThisHour() >= cfg.decideMax ? `The design stage reached its cap of ${cfg.decideMax} an hour and continues as the hour rolls.`
+    : waiting || !lastRefill ? "The design stage starts within 30 s."
+    : "Nothing is left to design.";
+  const nextBench = perfNextAt(root);
+  const perf = !cfg.perfFeed ? "" : perfFeeding ? "The perf feeder is building and benchmarking to write measured rows."
+    : nextBench > Date.now() ? `Next perf bench at ${clock(nextBench)}.` : "The perf bench starts within 30 s.";
+  const chores = cfg.chores && choreScan.at && !choreScan.added ? `The chore scan found nothing new at ${clock(choreScan.at)}; next scan ${clock(choreScan.at + CHORE_EMPTY_MS)}.` : "";
+  const stage = state.paused ? "" : [design, perf, chores].filter(Boolean).join(" ");
+  return { text: `No row can start: ${parts.join(", ") || "every row in this family is verified"}. ${stage}`.trim(), counts: n };
+}
 async function workLoop(worker) {
   while (!state.stop && !worker.retire) {
     const disk = brain.diskGuard();
@@ -633,36 +1250,68 @@ async function workLoop(worker) {
     // Checkpoints and proof runs no longer pause new rows: agents edit while the engine builds and their
     // compile checks simply queue behind it. Pausing idled every worker for up to the whole engine build.
     if (state.paused) { worker.status = "paused"; await new Promise(r => setTimeout(r, 5000)); continue; }
-    if (cfg.budget && state.totals.cost >= cfg.budget) { state.paused = `budget cap $${cfg.budget} reached; raise it in Settings`; continue; }
+    rollSpend();
+    if (overBudget()) {
+      const win = budgetWindowMs();
+      state.paused = win ? `budget cap $${cfg.budget} per ${cfg.budgetWindowH} h reached ($${spend.total.toFixed(2)} spent); resumes by itself ${new Date(spend.since + win).toLocaleString()}`
+        : `budget cap $${cfg.budget} reached ($${spend.total.toFixed(2)} spent since ${new Date(spend.since).toLocaleDateString()}); raise it in Settings`;
+      continue;
+    }
     if (cfg.maxRows && state.totals.done + state.totals.blocked + active.size >= cfg.maxRows && !retry.size) break;
     // Green-build gate moved to just before the builder: read-only scouts run while the tree is red.
     if (state.stop || state.paused) continue;
     const next = pick();
+    // Not awaited. A design takes a minute or two and puts its rows back as it lands; waiting for the whole
+    // refill held every idle worker until the slowest design finished.
+    if (!next && (cfg.decide || cfg.chores || cfg.perfFeed) && !state.stop) refill();
     if (!next && cfg.prove && !active.size && !idleProved) { idleProved = true; if (proofPending().size) checkpoint("idle: proof of landed rows"); }
-    if (!next) { worker.status = "idle"; worker.row = null; await new Promise(r => setTimeout(r, 3000)); continue; }
+    if (!next) {
+      // An idle rail shows why it is idle, not the tier and files of the row it finished an hour ago.
+      Object.assign(worker, { status: "idle", row: null, label: "", tier: "", files: [], likely: [],
+        phase: designing.size ? `waiting on ${designing.size} design${designing.size === 1 ? "" : "s"}` : "nothing to start" });
+      await new Promise(r => setTimeout(r, 3000)); continue;
+    }
+    // Low water: start designing before the queue is empty, not after it.
+    if ((cfg.decide || cfg.chores || cfg.perfFeed) && peekCached().length < Math.max(2, state.workers.filter(w => !w.retire && w.status !== "stopped").length)) refill();
     const { row, files, order } = next;
+    if (next.proof) {
+      retry.delete(row.id); active.set(row.id, { files: [] });
+      Object.assign(worker, { status: "working", row: row.id, label: row.label });
+      await proofPass(worker, row, next, finished.get(row.id));
+      continue;
+    }
     const wiring = !!next.wire, continuing = !!next.cont, prior = wiring || continuing ? finished.get(row.id) : null;
-    const isRetry = retry.has(row.id) || wiring || continuing; // follow-up passes skip the scout: they have their files
+    const design = designs.get(row.id), designed = !wiring && !continuing && design?.verdict === "decide";
+    const isRetry = retry.has(row.id) || wiring || continuing || designed; // these skip the scout: they have their files or a design
     const tierIndex = wiring || continuing ? 0 : Math.min(tiers.length - 1, retry.get(row.id) ?? startTier(row));
     let tier = wiring && cfg.wireModel === "haiku" ? wireTier : tiers[tierIndex];
-    let note = wiring || continuing ? next.note : isRetry ? retry.get(row.id + ":note") : "";
+    // Always a string: a row requeued after a worker crash has no note, and `undefined` reached the prompt as
+    // text and then threw on note.startsWith, which crashed the worker again until the row was parked.
+    let note = String((wiring || continuing ? next.note : retry.has(row.id) ? retry.get(row.id + ":note") : "") ?? "");
+    if (designed && !/design lead|Owner decision \(auto/.test(note)) note = `${note} ${noteOf(design)}`.trim();
+    // Owner systems this row needs that now have a design: the row builds the part it needs from that design.
+    const ownerNotes = (row.readiness?.missing ?? []).map(o => designs.get(ownerKey(o)))
+      .filter(d => d?.verdict === "decide" && !note.includes(noteOf(d).slice(0, 60))).map(noteOf);
+    if (ownerNotes.length) note = `${note} ${ownerNotes.join(" ")}`.trim().slice(0, 2600);
     retry.delete(row.id);
     active.set(row.id, { files });
     Object.assign(worker, { status: "working", row: row.id, label: row.label, phase: "context", activity: [], turns: 0, denied: 0, files: [] });
     const ctx = await rowContext(row, files);
     prewarm();
     let rowCost = 0;
-    if (cfg.scout && !isRetry) {
+    // Owner rows skip the haiku scout: their design says "the owner has not reviewed it", which the scout read
+    // as needs-design and would settle the row without building it.
+    if (cfg.scout && !isRetry && !isOwnerRow(row.id)) {
       Object.assign(worker, { status: "working", row: row.id, label: row.label, tier: scoutTier.name, startedAt: Date.now(), activity: [], turns: 0, files: [], likely: files });
       logTail(worker, `scout ${row.id}`);
       const s = await runAgent(worker, row, scoutTier, "", order, ctx);
-      state.totals.cost += s.cost ?? 0; rowCost += s.cost ?? 0;
+      rowCost += addCost(s.cost);
       state.totals.in += (s.usage?.input_tokens ?? 0) + (s.usage?.cache_read_input_tokens ?? 0) + (s.usage?.cache_creation_input_tokens ?? 0);
       state.totals.out += s.usage?.output_tokens ?? 0; state.totals.cached += s.usage?.cache_read_input_tokens ?? 0;
       // A scout killed by Stop/Park fell through into waitForGreen's cargo check before noticing the stop.
       if (state.stop || parked.has(row.id)) { active.delete(row.id); worker.child = null; logTail(worker, "stopped after scout; not recorded"); if (state.stop) break; continue; }
       const verdict = parseScout(s.text);
-      if (limit.test((s.error || "") + " " + (s.text || ""))) { active.delete(row.id); retry.set(row.id, tierIndex); retry.set(row.id + ":note", ""); state.paused = "usage limit hit (scout)"; continue; }
+      if (limit.test((s.error || "") + " " + (s.text || ""))) { active.delete(row.id); retry.set(row.id, tierIndex); retry.set(row.id + ":note", note); pauseForLimit((s.error || "") + " " + (s.text || ""), "scout"); continue; }
       // Cheap models over-block: a needs-design verdict must cite an explicit design marker, else build.
       if (verdict?.verdict === "needs-design" && !/proposal|proposed|undecided|open question|tbd|design decision|owner decision|protocol|lore|proper noun|['"“]/i.test(verdict.evidence ?? "")) verdict.verdict = "build";
       if (verdict?.verdict === "already-implemented" || verdict?.verdict === "needs-design") {
@@ -678,6 +1327,8 @@ async function workLoop(worker) {
       if (verdict?.verdict === "build") note = `Scout (read-only) says edit: ${(verdict.files ?? []).join(", ")}. Plan: ${String(verdict.plan ?? "").slice(0, 500)} Start from these files; skip broad exploration.`;
       if (verdict?.verdict === "build" && cfg.haikuData && tierIndex === 0 && dataOnly(verdict.files)) tier = dataTier;
     }
+    // Fable rows build (and continue) on Fable; wire passes stay on the cheap wire tier.
+    if (!wiring && isFableRow(row.id)) tier = isOwnerRow(row.id) ? ownerTier : fableTier;
     await waitForGreen(worker);
     if (state.stop) { active.delete(row.id); break; }
     // Live coordination context: what peers are editing now and what already landed in these files.
@@ -704,7 +1355,7 @@ async function workLoop(worker) {
     worker.child = null;
     if (state.stop && !out.ok) { logTail(worker, "stopped mid-row; not recorded"); break; }
     const tokens = (out.usage?.input_tokens ?? 0) + (out.usage?.cache_read_input_tokens ?? 0) + (out.usage?.cache_creation_input_tokens ?? 0);
-    state.totals.in += tokens; state.totals.out += out.usage?.output_tokens ?? 0; state.totals.cost += out.cost ?? 0; rowCost += out.cost ?? 0;
+    state.totals.in += tokens; state.totals.out += out.usage?.output_tokens ?? 0; rowCost += addCost(out.cost);
     state.totals.cached += out.usage?.cache_read_input_tokens ?? 0;
     const parsed = parseResult(out.text);
     const entry = { id: row.id, label: row.label, tier: tier.name, at: Date.now(), ms: Date.now() - worker.startedAt, files: parsed?.files?.length ? parsed.files : out.files,
@@ -712,13 +1363,15 @@ async function workLoop(worker) {
       turns: worker.turns, cached: out.usage?.cache_read_input_tokens ?? 0, out: out.usage?.output_tokens ?? 0,
       wired: parsed?.wired, entry: parsed?.entry, why: parsed?.why, tests: parsed?.tests, estimated: out.estimated || undefined, denied: out.denied || undefined };
     if (limit.test(out.error || out.text || "")) {
-      // Sleep until the provider's stated reset instead of relaunching failing agents every 10 minutes.
-      const until = limitResetAt(out.error || out.text || "");
-      state.paused = "usage limit hit; resumes " + new Date(until).toLocaleString();
-      state.resumeAt = until;
-      retry.set(row.id, tierIndex); retry.set(row.id + ":note", "");
-      clearTimeout(resumeTimer);
-      resumeTimer = setTimeout(() => { state.paused = null; state.resumeAt = null; }, Math.max(60_000, until - Date.now()));
+      // Sleep until the provider's stated reset instead of relaunching failing agents every 10 minutes. The row
+      // keeps its note (scout plan, design): it used to come back with none and pay for a second scout.
+      retry.set(row.id, tierIndex); retry.set(row.id + ":note", note.split(" Peers editing now")[0]);
+      // A Fable limit (weekly) is that model's alone: park Fable rows until its reset and keep the cheap
+      // tiers (sonnet proof, haiku wire) working. 2026-11-20 one Fable limit idled all five workers for days.
+      if (tier.model === cfg.fable && cfg.fable !== cfg.sonnet) {
+        state.fableUntil = limitResetAt(out.error || out.text || "");
+        event(`fable limit; Fable rows wait until ${new Date(state.fableUntil).toLocaleString()}, other tiers continue`);
+      } else pauseForLimit(out.error || out.text || "", "builder");
       logTail(worker, "paused: usage limit");
       continue;
     }
@@ -727,7 +1380,7 @@ async function workLoop(worker) {
     if (entry.status === "already-implemented" && (wiring || continuing)) {
       // A follow-up pass found the slice already reachable (wire) or nothing left to add (continue): keep the
       // landed result, mark it wired, and stop further passes of that kind.
-      const kept = { ...prior, wired: true, entry: entry.entry ?? prior?.entry, wirePass: true, cont: continuing ? cfg.maxCont : prior?.cont, final: true };
+      const kept = { ...prior, wired: true, entry: entry.entry ?? prior?.entry, wirePass: true, cont: continuing ? cfg.maxCont : prior?.cont, contDone: continuing || prior?.contDone, final: true };
       record({ ...entry, final: false, summary: (continuing ? "continue pass: " : "wire pass: ") + entry.summary });
       finished.set(row.id, kept); appendFileSync(resultsFile, JSON.stringify(kept) + "\n"); persist(); continue;
     }
@@ -764,8 +1417,12 @@ async function workLoop(worker) {
       entry.cont = (prior?.cont ?? 0) + 1; entry.wirePass = prior?.wirePass;
       if (!good) {
         record({ ...entry, status: "blocked", summary: `continue pass ${entry.cont}: ` + entry.summary, final: false });
-        finished.set(row.id, { ...prior, cont: cfg.maxCont });
-        appendFileSync(resultsFile, JSON.stringify({ ...prior, cont: cfg.maxCont, final: true }) + "\n");
+        // A pass that edited nothing because a peer held the file is not the end of the row (ENG-VOX-10 lost
+        // its remaining slices to an ENG-MESH-10 run). It waits 15 minutes and tries again, three times at most.
+        const peerBusy = !entry.files.length && (prior?.contSkips ?? 0) < 3 && /\bpeers?\b|being edited|editing (?:it |this |that |them )?(?:right )?now|another agent|concurrent/i.test(entry.summary ?? "");
+        const kept = peerBusy ? { ...prior, contAfter: Date.now() + 15 * 60_000, contSkips: (prior?.contSkips ?? 0) + 1 } : { ...prior, cont: cfg.maxCont, contDone: true };
+        finished.set(row.id, kept);
+        appendFileSync(resultsFile, JSON.stringify({ ...kept, final: true }) + "\n");
         persist(); continue;
       }
       entry.files = [...new Set([...(prior?.files ?? []), ...entry.files])];
@@ -788,7 +1445,7 @@ async function workLoop(worker) {
       record({ ...entry, status: "escalated", final: false, summary: "retrying narrower on sonnet: " + entry.summary });
       continue;
     }
-    if (!good && !hardBlock && !repeat && entry.files.length && tierIndex < tiers.length - 1) {
+    if (!good && !hardBlock && !repeat && entry.files.length && tier !== fableTier && tierIndex < tiers.length - 1) {
       const plan = note.startsWith("Scout") ? " " + note.split(" Peers editing now")[0] : "";
       retry.set(row.id, tierIndex + 1); retry.set(row.id + ":note", (`${tier.name} reported: ${entry.summary}`.slice(0, 300) + plan).slice(0, 1200));
       record({ ...entry, status: "escalated", final: false });
@@ -799,9 +1456,31 @@ async function workLoop(worker) {
     // Circuit breaker: a run of rows that do not land means something systemic (red tree, bad prompt,
     // provider trouble). Pause and say so instead of spending the budget on it.
     failStreak = good ? 0 : failStreak + 1;
+    if (good) breakerTrips = 0;
     if (cfg.breaker > 0 && failStreak >= cfg.breaker && !state.paused) {
-      state.paused = `circuit breaker: ${failStreak} rows in a row did not land. Read the supervisor log and lessons, then press Resume`;
+      const why = `circuit breaker: ${failStreak} rows in a row did not land`;
+      state.paused = why + ". Checking the tree";
       event(state.paused); failStreak = 0;
+      // Self-repair. The usual systemic cause is a tree that stopped compiling: if the checkpoint finds that and
+      // repairs it, the swarm resumes by itself. If the tree compiled all along the cause is elsewhere (prompt,
+      // provider), and spending on it without the owner is what the breaker exists to prevent.
+      checkpoint("circuit breaker").then(r => {
+        if (!String(state.paused ?? "").startsWith("circuit breaker")) return;
+        if (r?.repaired && r.ok) { state.paused = null; event("circuit breaker: the tree was red and is repaired; resumed"); return; }
+        if (r && !r.ok) { state.paused = why + ". The tree does not compile and the repair did not fix it. Fix it, then press Resume"; event(state.paused); return; } // the health gate resumes once it compiles
+        // Tree compiles: the cause is elsewhere (prompt, provider, a run of design blocks). An unattended swarm used
+        // to stay paused for good here. It now resumes after a cooldown that doubles per trip (30 min .. 8 h) and
+        // resets when a row lands, so a lasting fault costs at most `breaker` rows per cooldown.
+        const wait = Math.min(8 * 3600_000, 30 * 60_000 * 2 ** breakerTrips++);
+        const at = new Date(Date.now() + wait).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+        state.paused = why + `. The tree compiles, so the cause is elsewhere; read the supervisor log and lessons. Resumes by itself at ${at}, or press Resume`;
+        event(state.paused);
+        clearTimeout(breakerTimer);
+        breakerTimer = setTimeout(() => {
+          if (!String(state.paused ?? "").startsWith("circuit breaker") || breakerRed()) return;
+          state.paused = null; event("circuit breaker: cooldown over; resumed");
+        }, wait);
+      });
     }
     if (good) {
       if (wiring) state.totals.wired = (state.totals.wired ?? 0) + 1;
@@ -811,19 +1490,25 @@ async function workLoop(worker) {
       const flat = v => String(v ?? "").replace(/\s+/g, " ").trim();
       try { appendFileSync(path.join(dir, "changes.md"), `${row.id} | ${entry.files.join(", ")} | ${flat(entry.summary)} | ${flat(entry.tests) || "-"}\n`); } catch { /* best effort */ }
       if (entry.wired === false || (entry.wired === undefined && UNWIRED.test(entry.summary ?? ""))) { state.totals.scaffold = (state.totals.scaffold ?? 0) + 1; entry.unwired = true; }
+      if (!parsed?.scenario && prior?.scenario) entry.scenario = prior.scenario; // a wire/continue pass keeps the row's proof
+      let proofWhy = parsed?.scenario ? null : entry.scenario || /no observable effect/i.test(entry.summary ?? "") ? null : "no scenario returned";
       if (parsed?.scenario) {
-        const bad = validateScenario(parsed.scenario);
-        if (bad) event(`${row.id}: scenario not stored (${bad})`);
+        const bad = validateScenario(parsed.scenario, ENGINE_OPS);
+        if (bad) { proofWhy = bad; event(`${row.id}: scenario not stored (${bad})`); }
         else try {
           const f = scenarioFile(row.id, parsed.scenario, entry.summary);
           mkdirSync(scenarioPath, { recursive: true });
           writeFileSync(path.join(scenarioPath, f.name), f.body);
           entry.scenario = "tools/axiom-dev/scenarios/" + f.name; idleProved = false;
-        } catch (error) { event(`${row.id}: scenario not stored (${String(error.message).slice(0, 80)})`); }
+        } catch (error) { proofWhy = "not stored"; event(`${row.id}: scenario not stored (${String(error.message).slice(0, 80)})`); }
       }
+      // Send back once: a read-only proof pass writes the scenario before new work starts (proofCandidates).
+      if (proofWhy && cfg.prove) Object.assign(entry, { needsProof: true, proofWhy });
+      if (entry.scenario) state.totals.scenarios = (state.totals.scenarios ?? 0) + 1;
       try {
         const ledger = loadLedger();
         writeStatus(row.id, { status: "building", evidence: entry.files.slice(0, 6), note: "swarm: " + entry.summary.slice(0, 160) }, ledger.revision, new Set(ledger.rows.map(r => r.id)));
+        ledgerChanged();
       } catch (error) { entry.ledger = "not recorded: " + error.message.slice(0, 80); }
     } else state.totals.blocked++;
     record(entry);
@@ -844,22 +1529,29 @@ async function checkpoint(why) {
     // content tables), so a quiet tree is not needed. Draining used to idle all five workers for the length of
     // the slowest run on every checkpoint. Errors inside files a running agent is editing are its work in
     // progress and stay with it; only orphaned errors go to the repair agent.
-    let result = await sharedCheck(APP);
+    let result = await sharedCheck(APP), repaired = false;
     for (let round = 1; !result.ok && result.errors.length && round <= 2 && !state.stop; round++) {
       const editing = state.workers.filter(w => w.child).flatMap(w => w.files ?? []);
       const orphaned = result.errors.filter(e => !editing.some(f => e.replaceAll("\\", "/").includes(f)));
       if (!orphaned.length) { event(`checkpoint: ${result.errors.length} error(s), all in files agents are editing now; left to them`); break; }
-      event(`checkpoint: ${orphaned.length} orphaned error(s); repair agent round ${round}`);
+      // A red tree stops every builder, so the second round is the one place the strongest model is the cheap
+      // choice: round 1 stays on the builder tier (most breaks are a missed call site), and only what it could
+      // not fix goes to Fable, once, under the same cost cap as a Fable row. --no-fable-repair keeps both cheap.
+      const repairTier = round === 1 || !cfg.fableRepair ? tiers[0] : { ...fableTier, name: "fable·repair" };
+      event(`checkpoint: ${orphaned.length} orphaned error(s); repair agent round ${round} on ${repairTier.name}`);
       const fixer = { id: "fix", activity: [], turns: 0, files: [] };
-      const out = await runAgent(fixer, { id: "CHECKPOINT", label: "Fix compile errors" }, tiers[0], "NOT a feature row. The tree no longer compiles or a content table no longer loads; fix ONLY these errors with the smallest edits, add no behaviour, never revert another agent's work. Report status building with the files you changed.", orphaned.join("\n").slice(0, 3500));
-      state.totals.cost += out.cost ?? 0;
+      const out = await runAgent(fixer, { id: "CHECKPOINT", label: "Fix compile errors" }, repairTier, "NOT a feature row. The tree no longer compiles or a content table no longer loads; fix ONLY these errors with the smallest edits, add no behaviour, never revert another agent's work. Report status building with the files you changed.", orphaned.join("\n").slice(0, 3500));
+      addCost(out.cost);
+      repaired = true;
       result = await sharedCheck(APP);
     }
     event(result.ok ? "checkpoint: tree compiles and tables load" : `checkpoint: still failing (${result.errors.length} errors); see the shared check`);
     state.lastCheckpoint = { at: Date.now(), ok: result.ok, errors: result.errors.slice(0, 5) };
     // The checkpoint just compiled the same package the health gate checks; share it instead of re-checking.
-    if (result.ok || result.errors.length) Object.assign(health, { ok: result.ok, at: Date.now(), errors: result.errors.slice(0, 6) }), state.health = { ok: health.ok, at: health.at, errors: health.errors };
+    if (result.ok || result.errors.length) setHealth(result.ok, result.errors);
     if (result.ok) await prove(/proof|supervisor/.test(why), /idle/.test(why));
+    // The caller learns whether the tree is green and whether a repair agent had to run (circuit breaker).
+    return { ok: result.ok, repaired };
   } finally { state.checkpointing = null; }
 }
 
@@ -893,11 +1585,34 @@ function buildEngine(timeoutMs = 40 * 60_000) {
 }
 function sendBack(id, entry, summary, note, files = []) {
   const base = { id, label: entry.label, tier: "engine·proof", at: Date.now(), ms: 0, files, log: entry.log, tokens: 0, cost: 0 };
-  if (proofRetried.has(id)) { record({ ...base, status: "blocked", summary: summary.replace("sent back", "twice"), final: true }); state.totals.blocked++; return; }
+  if (proofRetried.has(id)) {
+    // Blocked in memory too, as a restart would load it: the landed entry stayed pending, so every later proof
+    // run re-ran the same failing scenario and recorded the row as blocked again.
+    const blocked = { ...base, status: "blocked", summary: summary.replace("sent back", "twice"), final: true };
+    record(blocked); finished.set(id, blocked); state.totals.blocked++; return;
+  }
   proofRetried.add(id);
   record({ ...base, status: "escalated", summary, final: false });
-  brain.learn({ id, label: entry.label, status: "failed", summary: "engine mismatch: " + summary }).catch(() => {});
+  brain.learn({ id, label: entry.label, status: "failed", summary: "engine mismatch: " + summary }, "proof").catch(() => {});
   requeue(id, 0, note);
+}
+// The scenario asked the engine the wrong question (a field the reply does not have, a request the engine
+// refused). The landed code is not at fault, so no builder is paid to "fix" it and the row is not blocked:
+// the scenario file is dropped and the read-only proof pass writes a new one with the engine's answer in hand.
+// One rewrite per row; after a second mismatch the row stays landed, marked as having no working proof.
+function rescript(id, entry, action) {
+  for (const f of action.files) { try { rmSync(path.join(root, f), { force: true }); } catch { /* already gone */ } }
+  taggedCache.at = 0;
+  const detail = action.summary.replace(/^live proof failed[^:]*:\s*/, "").slice(0, 260);
+  const again = !entry.proofRescripted;
+  const kept = { ...entry, scenario: undefined, proofPass: again ? undefined : true, proofRetried: undefined, final: true,
+    ...(again ? { needsProof: true, proofRescripted: true, proofWhy: "it ran in the built engine and the reply did not have what it expected: " + detail }
+      : { needsProof: undefined, noProof: ("two scenarios did not match the engine's replies: " + detail).slice(0, 200) }) };
+  finished.set(id, kept);
+  appendFileSync(resultsFile, JSON.stringify(kept) + "\n");
+  record({ id, label: entry.label, tier: "engine·proof", at: Date.now(), ms: 0, files: action.files, log: entry.log, tokens: 0, cost: 0, status: "escalated", final: false,
+    summary: (again ? "scenario did not match the engine; rewriting it: " : "no working scenario after a rewrite; row stays landed: ") + detail });
+  if (again) brain.learn({ id, label: entry.label, status: "failed", summary: "engine mismatch: " + detail }, "proof").catch(() => {});
 }
 async function prove(manual = false, idle = false) {
   if (!cfg.prove || state.stop) return;
@@ -909,8 +1624,9 @@ async function prove(manual = false, idle = false) {
     return;
   }
   // A debug engine build writes gigabytes; never start one on a nearly full disk.
-  const free = brain.freeGb();
-  if (free < 8) { state.lastProof = { at: Date.now(), ok: false, note: `skipped: ${free.toFixed(1)} GB free, the engine build needs 8` }; event(`proof: skipped, only ${free.toFixed(1)} GB free (needs 8 for the engine build)`); return; }
+  // Reclaim stale incremental caches first: the guard only reclaimed below 3.5 GB, so 3.5-8 GB free skipped every proof.
+  const free = brain.ensureFree(8);
+  if (free < 8) { const gb = (Math.floor(free * 10) / 10).toFixed(1); state.lastProof = { at: Date.now(), ok: false, note: `skipped: ${gb} GB free after reclaiming caches, the engine build needs 8` }; event(`proof: skipped, only ${gb} GB free after reclaim (needs 8 for the engine build)`); return; }
   const run = [...new Map([...pending.values()].flat().map(s => [s.id, s])).values()];
   state.checkpointing = `building the engine to prove ${pending.size} row(s)`;
   event("proof: " + state.checkpointing);
@@ -942,18 +1658,36 @@ async function prove(manual = false, idle = false) {
     event(`proof: assets/${blame.table}.ron does not load; sent back ${blame.ids.join(", ")}`);
     persist(); return;
   }
-  let pass = 0, fail = 0;
+  let pass = 0, fail = 0, rewrite = 0;
   for (const action of settleProof(pending, results, proofRetried)) {
     const entry = finished.get(action.id);
     if (action.kind === "proven") {
       proven.add(action.id); pass++; state.totals.proven++; entry.proven = true;
       record({ id: action.id, label: entry.label, tier: "engine·proof", at: Date.now(), ms: 0, files: action.files, log: entry.log, tokens: 0, cost: 0, status: "proven", summary: action.summary, final: true });
-    } else { fail++; sendBack(action.id, entry, action.summary, action.note ?? action.summary, action.files); }
+      // A passing scenario in the built engine is what "playable" means on the board. Proof only ever wrote the
+      // swarm's own result, so 62 proven rows still read "building" and the board showed 0 playable.
+      promotePlayable(action.id, action.files, action.summary);
+    } else if (action.fault === "scenario" && action.files.every(f => path.basename(f).startsWith("swarm-"))) { rewrite++; rescript(action.id, entry, action); }
+    else { fail++; sendBack(action.id, entry, action.summary, action.note ?? action.summary, action.files); }
   }
   state.lastProof = { at: Date.now(), ok: fail === 0, pass, fail };
-  event(`proof: ${pass} row(s) proven, ${fail} sent back`);
+  event(`proof: ${pass} row(s) proven, ${fail} sent back${rewrite ? `, ${rewrite} scenario(s) to rewrite` : ""}`);
   persist();
 }
+
+function promotePlayable(id, files, summary) {
+  try {
+    const ledger = loadLedger();
+    const row = ledger.rows.find(r => r.id === id);
+    if (!row || /^(playable|verified|parked)$/.test(row.status)) return;
+    writeStatus(id, { status: "playable", evidence: (files ?? []).filter(f => existsSync(path.join(root, String(f).split("#")[0]))).slice(0, 6), note: "swarm proof: " + String(summary ?? "").slice(0, 160) }, ledger.revision, new Set(ledger.rows.map(r => r.id)));
+    ledgerChanged();
+  } catch (error) { event(`${id}: proven but not marked playable (${String(error.message).slice(0, 80)})`); }
+}
+// Rows proven before promotion existed: settle them once at start-up.
+setTimeout(() => {
+  for (const [id, r] of finished) if (r.status === "proven" || r.proven) { proven.add(id); promotePlayable(id, r.files, "proven earlier"); }
+}, 2000).unref?.();
 
 // ---- supervisor read models (bounded, read-only) ----
 const resultFor = id => state.results.find(r => r.id === id) ?? finished.get(id);
@@ -1008,14 +1742,25 @@ function readBody(req) {
   return new Promise(resolve => { let b = ""; req.on("data", c => { b += c; if (b.length > 8192) req.destroy(); }); req.on("end", () => { try { resolve(JSON.parse(b || "{}")); } catch { resolve({}); } }); });
 }
 const ROW_ID = /^[\w.-]{1,40}$/;
+const DESIGN_KEY = /^(?:owner:)?[\w.-]{1,40}$/;
 
-const pageUrl = new URL("./swarm.html", import.meta.url);
+const pageUrl = new URL("./swarm.html", import.meta.url); // the previous dashboard stays at /classic
 // peek() reads the whole ledger, so the push loop shares one result for ten seconds.
 let peekCache = { at: 0, rows: [] };
 const peekCached = () => { if (Date.now() - peekCache.at > 10_000) peekCache = { at: Date.now(), rows: peek() }; return peekCache.rows; };
 // The queue is computed first: it also refreshes state.deadOwners, which the spread then carries.
+// The design stage as the page shows it: what runs now, what waits, the hourly cap and the latest designs.
+const designView = () => (countDesignWaiting(), { on: !!cfg.decide, cap: cfg.decideMax, hour: designsThisHour(), waiting: designWaiting, tier: designTier.name,
+  running: [...designing].map(([key, d]) => ({ key, kind: d.kind, since: d.since, doing: d.slot?.activity?.at(-1)?.text ?? "" })),
+  recent: designs.all().filter(d => d.at).sort((a, b) => b.at - a.at).slice(0, 6)
+    .map(d => ({ id: d.id, kind: d.kind ?? "row", verdict: d.verdict, text: String(d.text ?? "").slice(0, 200), at: d.at })) });
+// `idle` is set only when nothing is queued and no agent works, so the page can say why instead of "queue empty".
+function idleView(queue) {
+  if (queue.length || state.workers.some(w => w.status === "working" || w.status === "waiting for green build")) return null;
+  try { return idleReason(); } catch { return null; }
+}
 const stateView = (queue = peekCached()) => ({ ...state, rev, now: Date.now(), workers: state.workers.map(({ child, ...w }) => w), queue,
-  parked: [...parked], lessons: brain.lessons().slice(0, 12), families: Object.keys(FAMILIES) });
+  parked: [...parked], lessons: brain.lessons().slice(0, 12), families: Object.keys(FAMILIES), design: designView(), idle: idleView(queue) });
 // One broadcaster for every open page. The signature is rev.act.workers: pages fetch the full state
 // when rev moves and the light view otherwise. Nothing is serialised to decide whether to send.
 const listeners = new Set();
@@ -1074,7 +1819,7 @@ const server = createServer((req, res) => {
   } else if (url === "/plan") {
     // Buildout plan: rows being built, the next rows and why they rank there, due supervisor actions, milestone tally.
     let body;
-    try { body = planView({ ledger: loadLedger(), state, queue: peekCached(), family: cfg.family }); }
+    try { const queue = peekCached(); body = planView({ ledger: ledgerNow(), state, queue, family: cfg.family, design: designView(), idle: idleView(queue) }); }
     catch (error) { body = { error: String(error.message ?? error).slice(0, 200) }; }
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body));
   } else if (url === "/check") {
@@ -1098,6 +1843,17 @@ const server = createServer((req, res) => {
       engineCache = { at: Date.now(), body: JSON.stringify(body) };
     }
     res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }); res.end(engineCache.body);
+  } else if (url === "/designs") {
+    // Every design and deferral so far, newest first, for the owner to read and overrule.
+    const list = designs.all().filter(d => d.at).sort((a, b) => b.at - a.at).map(d => ({ id: d.id, kind: d.kind ?? "row", verdict: d.verdict, at: d.at,
+      text: String(d.text ?? "").slice(0, 600), cost: d.cost ?? 0, version: d.v ?? 1, round: d.round ?? 1, full: !!designs.read(d.id),
+      state: active.has(d.id) ? "building" : retry.has(d.id) ? "queued" : finished.get(d.id)?.status ?? "" }));
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify({ designs: list, view: designView() }));
+  } else if (url.startsWith("/design/")) {
+    const key = decodeURIComponent(url.slice(8)), d = DESIGN_KEY.test(key) ? designs.get(key) : null;
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+    res.end(d ? designs.read(key) || `${d.verdict === "defer" ? "Left for the owner" : "Decision"}: ${d.text ?? ""}` : "unknown design");
   } else if (/^\/prompt\/[\w.-]{1,40}$/.test(url)) {
     res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }); res.end(promptFor(url.slice(8)));
   } else if (url.startsWith("/log/")) {
@@ -1117,13 +1873,18 @@ const server = createServer((req, res) => {
     readBody(req).then(b => {
       if (Number.isFinite(b.workers)) setWorkers(b.workers);
       if (typeof b.family === "string" && (b.family === "all" || b.family in FAMILIES)) cfg.family = b.family;
-      if (Number.isFinite(b.budget) && b.budget >= 0) { cfg.budget = b.budget; if (state.paused?.startsWith("budget cap") && (!b.budget || state.totals.cost < b.budget)) state.paused = null; }
-      for (const k of ["scout", "readyOnly", "context", "prove", "wire"]) if (typeof b[k] === "boolean") cfg[k] = b[k];
+      if (Number.isFinite(b.budget) && b.budget >= 0) { cfg.budget = b.budget; if (state.paused?.startsWith("budget cap") && !overBudget()) state.paused = null; }
+      if (b.resetSpend === true) { spend.total = 0; spend.since = Date.now(); saveSpend(); if (state.paused?.startsWith("budget cap")) state.paused = null; }
+      if (Number.isFinite(b.budgetWindowH) && b.budgetWindowH >= 0 && b.budgetWindowH <= 720) { cfg.budgetWindowH = b.budgetWindowH; rollSpend(); }
+      for (const k of ["scout", "readyOnly", "context", "prove", "wire", "decide", "designEpics"]) if (typeof b[k] === "boolean") cfg[k] = b[k];
+      if (Number.isFinite(b.decideMax) && b.decideMax >= 0 && b.decideMax <= 200) cfg.decideMax = b.decideMax;
+      peekCache.at = 0; lastRefill = 0; // a changed family or toggle shows in the queue at once
       if (Number.isFinite(b.exploreTurns) && b.exploreTurns >= 8 && b.exploreTurns <= 90) cfg.exploreTurns = b.exploreTurns;
       if (Number.isFinite(b.checkpointEvery) && b.checkpointEvery >= 0 && b.checkpointEvery <= 100) cfg.checkpointEvery = b.checkpointEvery;
       if (Number.isFinite(b.proveBatch) && b.proveBatch >= 1 && b.proveBatch <= 50) cfg.proveBatch = b.proveBatch;
       if (Number.isFinite(b.breaker) && b.breaker >= 0 && b.breaker <= 50) cfg.breaker = b.breaker;
-      event(`settings: ${JSON.stringify(b).slice(0, 160)}`); persist();
+      if (Number.isFinite(b.proofPerHour) && b.proofPerHour >= 0 && b.proofPerHour <= 120) cfg.proofPerHour = b.proofPerHour;
+      event(`settings: ${JSON.stringify(b).slice(0, 160)}`); saveSettings(); persist();
       res.writeHead(204); res.end();
     });
     return;
@@ -1135,41 +1896,84 @@ const server = createServer((req, res) => {
     else if (verb === "pin") { if (!priority.includes(id)) priority.unshift(id); }
     else if (verb === "unpin") { const at = priority.indexOf(id); if (at >= 0) priority.splice(at, 1); }
     event(`${verb} ${id}`);
+    peekCache.at = 0;
+    res.writeHead(204); return res.end();
+  } else if (req.method === "POST" && url.startsWith("/ctl/redesign/")) {
+    // The owner overruled a design or wants a deferral looked at again: forget it so the lead designs it afresh.
+    const key = decodeURIComponent(url.slice(14));
+    if (!DESIGN_KEY.test(key)) { res.writeHead(400); return res.end(); }
+    designs.forget(key); designTries.delete(key); retry.delete(key); lastRefill = 0;
+    event(`redesign ${key}`);
     res.writeHead(204); return res.end();
   } else if (req.method === "POST" && url.startsWith("/ctl/")) {
     const action = url.slice(5);
-    if (action === "pause") state.paused = "paused by supervisor";
-    else if (action === "resume") state.paused = null;
+    if (action === "pause") { state.paused = `paused from the dashboard at ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`; event(state.paused); }
+    else if (action === "resume") { if (state.paused) event("resumed from the dashboard"); state.paused = null; state.resumeAt = null; clearTimeout(resumeTimer); }
     else if (action === "checkpoint") checkpoint("requested by supervisor");
     else if (action === "prove") { idleProved = false; checkpoint("proof requested by supervisor"); }
     else if (action === "requeue") { for (const [id, r] of [...finished]) if ((r.status === "blocked" || r.status === "failed") && !isDesignBlock(r)) requeue(id, 0, `Previously blocked: ${String(r.summary).slice(0, 200)}`); }
-    else if (action === "stop") { state.stop = true; state.userStop = true; for (const w of state.workers) w.child?.kill(); killProof(); }
+    else if (action === "stop") { state.stop = true; state.userStop = true; for (const w of state.workers) w.child?.kill(); for (const d of designing.values()) d.slot?.child?.kill(); killProof(); killChecks(); }
     else if (action === "add" && state.workers.length < 16) {
       if (state.stop && !state.userStop) state.stop = false; // revive after an automatic stop
       const w = { id: "w" + (state.workers.length + 1), status: "idle", row: null, activity: [], turns: 0, files: [] };
       state.workers.push(w); work(w);
     } else if (action === "drop") { const w = [...state.workers].reverse().find(x => x.status === "idle" || x.status === "working"); if (w && state.workers.length > 1) w.retire = true; }
     else if (action.startsWith("kill-")) state.workers.find(w => w.id === action.slice(5))?.child?.kill();
+    else if (action === "restart" && !state.restartPending) {
+      // Graceful restart to load edited supervisor code: nothing new starts, running rows and designs finish,
+      // state is saved, then exit 75 so AxiomSwarm.cmd's loop starts the new code and results resume.
+      state.restartPending = Date.now(); event("restart requested: running rows finish first, then the supervisor reloads"); persist();
+      const timer = setInterval(() => {
+        const busy = state.workers.some(w => w.status === "working" || w.status === "waiting for green build") || designing.size || state.checkpointing;
+        if (busy) return;
+        clearInterval(timer); event("restarting now"); persist();
+        if (state.paused) try { writeFileSync(keepPausedFile, JSON.stringify({ paused: state.paused })); } catch { /* restarts unpaused */ }
+        setTimeout(() => process.exit(75), 300);
+      }, 2000);
+    } else if (action === "restart-cancel") { state.restartPending = null; event("restart cancelled"); }
     res.writeHead(204); res.end();
+  } else if (url === "/classic") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(readFileSync(new URL("./swarm-classic.html", import.meta.url), "utf8"));
   } else { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(readFileSync(pageUrl, "utf8")); }
 });
 function peek() {
+  const own = peekIn();
+  if (own.length || !cfg.familyFallback || cfg.family === "all") return own;
+  scopeAll = true;
+  try { return peekIn().map(q => ({ ...q, label: "other family: " + q.label })); } finally { scopeAll = false; }
+}
+function peekIn() {
   try {
-    const ledger = loadLedger();
+    const ledger = ledgerNow();
     const { rows, pushed } = eligible(ledger);
     const fresh = [...pushed, ...nextRows(rows, 12).filter(r => !priority.includes(r.id))].slice(0, 12)
-      .map(r => ({ id: r.id, label: r.label, tier: cfg.scout && !retry.has(r.id) ? scoutTier.name : tiers[Math.min(tiers.length - 1, retry.get(r.id) ?? 0)].name, pinned: priority.includes(r.id) }));
+      .map(r => ({ id: r.id, label: (designs.decided(r.id) ? "designed: " : "") + r.label, tier: cfg.scout && !retry.has(r.id) && !designs.decided(r.id) && !isOwnerRow(r.id) ? scoutTier.name : isOwnerRow(r.id) ? ownerTier.name : isFableRow(r.id) ? fableTier.name : tiers[Math.min(tiers.length - 1, retry.get(r.id) ?? 0)].name, pinned: priority.includes(r.id) }));
     // When new rows run short the workers take wire passes; show them so the queue is not reported empty.
     const wires = fresh.length < 12 ? wireCandidates(ledger).slice(0, 12 - fresh.length).map(w => ({ id: w.row.id, label: "wire: " + w.row.label, tier: cfg.wireModel === "haiku" ? wireTier.name : tiers[0].name + "·wire", pinned: false })) : [];
     const conts = fresh.length + wires.length < 12 ? contCandidates(ledger).slice(0, 12 - fresh.length - wires.length).map(c => ({ id: c.row.id, label: "continue: " + c.row.label, tier: tiers[0].name + "·cont", pinned: false })) : [];
-    return [...fresh, ...wires, ...conts];
+    // Same order pick() uses: fresh proof passes first, backfill after wire passes.
+    const asItem = p => ({ id: p.row.id, label: "proof: " + p.row.label, tier: proofTier.name, pinned: false });
+    const freshProofs = proofCandidates(ledger, { fresh: true }).slice(0, 3).map(asItem);
+    const backfill = proofCandidates(ledger, { fresh: false, idle: !fresh.length && !wires.length && !conts.length }).slice(0, 3).map(asItem);
+    // A worker paused mid-row (usage limit) still shows that row as its own; listing it again here read as a loop.
+    const held = new Set(state.workers.filter(w => w.row && w.status !== "idle").map(w => w.row));
+    return [...freshProofs, ...fresh, ...wires, ...backfill, ...conts].filter(r => !held.has(r.id)).slice(0, 14);
   } catch { return []; }
 }
 
-if (flag("dry")) { console.log(JSON.stringify({ cfg, queue: peek() }, null, 1)); process.exit(0); }
+if (flag("dry")) {
+  // No model, no lock, no server: the queue, what the design stage would take next and why nothing runs.
+  const queue = peek(), found = findDesignTargets(ledgerNow(), 8);
+  designWaiting = found.counts;
+  console.log(JSON.stringify({ cfg, queue, requeuedAtStart: [...retry.keys()].filter(k => !k.endsWith(":note")),
+    design: { waiting: found.counts, next: found.items.map(i => ({ key: i.key, kind: i.kind, rows: i.rows?.length, label: i.row?.label ?? i.system?.name })) },
+    idle: queue.length ? null : idleReason().text }, null, 1));
+  process.exit(0);
+}
 server.listen(cfg.port, "127.0.0.1", () => console.log(`swarm ui http://127.0.0.1:${cfg.port}  workers=${cfg.workers} family=${cfg.family}`));
 for (let i = 1; i <= cfg.workers; i++) state.workers.push({ id: "w" + i, status: "idle", row: null, activity: [], turns: 0, files: [] });
 setInterval(persist, 5000);
+// Workers sleep while paused and never reach rollSpend(), so the window also rolls (and unpauses) from here.
+setInterval(rollSpend, 60_000);
 await Promise.all(state.workers.map((w, i) => new Promise(r => setTimeout(r, i * 1500)).then(() => work(w))));
 persist();
 console.log("swarm workers finished", JSON.stringify(state.totals));

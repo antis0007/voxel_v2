@@ -36,11 +36,11 @@ export function staleContent(exe = labExe()) {
 }
 
 /** Sends request objects in order; resolves with one reply per request. */
-export function send(requests, { timeoutMs = 120_000 } = {}) {
+export function send(requests, { timeoutMs = 120_000, exe, cwd = root, signal } = {}) {
   return new Promise((resolve, reject) => {
     // Tables come from disk, so processes.ron and fabrication.ron edits need no rebuild.
-    const drafts = ["processes", "fabrication"].map(name => `--${name}=${path.join(root, "assets", name + ".ron")}`);
-    const child = spawn(labExe(), ["--factory-lab", ...drafts], { cwd: root, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+    const drafts = ["processes", "fabrication"].map(name => `--${name}=${path.join(cwd, "assets", name + ".ron")}`);
+    const child = spawn(exe ?? labExe(), ["--factory-lab", ...drafts], { cwd, signal, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
     let buffer = "";
     const replies = [];
     const timer = setTimeout(() => { child.kill(); reject(new Error(`factory lab timed out after ${replies.length}/${requests.length} replies`)); }, timeoutMs);
@@ -63,6 +63,7 @@ export function send(requests, { timeoutMs = 120_000 } = {}) {
       replies.length === requests.length ? resolve(replies)
         : reject(new Error(`factory lab closed after ${replies.length}/${requests.length} replies`));
     });
+    child.stdin.on("error", error => { clearTimeout(timer); reject(error); });
     child.stdin.end(requests.map(request => JSON.stringify(request)).join("\n") + "\n");
   });
 }
@@ -75,6 +76,26 @@ const TESTS = {
   has: (got, want) => typeof got === "string" ? got.includes(want) : Array.isArray(got) && got.some(entry => same(entry, want)),
   absent: (got, want) => (got === undefined || got === null) === want,
 };
+
+/** One factory tick is 0.25 s; the engine steps at 120 Hz, so a step's `ticks` (sim steps) / 30 = factory ticks. */
+export const STEPS_PER_FACTORY_TICK = 30;
+
+/**
+ * Where a failed machine step actually stood, so a retry fixes the cause instead of guessing: status, progress
+ * against the running recipe and how many factory ticks the step ran. Most "out.X: engine gave null" proofs
+ * on 2026-11-19 were machines still mid-batch because `ticks` was read as recipe ticks (30x too short).
+ */
+export function machineSeen(request, data) {
+  const end = data?.end;
+  if (!end || typeof end !== "object" || !("kind" in end)) return null;
+  const steps = Number(request?.ticks) || 0;
+  const parts = [`${end.kind} status ${JSON.stringify(end.status ?? "")}`];
+  if (end.recipe !== undefined) parts.push(`recipe ${end.recipe} progress ${end.progress ?? 0}`);
+  if (end.in) parts.push(`in ${JSON.stringify(end.in)}`);
+  if (end.out) parts.push(`out ${JSON.stringify(end.out)}`);
+  parts.push(`after ${steps} steps = ${Math.floor(steps / STEPS_PER_FACTORY_TICK)} factory ticks (recipe ticks x${STEPS_PER_FACTORY_TICK} = steps per batch)`);
+  return parts.join(", ");
+}
 
 /** Failed expectations of one reply as [path, test, want, got]. Defaults are omitted by the engine, so absent numbers read as 0. */
 export function check(data, expect = {}) {
@@ -92,8 +113,8 @@ export function check(data, expect = {}) {
   return failures;
 }
 
-export function loadScenarios(filter = () => true) {
-  const dir = path.join(root, scenarioDir);
+export function loadScenarios(filter = () => true, cwd = root) {
+  const dir = path.join(cwd, scenarioDir);
   if (!existsSync(dir)) return [];
   return readdirSync(dir).filter(name => name.endsWith(".json")).sort().map(name => {
     const scenario = JSON.parse(readFileSync(path.join(dir, name), "utf8"));
@@ -103,7 +124,7 @@ export function loadScenarios(filter = () => true) {
 }
 
 /** Runs scenarios in one process. Result rows: {id, file, parity, pass, fail:[[step, path, test, want, got]]}. */
-export async function runScenarios(scenarios) {
+export async function runScenarios(scenarios, options) {
   const requests = [];
   const plan = [];
   for (const scenario of scenarios) {
@@ -115,14 +136,22 @@ export async function runScenarios(scenarios) {
       plan.push({ scenario, index, expect, ok: ok ?? true });
     });
   }
-  const replies = await send(requests);
+  const replies = await send(requests, options);
   const results = new Map(scenarios.map(s => [s.id, { id: s.id, file: s.file, parity: s.parity ?? [], pass: true, fail: [] }]));
   replies.forEach((reply, i) => {
     const step = plan[i];
-    if (!step) return;
+    if (!step) {
+      if (!reply.ok) throw new Error("Factory lab could not reset before the scenario: " + (reply.error ?? "unknown error"));
+      return;
+    }
     const result = results.get(step.scenario.id);
+    const before = result.fail.length;
     if (reply.ok !== step.ok) result.fail.push([step.index, "ok", "eq", step.ok, reply.error ?? reply.ok]);
     else for (const failure of check(reply.data, step.expect)) result.fail.push([step.index, ...failure]);
+    if (result.fail.length > before) {
+      const seen = machineSeen(step.scenario.steps[step.index], reply.data);
+      if (seen) (result.seen ??= {})[step.index] = seen;
+    }
   });
   for (const result of results.values()) result.pass = result.fail.length === 0;
   return [...results.values()];
