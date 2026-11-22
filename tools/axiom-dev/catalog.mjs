@@ -368,7 +368,8 @@ export function mountCatalog(host, ctx) {
         inspector.replaceChildren(el("div", { className: "catalog-empty" }, catalogIcon(section),
           el("h2", {}, "Select " + ({ Items: "an item", Recipes: "a recipe", Biomes: "a biome", Animals: "an animal",
             Deposits: "a deposit", Creatures: "a creature", Locations: "a location", Sprites: "a sprite sheet",
-            Models: "a model", "Hand poses": "a grip", "All files": "a file" }[section]))));
+            Models: "a model", "Hand poses": "a grip", "All files": "a file" }[section])),
+          category === "All files" ? button("Find a file", () => { search.focus(); search.select(); }) : null));
       }
     } catch (error) {
       if (generation === listVersion) list.replaceChildren(el("p", { className: "error" }, error.message));
@@ -461,7 +462,7 @@ export function mountCatalog(host, ctx) {
       const current = selected && keyOf(spec) === keyOf(selected);
       const card = button("", () => openDetail(spec), "", "catalog-tile");
       card.setAttribute("aria-current", String(Boolean(current)));
-      card.setAttribute("aria-label", spec.label);
+      card.setAttribute("aria-label", section === "All files" ? spec.path : spec.label);
       if (spec.kind !== "sprite") card.setAttribute("aria-haspopup", "menu");
       card.oncontextmenu = event => {
         event.preventDefault();
@@ -487,7 +488,8 @@ export function mountCatalog(host, ctx) {
       card.dataset.key = keyOf(spec);
       dragSource(card, "record", card.dataset.key, spec.kind === "item" ? { item: spec.product } : undefined);
       if (spec.kind === "biome") dropTarget(card, ["animal-pin"], (_, key) => dropAnimal(key, spec));
-      clearTooltips.push(slotTooltip(card, spec.label, [spec.category, summary(spec, itemNames),
+      clearTooltips.push(slotTooltip(card, spec.label, [section === "All files" ? spec.path : spec.category,
+        section === "All files" ? null : summary(spec, itemNames),
         spec.kind === "item" ? "[R] Recipes · [U] Uses · [A] Bookmark" : "[RMB] Actions"]));
       let graphic = spec.product ? artwork?.icon(spec.product) : null;
       if (spec.kind === "sprite" && spec.entry) {
@@ -501,7 +503,7 @@ export function mountCatalog(host, ctx) {
         graphic ?? catalogIcon(section === "Animals" ? section
           : spec.kind === "creature" && spec.category !== "Skirmisher" ? spec.category : section)),
         el("div", { className: "catalog-tile-text" }, el("strong", {}, spec.label),
-          el("span", { className: "catalog-tag" }, spec.category),
+          section === "All files" ? null : el("span", { className: "catalog-tag" }, spec.category),
           summary(spec, itemNames) ? el("small", {}, summary(spec, itemNames)) : null));
       return card;
     });
@@ -509,7 +511,8 @@ export function mountCatalog(host, ctx) {
     list.replaceChildren(...tiles);
     if (section === "Sprites") list.scrollTop = scrollTop;
     if (thumbnails) for (const tile of tiles) if (tile.dataset.voxel || imageSpecs.has(tile)) thumbnails.observe(tile);
-    if (!matches.length) list.append(quiet("No matches"));
+    if (!matches.length) list.append(el("div", { className: "catalog-no-matches" },
+      quiet("No matches"), clearSearch.hidden ? null : button("Clear filters", () => clearSearch.click())));
     const previous = button("Previous", () => changePage(page-1));
     const next = button("Next", () => changePage(page+1));
     previous.disabled = !page; next.disabled = (page+1)*take >= matches.length;
@@ -531,9 +534,10 @@ export function mountCatalog(host, ctx) {
   usageFilter.onchange = artFilter.onchange;
   artScale.oninput = () => list.style.setProperty("--sprite-thumbnail", artScale.value + "px");
   search.onkeydown = event => {
-    if (event.key === "Enter") list.firstElementChild?.click();
+    const first = list.querySelector(".catalog-tile");
+    if (event.key === "Enter") first?.click();
     if (event.key === "Escape" && (search.value || filter.value)) { event.preventDefault(); clearSearch.click(); }
-    if (event.key === "ArrowDown") { event.preventDefault(); list.firstElementChild?.focus(); }
+    if (event.key === "ArrowDown" && first) { event.preventDefault(); first.focus(); }
   };
 
   function onEdit(spec) { selected = spec; refresh(); }
@@ -958,6 +962,19 @@ export function mountCatalog(host, ctx) {
   }
 
   return {
+    assistantContext() {
+      const makers = selected?.kind === "item" ? recipes.filter(row => row.product === selected.product) : [];
+      const uses = selected?.kind === "item" ? recipes.filter(row => row.inputCodes.includes(selected.product)) : [];
+      return {
+        label: selected ? section + " · " + selected.label : section,
+        summary: selected?.kind === "item" ? [
+          selected.product,
+          makers.length ? "Recipe: " + makers[0].label + " (" + makers[0].category + ")" : "",
+          uses.length ? "Use: " + uses[0].label + " (" + uses[0].category + ")" : "",
+        ].filter(Boolean).join(" · ") : undefined,
+        sources: [selected, makers[0], uses[0]].filter(source => source?.path),
+      };
+    },
     showSprites() { if (section !== "Sprites") setSection("Sprites"); },
     planItem: showPlan,
     inspectItem(code) { setSection("Items", code); },

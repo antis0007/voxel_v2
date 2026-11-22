@@ -19,6 +19,7 @@ import { fabricationPath } from "./fabrication-data.mjs";
 import { showContextMenu, copyText } from "./context-menu.mjs";
 import { dragSource, dropTarget } from "./slot-tools.mjs";
 import { mountAgent, sourceFromDocument } from "./agent-panel.mjs";
+import { mountBacklog } from "./backlog-panel.mjs";
 import { canAssist } from "./agent-contract.mjs";
 import { createFood } from "./food-creator.mjs";
 import { foodPaths } from "./food-item.mjs";
@@ -709,17 +710,29 @@ function assetView(doc) {
     : "This asset exceeds the 24 MiB replacement limit."), doc.version ? file : null, doc.version ? replace : null));
 }
 
-const tabOrder = ["catalog", "graph", "workspace", "agent", "playtest"];
+const tabOrder = ["catalog", "graph", "workspace", "agent", "playtest", "backlog", "swarm"];
 function selectTab(tab) {
   activeTab = tab;
   memory.set("tab", tab);
-  for (const name of ["catalog", "graph", "workspace", "playtest", "agent"]) {
+  for (const name of tabOrder) {
     $(name).hidden = name !== tab;
     $(name + "-tab").classList.toggle("active", name === tab);
   }
   if (tab === "graph") activeGraph().refresh(true);
   if (tab === "catalog") catalog.refresh();
   if (tab === "workspace" && current) render();
+  if (tab === "backlog") backlog.refresh();
+  if (tab === "swarm") mountSwarmFrame();
+}
+// The swarm supervisor runs as its own process; the panel proxies it at /swarm/ and passes its
+// session token in the fragment so the frame can authorise control requests.
+function mountSwarmFrame() {
+  const host = $("swarm");
+  if (host.firstChild) return;
+  const frame = document.createElement("iframe");
+  frame.title = "Swarm supervisor";
+  frame.src = "/swarm/#" + location.hash.slice(1);
+  host.append(frame);
 }
 const activeGraph = () => graphMode === "wiring" ? wiring : graphMode === "advancement" ? advancementWiring : graphMode === "portal" ? portalLayout : graph;
 function showGraphMode(mode, target) {
@@ -829,6 +842,8 @@ $("workspace-tab").onclick = () => {
   else selectTab("workspace");
 };
 $("playtest-tab").onclick = () => selectTab("playtest");
+$("backlog-tab").onclick = () => selectTab("backlog");
+$("swarm-tab").onclick = () => selectTab("swarm");
 $("agent-tab").onclick = () => selectTab("agent");
 $("drafts-tab").onclick = showDrafts;
 $("assist-file").onclick = () => {
@@ -840,7 +855,7 @@ $("assist-file").onclick = () => {
 document.addEventListener("keydown", event => {
   if (document.querySelector("dialog[open]")) return;
   const typing = event.target.matches("input,textarea,select,[contenteditable]");
-  if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-5]$/.test(event.key)) {
+  if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-6]$/.test(event.key)) {
     event.preventDefault();
     $(tabOrder[Number(event.key) - 1] + "-tab").click();
     return;
@@ -854,7 +869,7 @@ document.addEventListener("keydown", event => {
     event.preventDefault();
     graph.search();
   }
-  if (key === "s" && activeTab !== "playtest" && activeTab !== "agent") {
+  if (key === "s" && ["graph", "catalog", "workspace"].includes(activeTab)) {
     event.preventDefault();
     document.activeElement?.blur();
     if (activeTab === "graph") activeGraph().review();
@@ -958,11 +973,15 @@ const sharedEditor = {
   redo: doc => step("redo", "undo", doc),
 };
 const agent = mountAgent($("agent"), sharedEditor);
+const backlog = mountBacklog($("backlog"), api, openContextTask);
 function assist(spec, task) {
   const scope = (Array.isArray(spec) ? spec : [spec]).filter(source => canAssist(source?.path));
   if (!scope.length) return note("Select a source record or file", true);
+  if (task?.trim()) {
+    openContextTask({ task, sources: scope, origin: scope[0].label });
+    return;
+  }
   scope.forEach(agent.attach);
-  agent.preset(task);
   selectTab("agent");
 }
 async function playRecipe(recipe) {
@@ -1077,7 +1096,7 @@ if (activeTab === "catalog") catalog.refresh();
 
 const shortcuts = [
   ["Everywhere", [["Ctrl+Shift+P / F1", "Command palette: tabs, files, sections, actions"],
-    ["Alt+1 … Alt+5", "Catalog, Graph, Workspace, AI, Playtest"], ["?", "This sheet"], ["Ctrl+S", "Review and save the active editor"]]],
+    ["Alt+1 … Alt+6", "Catalog, Graph, Workspace, AI, Playtest, Backlog"], ["?", "This sheet"], ["Ctrl+S", "Review and save the active editor"]]],
   ["Catalog", [["/", "Focus catalog search"], ["Esc", "Clear search and category"], ["↓ / Enter", "Move to or open the first result"],
     ["Right-click / Shift+F10", "Entry actions"]]],
   ["Workspace", [["Ctrl+P", "Search all files"], ["Esc", "Clear file search"], ["Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"]]],
@@ -1098,7 +1117,7 @@ function showShortcuts() {
   shortcutSheet.showModal();
 }
 
-const tabLabels = { catalog: "Catalog", graph: "Graph", workspace: "Workspace", agent: "AI", playtest: "Playtest" };
+const tabLabels = { catalog: "Catalog", graph: "Graph", workspace: "Workspace", agent: "AI", playtest: "Playtest", backlog: "Backlog" };
 tabOrder.forEach((tab, at) => {
   const control = $(tab + "-tab");
   control.title = (control.title ? control.title + " · " : "") + "Alt+" + (at + 1);
@@ -1108,14 +1127,48 @@ tabOrder.forEach((tab, at) => {
 for (const id of ["foundry-link", "wand-lab-link"]) $(id)?.remove();
 const shellHost = el("div", { className: "forge-inline" });
 $("drafts-tab").before(shellHost);
-mountShell({ host: shellHost, current: "/" });
-receivePanel({
-  assist({ task, paths }) {
-    for (const path of paths ?? []) if (canAssist(path)) agent.attach({ path, label: path.split("/").at(-1) });
-    agent.handoff(task);
+function openContextTask(task) {
+  window.focus();
+  if (task.createMission === true) {
     selectTab("agent");
-    window.focus();
-    note("Task loaded from Parity. Gather context, then run.");
+    agent.createMission(task);
+    return;
+  }
+  agent.handoff(task, origin => {
+    selectTab("agent");
+    agent.focusTask();
+    note(origin ? "Task loaded from " + origin : "Task loaded. Gather context, then run.");
+  });
+}
+function currentAiContext() {
+  if (activeTab === "catalog") return catalog.assistantContext();
+  if (activeTab === "workspace" && current) return {
+    label: "Workspace · " + (fileLabel(current.path) ?? current.path),
+    sources: [sourceFromDocument(current)],
+  };
+  if (activeTab === "graph") {
+    const selection = activeGraph().assistantContext?.();
+    if (selection) return selection;
+    const scopes = {
+      wiring: ["Recipe wiring", recipePath, fabricationPath],
+      advancement: ["Advancements", advancementPath],
+      portal: ["Dimensions & portals", "crates/app/src/world/portals.rs", "crates/app/src/world/portals/realm.rs"],
+      reference: ["Reference Map"],
+    };
+    const [label, ...paths] = scopes[graphMode];
+    return { label, sources: paths.map(path => ({ path })) };
+  }
+  if (activeTab === "playtest" && playtest) return playtest.assistantContext();
+  return { label: tabLabels[activeTab] };
+}
+mountShell({ host: shellHost, current: "/", context: currentAiContext, openTask: openContextTask,
+  showWorkbench: () => selectTab("agent") });
+window.addEventListener('axiom:open-mission', event => { selectTab('agent'); agent.openMission(event.detail); });
+receivePanel({
+  assist: openContextTask,
+  "show-ai": ({ missionId }) => {
+    selectTab("agent");
+    if (typeof missionId === "string") agent.openMission(missionId);
   },
   open({ path, line }) {
     if (typeof path !== "string" || !index.some(entry => entry.path === path)) return note("File not in the project index: " + path, true);
@@ -1124,7 +1177,7 @@ receivePanel({
   },
 });
 const graphModes = { wiring: "Recipe wiring", advancement: "Advancements", portal: "Dimensions & portals", reference: "Reference map" };
-installPalette();
+installPalette(message => note(message, true));
 registerCommands(() => [
   ...tabOrder.map((tab, at) => ({ id: "tab:" + tab, label: "Show " + tabLabels[tab], group: "Tab", keys: "Alt+" + (at + 1),
     run: () => $(tab + "-tab").click() })),

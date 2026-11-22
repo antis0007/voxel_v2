@@ -1,5 +1,6 @@
 import { el, button, panel } from "./inspector.mjs";
 import { copyText } from "./context-menu.mjs";
+import { playtestWorlds } from "./playtest-worlds.mjs";
 
 // Field controls are generated from the running engine's schema. No second
 // browser-side balance table or implicit source saves.
@@ -41,12 +42,28 @@ export function enginePanel(api, note) {
   const undo=button("Undo",act(async()=>{await request({op:"undo",revision});await refresh();}));
   const reset=button("Reset previews",act(async()=>{await request({op:"reset",revision});await refresh();}));
   const captureName=el("input",{placeholder:"Capture name","aria-label":"Capture name"});
-  const sessionWorld=el("select",{"aria-label":"Playtest world"},...["hills","superflat","planet","nether","manyfold","gilded"].map(value=>el("option",{value},value)));
+  const sessionWorld=el("select",{"aria-label":"Playtest world"},...playtestWorlds.map(value=>el("option",{value},value)));
   const sessionSeed=el("input",{type:"number",min:0,max:4294967295,value:74,"aria-label":"World seed"});
   const sessionScale=el("select",{"aria-label":"Voxel size"},...[1,0.5,0.25].map(value=>el("option",{value},value+" m")));
   const scene=el("select",{"aria-label":"Review scene"},el("option",{value:"exploration"},"Exploration"),el("option",{value:"factory"},"Factory models"));
   scene.onchange=()=>{sessionWorld.disabled=scene.value==="factory";if(sessionWorld.disabled)sessionWorld.value="superflat";};
   const surveyRadius=el("input",{type:"number",min:4,max:2048,value:128,"aria-label":"Survey radius in metres"});
+  const portal = el("select", {"aria-label":"Portal route"},
+    ...Object.entries({lightless:"Lightless",gilded:"Gilded Cave",highfold:"Highfold",gloaming:"Gloaming",
+      hell:"Hell",hall:"Hall",nether:"Nether",manyfold:"Manyfold",crystal:"Crystal Link"})
+      .map(([value,label]) => el("option", {value}, label)));
+  const portalControls = el("details", {},
+    el("summary", {}, "Portal playtest"),
+    el("p", {className:"muted"}, "Creative solo world. Walk through a crystal link. For other routes, stand at the threshold and cross."),
+    el("div", {className:"chips"}, portal,
+      button("Summon portal", act(async () => {
+        const result = await request({op:"command",line:"/portal " + portal.value});
+        output.textContent = result.replies.join("\n");
+      })),
+      button("Cross nearby portal", act(async () => {
+        await request({op:"portal_cross"});
+        output.textContent = "Crossing requested";
+      }))));
   const card=panel("Engine workbench",hint,
     el("div",{className:"chips"},scene,sessionWorld,sessionSeed,sessionScale,
       button("Start fresh world",act(()=>api("/api/engine/start",undefined,{world:sessionWorld.value,seed:Number(sessionSeed.value),scale:Number(sessionScale.value),scene:scene.value})),"Open an isolated world; factory scene uses superflat and a fixed review camera"),
@@ -54,7 +71,7 @@ export function enginePanel(api, note) {
     el("div",{className:"chips"},button("Inspect / refresh",act(refresh)),apply,undo,reset,
       button("Capabilities",act(()=>request({op:"describe"}))),button("Frame stats",act(()=>request({op:"perf"}))),
       button("Sample recovery",act(async()=>{output.textContent=JSON.stringify(await api("/api/engine/sample",undefined,{count:6,interval_ms:500}),null,2);}))),
-    controls,
+    portalControls, controls,
     el("div",{className:"chips"},el("label",{},"Survey radius (m)",surveyRadius),button("Survey terrain",act(()=>request({op:"survey",radius_m:Number(surveyRadius.value)})))),
     el("div",{className:"chips"},preset,button("Save preset",act(async()=>{await api("/api/engine/preset",undefined,{op:"save",name:preset.value});await listPresets();})),
       presetList,button("List presets",act(listPresets)),button("Load preset",act(async()=>{await api("/api/engine/preset",undefined,{op:"load",name:presetList.value,revision});await refresh();}))),

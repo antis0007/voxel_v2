@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { canAssist, verificationSource } from "./agent-contract.mjs";
-import { collectContext } from "./agent-context.mjs";
+import { canAssist, maxTaskLength, verificationSource } from "./agent-contract.mjs";
+import { collectContext, loadContext } from "./agent-context.mjs";
 import { ensureDirectory, read, state } from "./workspace.mjs";
 
 const hash = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -167,10 +167,11 @@ export function createDecisionStore({ directory, ensure, readSource = read }) {
 
 export const decisions = createDecisionStore({ directory: path.join(state, "improvement-decisions"), ensure: ensureDirectory });
 
-export async function proposeNext(request, logs = [], history = {}) {
+export async function proposeNext(request, logs = [], history = {}, contextId) {
   if (!Object.hasOwn(improvementLanes, request?.lane)) throw new Error("Choose engine, performance, art or tooling");
-  if (typeof request.task !== "string" || request.task.length > 1800) throw new Error("Use a focused brief of up to 1800 characters");
-  const context = await collectContext(request, logs);
+  if (typeof request.task !== "string" || !request.task.trim()) throw new Error("Enter an investigation brief.");
+  if (request.task.length > maxTaskLength) throw new Error(`Shorten the brief to ${maxTaskLength} characters or fewer (currently ${request.task.length}).`);
+  const context = loadContext(contextId, request.task) ?? await collectContext(request, logs);
   const owned = new Set([...(request.paths ?? []), ...(request.targets ?? []).map(row => row.path)]);
   const candidates = context.evidence.filter(row => row.repairEligible && !verificationSource(row.path)
     && improvementLanes[request.lane].path.test(row.path)

@@ -1,6 +1,6 @@
 import { el, button } from "./inspector.mjs";
 import { slug } from "./targets.mjs";
-import { recipePath, spawnPath, advancementPath, field, textOf, recipeItems, newRecipe, append,
+import { recipePath, spawnPath, advancementPath, field, habitatRealms, textOf, recipeItems, newRecipe, append,
   spawnRow, advancementRow } from "./idea-data.mjs";
 import { recipeArtwork } from "./catalog-icons.mjs";
 import { dragSource, dropTarget, itemPalette, slotArt } from "./slot-tools.mjs";
@@ -203,7 +203,7 @@ async function spawn(ctx, preset) {
   for (const row of field(ctx.tree(biomeDoc), "families").children) biomes.add(textOf(field(row, "name")));
   const creature = select([...names].sort((a, b) => a[1].localeCompare(b[1])));
   if (names.has(preset)) creature.value = preset;
-  const realm = select([["Surface", "Surface"], ["Underground", "Underground"], ["Nether", "Nether"], ["Shell", "Shell"]]);
+  const realm = select(habitatRealms);
   const time = select([["Any", "Any time"], ["Day", "Day"], ["Night", "Night"]]);
   const biome = select([["", "Any biome"], ...[...biomes].sort().map(value => [value, value])]);
   if (biomes.has(preset?.biome)) biome.value = preset.biome;

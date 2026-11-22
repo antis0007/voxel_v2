@@ -1,7 +1,8 @@
 import { el, button, findEntry } from "./inspector.mjs";
+import { mountWorkflow } from "./workflow-panel.mjs";
 import { copyText } from "./context-menu.mjs";
 import { address, resolve, rustTunables } from "./targets.mjs";
-import { canAssist, maxSources, maxExcerpt, maxPackReference, cleanProposal, prepareProposal, proposalSchema } from "./agent-contract.mjs";
+import { canAssist, maxSources, maxTaskLength, assertTask, maxExcerpt, maxPackReference, cleanProposal, prepareProposal, proposalSchema } from "./agent-contract.mjs";
 import { fabricationPath, fabricationRows } from "./fabrication-data.mjs";
 import { openTextureStudy } from "./texture-study.mjs";
 import { cells, isSheet, readSheet, rgba } from "./sprite-sheet.mjs";
@@ -12,6 +13,7 @@ const name = path => path.split("/").at(-1);
 const muted = value => el("p", { className: "muted" }, value);
 const option = (value, text) => el("option", { value }, text);
 const labeled = (text, element) => el("label", {}, text, element);
+const promptSize = bytes => bytes ? (bytes / 1024).toFixed(1) + " KiB of prompt text" : "";
 const campaigns = [
   ["Crafting", "Trace how the player obtains the ingredients, uses the station, and finds a use for the output.", ["assets/recipes.ron", "assets/progression.ron"]],
   ["Machines", "Trace inputs, power, outputs, and one measured production cycle.", ["assets/machines.ron", "crates/app/src/world/factory/recipes.rs"]],
@@ -67,7 +69,7 @@ function spriteComparisons(value, snapshot) {
 
 function evidenceView(evidence, attempts = []) {
   if (!evidence && !attempts.length) return null;
-  return el("details", { className: "agent-edit", open: true },
+  return el("details", { className: "agent-edit" },
     el("summary", {}, "Candidate evidence · " + (evidence?.status ?? "No candidate")),
     el("ul", { className: "agent-checks" }, (evidence?.files ?? []).map(file =>
       el("li", { title: file.after ? "SHA-256 " + file.after : "" },
@@ -79,6 +81,9 @@ function evidenceView(evidence, attempts = []) {
 }
 
 export function mountAgent(host, ctx) {
+  const submittedTaskKey = "axiom.ai.submitted-task";
+  let submittedTask = "";
+  try { submittedTask = sessionStorage.getItem(submittedTaskKey) ?? ""; } catch { /* Private window. */ }
   let attached = [], capture = [], proposal, active, busy = false, polling;
   let modReference = "", toolkitReference = "", stageOnComplete = false;
   let modTexture, textureReference = "", modelReference = "";
@@ -92,7 +97,13 @@ export function mountAgent(host, ctx) {
       ctx.dialog("Run history", rows.length ? rows.map(row => el("details", { className: "agent-edit" },
         el("summary", {}, new Date(row.at).toLocaleString() + " · " + (row.phase ?? row.outcome) + " · " + (row.mode ?? "Review")),
         row.provider ? muted([row.provider, row.model, row.edits + " edits", (row.usage?.input ?? 0) + " input tokens"].filter(Boolean).join(" · ")) : null,
+        row.promptBytes ? muted(promptSize(row.promptBytes)) : null,
+        row.outcomeSummary ? el("p", {}, row.outcomeSummary) : null,
         row.note ? muted(row.note) : null, evidenceView(row.evidence, row.attempts),
+        row.phase === "Ready" && row.sources?.length ? button("Continue with feedback", event => {
+          event.currentTarget.closest("dialog")?.close();
+          prepareFollowUp(row.sources, row.outcomeSummary);
+        }) : null,
         row.sources?.length ? el("ul", { className: "agent-checks" }, row.sources.map(source => el("li", {}, source.path))) : null,
       )) : [muted("No recorded runs.")], "Close", () => true);
     } catch (error) { ctx.note(error.message, true); }
@@ -100,7 +111,7 @@ export function mountAgent(host, ctx) {
   const result = el("section", { className: "craft-window agent-result" }, el("header", { className: "craft-titlebar" }, el("h2", {}, "Proposal")));
   const resultBody = el("div", { className: "agent-result-body" }, muted("No Proposal"));
   result.append(resultBody);
-  const request = el("textarea", { rows: 4, maxLength: 2400, placeholder: "e.g. Reduce this recipe's steel cost while keeping its shape.",
+  const request = el("textarea", { rows: 4, placeholder: "e.g. Reduce this recipe's steel cost while keeping its shape.",
     "aria-label": "Task" });
   const provider = el("select", {}, option("codex", "Codex"), option("ollama", "Ollama"), option("lmstudio", "LM Studio"));
   const model = el("input", { type: "text", placeholder: "Codex default", maxLength: 100 });
@@ -114,7 +125,8 @@ export function mountAgent(host, ctx) {
     if (mode.value === "repair") passes.value = "4";
     renderSources();
   };
-  const run = button("Run", runProposal, "Send the attached excerpts to the selected provider", "primary");
+  const run = button("Run proposal", runProposal, "Send the attached excerpts to the selected provider");
+  const createMission = button("Create mission", () => openMissionComposer(), "Plan and queue work from this task", "primary");
   const gather = button("Gather Context", gatherContext, "Find related source, symbol references, and current diagnostics");
   const importMod = button("Import Mod", openMod, "Start from a feature description or local JAR");
   const pack = button("Import Modpack", () => openPackIntake(ctx, preparePack), "Scan up to 120 mods and compare progression");
@@ -124,6 +136,7 @@ export function mountAgent(host, ctx) {
   }), "Generate original sprite art from a local reference");
   const improve = button("Improve Toolkit", prepareToolkit, "Use recent run receipts to propose one tooling improvement");
   const stage = el("input", { type: "checkbox" });
+  const evidenceOnRun = el("input", { type: "checkbox" });
   const referencePreview = el("div");
   const artPreview = muted("");
   const stop = button("Stop", async () => {
@@ -183,13 +196,14 @@ export function mountAgent(host, ctx) {
       lane, label,
       selected: el("input", { type: "checkbox", checked: lane !== "tooling" }),
       path: el("input", { type: "text", value: path, maxLength: 240, "aria-label": label + " source" }),
-      task: el("textarea", { rows: 2, value: task, maxLength: 1800, "aria-label": label + " brief" }),
+      task: el("textarea", { rows: 2, value: task, "aria-label": label + " brief" }),
     }));
     const selectedProvider = provider.value;
     const selectedModel = model.value.trim();
-    ctx.dialog("Autonomous improvement", [
-      muted("Runs selected tasks in order using " + selectedProvider + (selectedModel ? " · " + selectedModel : "") +
-        ". Results wait for draft review. Builds, measurements, and visual approval are separate."),
+    ctx.dialog("Set up improvement run", [
+      muted("Using " + selectedProvider + (selectedModel ? " · " + selectedModel : "") +
+        (selectedProvider === "codex" ? ". Up to two workers run at once." : ". One worker runs at a time to limit local load.") +
+        " Each task needs its own source file. Review each result before staging."),
       ...fields.map(field => el("div", { className: "stack" }, labeled(field.label, field.selected),
         labeled("Source", field.path), labeled("Brief", field.task))),
     ], "Start Run", async () => {
@@ -230,43 +244,57 @@ export function mountAgent(host, ctx) {
       return true;
     });
   }
-  const boundedLoop = button("Run Bounded Loop", () => {
+  const boundedLoop = button("Investigate & verify", () => {
     const task = request.value.trim();
     if (!task) { request.focus(); return ctx.note("Describe the outcome to investigate first.", true); }
     const lane = el("select", {}, improvementLanes.map(([value, label]) => option(value, label)));
     const budget = el("select", {}, [1, 2, 3].map(value => option(String(value), String(value))));
-    ctx.dialog("Bounded improvement loop", [muted(task), labeled("Lane", lane), labeled("Investigation budget", budget),
-      muted("Selects current evidence, skips previous attempts, and runs the existing audit/repair queue. Registered checks run on separate baseline and candidate copies. Stops at a candidate for review.")],
-    "Start Loop", async () => {
+    budget.value = "2";
+    ctx.dialog("Investigate and verify", [muted(task), labeled("Lane", lane), labeled("Maximum investigations", budget),
+      muted("Finds a source to investigate, skips work already tried on the same evidence, and calls a registered verification check when available. Stops when a candidate is ready to review.")],
+    "Start investigation", async () => {
       renderQueue(await ctx.api("/api/improvement/loop", undefined, { task, lane: lane.value,
         maxSteps: Number(budget.value), provider: provider.value, model: model.value.trim(),
         targets: contextTargets(), modDigests: modTexture ? [modTexture.digest] : [] }));
       return true;
     });
   });
+  let queueId;
+  const queueStop = button("Stop Queue", async () => {
+    queueStop.disabled = true;
+    try { renderQueue(await ctx.api("/api/improvement/cancel", undefined, { id: queueId })); }
+    catch (error) { queueStop.disabled = false; ctx.note(error.message, true); }
+  });
+  queueStop.hidden = true;
   const queue = el("section", { className: "craft-window" },
-    el("header", { className: "craft-titlebar" }, el("h2", {}, "Improvement Queue"), nextMove, boundedLoop, queueStart), queueBody);
+    el("header", { className: "craft-titlebar" }, el("h2", {}, "Improvement Queue"), nextMove, boundedLoop, queueStart, queueStop), queueBody);
 
   function renderQueue(state) {
     clearTimeout(queueTimer);
     const running = state.phase === "Running";
+    const workers = state.rows.filter(row => row.status === "Running" || row.status === "Gathering context").length;
     queueRunning = running;
+    queueId = state.id;
+    queueStop.hidden = !running;
+    queueStop.disabled = Boolean(state.stopping);
     renderSources();
     queueBody.replaceChildren(...(state.error ? [muted(state.error)] : []),
       ...(state.next?.next ? [muted(state.next.next)] : []),
-      muted(state.phase === "Idle" ? "Queue engine, optimization, and art tasks for review." : state.phase),
+      el("p", { className: "muted", role: "status" }, state.phase === "Idle"
+        ? "Pick the areas you want AI workers to investigate."
+        : state.stopping ? "Stopping workers…"
+        : state.planning && running ? "Finding the next source to investigate…"
+        : running && state.concurrency ? workers + " of " + state.concurrency + " workers active" : state.phase),
       ...state.rows.map(row => {
         const label = improvementLanes.find(([lane]) => lane === row.lane)?.[1] ?? row.lane;
         return el("div", { className: "draft-row" }, el("strong", {}, label + " · " + name(row.path)),
-          muted([row.status, row.status === "Running" && row.step, row.evidence, row.regression].filter(Boolean).join(" · ")),
+          muted([row.status, row.status === "Running" && row.step, row.evidence, row.verification, row.regression].filter(Boolean).join(" · ")),
+          row.usage?.input || row.usage?.output ? muted(row.usage.input.toLocaleString() + " input tokens · " +
+            row.usage.output.toLocaleString() + " output tokens") : row.promptBytes ? muted(promptSize(row.promptBytes)) : null,
           row.error ? muted(row.error) : null,
           row.runId && row.status !== "Running" ? button(row.edits ? "Review Candidate" : "View Result",
             () => openQueuedResult(row.runId)) : null);
-      }),
-      ...(running ? [button("Stop Queue", async () => {
-        try { renderQueue(await ctx.api("/api/improvement/cancel", undefined, { id: state.id })); }
-        catch (error) { ctx.note(error.message, true); }
-      })] : []));
+      }));
     if (running) queueTimer = setTimeout(refreshQueue, 1500);
   }
 
@@ -284,7 +312,7 @@ export function mountAgent(host, ctx) {
       if (busy) return;
       capture = sources;
       show(state.proposal ?? { summary: state.error ?? state.phase, checks: [], edits: [] },
-        false, state.proposal ? id : undefined, state.evidence, state.attempts, state.finding);
+        false, state.proposal ? id : undefined, state.evidence, state.attempts, state.finding, state.checkId, state.regression);
       result.scrollIntoView({ block: "nearest" });
     } catch (error) { ctx.note(error.message, true); }
   }
@@ -294,19 +322,50 @@ export function mountAgent(host, ctx) {
     return { ...source, doc, start: source.anchor.start, original: doc.original };
   }));
 
+  const parityTaskLink = el("a", { hidden: true, target: "_blank", rel: "noopener" });
+  let currentParityId;
+  const columns = el("div", { className: "agent-scroll" });
+  const composer = el("div", { id: "agent-composer", className: "agent-columns" });
+  const taskView = button("Task", () => showView(false));
+  const missions = button("Missions", () => { showView(true); missionPanel.open(); });
+  taskView.setAttribute("aria-controls", composer.id);
+  missions.setAttribute("aria-controls", "agent-missions");
   host.append(el("header", { className: "agent-toolbar" }, el("h1", {}, "AI Workbench"),
-    status, history, stop), el("div", { className: "agent-columns" },
+    el("nav", { className: "agent-views", "aria-label": "AI workbench views" }, taskView, missions),
+    status, parityTaskLink, history, stop), columns);
+  columns.append(composer);
+  composer.append(
     el("div", { className: "agent-setup" },
-      el("section", { className: "craft-window" }, el("header", { className: "craft-titlebar" }, el("h2", {}, "Task")),
+      el("section", { className: "craft-window" }, el("header", { className: "craft-titlebar" }, el("h2", {}, "Describe the outcome")),
         el("div", { className: "agent-fields" }, request,
-          el("div", { className: "agent-options" }, labeled("Mode", mode), labeled("Passes", passes),
-            labeled("Provider", provider), labeled("Model", model)),
-          el("div", { className: "agent-actions" }, run, campaign, importMod, pack, textures, improve, copy, importButton),
-          labeled("Stage valid edits on completion", stage), referencePreview, artPreview)),
-      el("section", { className: "craft-window" }, el("header", { className: "craft-titlebar" }, el("h2", {}, "Scope"), add, gather),
-        sourceList, contextPanel), queue),
-    result));
+          el("div", { className: "agent-actions" }, createMission, run),
+          el("details", { className: "agent-edit agent-more" }, el("summary", {}, "Run settings and tools"),
+            el("div", { className: "agent-options" }, labeled("Mode", mode), labeled("Passes", passes),
+              labeled("Provider", provider), labeled("Model", model)),
+            labeled("Auto-stage checked edits as drafts", stage),
+            el("div", { className: "agent-actions" }, campaign, copy, importMod, pack, textures, improve, importButton)),
+          referencePreview, artPreview)),
+      el("details", { className: "craft-window agent-context", open: true }, el("summary", {}, "Project context"),
+        el("div", { className: "agent-context-actions agent-actions" }, add, gather),
+        el("div", { className: "agent-evidence-option" }, labeled("Gather project and live evidence on run", evidenceOnRun)),
+        sourceList, contextPanel),
+      el("details", { className: "craft-window agent-context" }, el("summary", {}, "Improvement queue"), queue)),
+    result);
   request.addEventListener("input", renderContext);
+  const missionPanel = mountWorkflow(columns, ctx, () => ({ task: request.value.trim(), paths: attached.map(row => row.path), parityId: currentParityId,
+    provider: provider.value, model: model.value.trim() }));
+  function showView(showMissions) {
+    if (composer.hidden !== showMissions) columns.scrollTop = 0;
+    composer.hidden = showMissions;
+    missionPanel.section.hidden = !showMissions;
+    taskView.setAttribute("aria-pressed", String(!showMissions));
+    missions.setAttribute("aria-pressed", String(showMissions));
+  }
+  function openMissionComposer(source) {
+    showView(true);
+    void missionPanel.create(source);
+  }
+  showView(false);
 
   const contextTargets = () => attached.map(({ path, line, parts, name }) => ({ path, line, parts, name }));
   const contextIsCurrent = () => knowledge?.task === request.value.trim()
@@ -352,6 +411,9 @@ export function mountAgent(host, ctx) {
     contextPanel.append(el("div", { className: "agent-actions" },
       el("strong", {}, knowledge.evidence.length + " read-only excerpts"), clear),
     muted(knowledge.sampledFiles + " files sampled · " + (knowledge.crossReferences ? "Symbol search completed" : "Path and excerpt matching")));
+    if (attached.length && ["refine", "systems", "interface"].includes(mode.value)) {
+      contextPanel.append(muted("The model receives your attachments and a limited selection of this gathered evidence."));
+    }
     if (knowledge.symbols.length) contextPanel.append(muted("Symbols searched · " + knowledge.symbols.join(", ")));
     if (knowledge.runtime) contextPanel.append(el("details", { className: "agent-excerpt" },
       el("summary", {}, knowledge.runtime.unavailable ? "Native engine unavailable" : "Native engine · " + knowledge.runtime.capturedAt),
@@ -432,7 +494,7 @@ export function mountAgent(host, ctx) {
   }
 
   function openMod() {
-    const brief = el("textarea", { rows: 5, maxLength: 2400, placeholder: "Describe the feature and the player loop you want in Axiom." });
+    const brief = el("textarea", { rows: 5, placeholder: "Describe the feature and the player loop you want in Axiom." });
     const jar = el("input", { type: "file", accept: ".jar" });
     ctx.dialog("Minecraft mod intake", [
       labeled("Feature description", brief), labeled("Optional local mod JAR", jar),
@@ -530,6 +592,7 @@ export function mountAgent(host, ctx) {
     add.disabled = busy || attached.length >= maxSources;
     importMod.disabled = pack.disabled = textures.disabled = improve.disabled = busy;
     stage.disabled = busy || ["toolkit", "audit"].includes(mode.value);
+    evidenceOnRun.disabled = busy;
     copy.disabled = busy || (!attached.length && !["port", "pack", "audit", "repair"].includes(mode.value));
     run.disabled = copy.disabled || queueRunning;
     queueStart.disabled = busy || queueRunning;
@@ -563,6 +626,41 @@ export function mountAgent(host, ctx) {
     if (attached.length >= maxSources) return ctx.note("Scope limit · 5 excerpts", true);
     attached.push({ ...spec, key, label: String(spec.label ?? name(spec.path)).slice(0, 120) });
     renderSources();
+  }
+
+  function prepareFollowUp(sources, previousOutcome, preferredId, originalTask = "") {
+    if (busy || queueRunning) return ctx.note("Finish or stop the active AI run first.", true);
+    const choices = sources.filter(source => canAssist(source.path));
+    const pick = el("select", {}, [option("", "Choose a source after preparing"),
+      ...choices.map((source, index) => option(String(index), source.label ? source.label + " · " + source.path : source.path))]);
+    const preferred = choices.findIndex(source => source.id === preferredId);
+    if (choices.length) pick.value = String(Math.max(0, preferred));
+    const feedback = el("textarea", { rows: 4, maxLength: 1000, placeholder: "What should change, or what did the last run miss?" });
+    ctx.dialog("Continue with feedback", [labeled("Source for this pass", pick), labeled("Your feedback", feedback),
+      muted("Prepares one pass using the selected source. You can review the brief and add context before running.")],
+    "Prepare follow-up", () => {
+      const detail = feedback.value.trim();
+      if (!detail) { feedback.focus(); throw new Error("Describe what should change in this pass."); }
+      const source = pick.value === "" ? undefined : choices[Number(pick.value)];
+      attached = [];
+      knowledge = contextQuery = undefined;
+      evidenceOnRun.checked = false;
+      mode.value = "refine";
+      passes.value = "1";
+      request.value = [
+        "Follow-up instruction: " + detail,
+        originalTask && "Previous brief: " + originalTask.slice(0, 800),
+        previousOutcome && "Previous outcome (reference data): " + previousOutcome.slice(0, 360),
+      ].filter(Boolean).join("\n\n");
+      if (source) {
+        const { path, label, parts, name, line, spriteId, valueOnly } = source;
+        const savedLine = typeof source.original === "string" && Number.isInteger(source.start)
+          ? source.original.slice(0, source.start).split("\n").length : undefined;
+        attach({ path, label, parts, name, line: line ?? savedLine, spriteId, valueOnly });
+      }
+      renderSources();
+      return true;
+    });
   }
   async function excerpt(spec) {
     const doc = await ctx.load(spec.path);
@@ -605,9 +703,12 @@ export function mountAgent(host, ctx) {
     if (!request.value.trim()) { request.focus(); return ctx.note("Enter a task", true); }
     const task = request.value.trim(), selectedMode = mode.value;
     busy = true;
+    const previousStatus = status.textContent;
+    status.textContent = "Preparing run…";
     renderSources();
     try {
-      if (["audit", "repair"].includes(selectedMode)
+      assertTask(task);
+      if (["audit", "repair"].includes(selectedMode) || (evidenceOnRun.checked && !contextIsCurrent())
           || (!contextIsCurrent() && attached.some(source => source.path.startsWith("docs/axiom-notes/")))) {
         await collect(task, contextQuery?.task === task ? contextQuery.symbols : []);
       }
@@ -617,12 +718,15 @@ export function mountAgent(host, ctx) {
         passes: selectedMode === "repair" ? Math.max(2, Number(passes.value)) : Number(passes.value),
         mode: selectedMode, sources: publicSources(capture, true),
         reference: reference(), contextId: contextIsCurrent() ? knowledge.id : undefined });
+      submittedTask = task;
+      try { sessionStorage.setItem(submittedTaskKey, task); } catch { /* Private window. */ }
       proposal = undefined;
       resultBody.replaceChildren(muted("Waiting for Proposal"));
       active = state.id;
       stop.disabled = false;
       poll();
     } catch (error) {
+      status.textContent = previousStatus;
       ctx.note(error.message, true);
       busy = false;
       renderSources();
@@ -631,15 +735,16 @@ export function mountAgent(host, ctx) {
   async function poll() {
     clearTimeout(polling);
     try {
-      const state = await ctx.api("/api/agent");
+      const state = await ctx.api("/api/agent?run=" + encodeURIComponent(active));
       if (state.id !== active) throw new Error("AI run changed");
       status.textContent = state.phase === "Running" ? (state.step ? state.step + " · " : "") + "Pass " + state.pass + " / " + state.passes
-        : state.phase + (state.usage?.input ? " · " + state.usage.input + " In / " + state.usage.output + " Out" : "");
+        : [state.phase, state.usage?.input ? state.usage.input + " input tokens / " + state.usage.output + " output tokens"
+          : promptSize(state.promptBytes)].filter(Boolean).join(" · ");
       if (state.phase === "Running") { polling = setTimeout(poll, 750); return; }
       if (state.autoSources) capture = await loadRunSources(state.autoSources);
       if (state.proposal || state.finding?.path) {
         show(state.proposal ?? { summary: state.error ?? state.phase, checks: [], edits: [] },
-          stageOnComplete, state.proposal ? state.id : undefined, state.evidence, state.attempts, state.finding);
+          stageOnComplete, state.proposal ? state.id : undefined, state.evidence, state.attempts, state.finding, state.checkId, state.regression);
       }
       else resultBody.replaceChildren(evidenceView(state.evidence, state.attempts) ?? muted(state.phase));
       if (state.error) ctx.note(state.error, true);
@@ -649,7 +754,7 @@ export function mountAgent(host, ctx) {
     stop.disabled = true;
     renderSources();
   }
-  function show(value, autoStage = false, runId, evidence, attempts, finding) {
+  function show(value, autoStage = false, runId, evidence, attempts, finding, checkId, regression) {
     proposal = value;
     const snapshot = capture;
     let previews = [];
@@ -701,7 +806,7 @@ export function mountAgent(host, ctx) {
         });
       });
       const refine = button("Refine Current Draft", () => {
-        const next = el("textarea", { rows: 4, maxLength: 2400, placeholder: "What should change in this variation?" });
+        const next = el("textarea", { rows: 4, placeholder: "What should change in this variation?" });
         ctx.dialog("Refine current candidate", [next], "Prepare AI scope", () => {
           ensureCurrent();
           if (!next.value.trim()) throw new Error("Describe the change you want");
@@ -738,7 +843,13 @@ export function mountAgent(host, ctx) {
         if (runId) {
           const checked = await ctx.api("/api/agent/verify", undefined, { id: runId });
           if (["Stale", "Failed"].includes(checked.status)) throw new Error(checked.files[0]?.detail ?? checked.status);
-          if (automatic && !canAutoStage(checked)) return;
+          if (automatic && !canAutoStage(checked)) {
+            if (!checkId) return ctx.note("Candidate needs verification before automatic staging. Review the proposal to stage it manually.");
+            const receipt = await ctx.api("/api/improvement/check", undefined, { id: runId, checkId });
+            if (!["Regression checked", "Native checks passed"].includes(receipt.status)) {
+              return ctx.note("Registered verification did not pass. Review the candidate before staging.", true);
+            }
+          }
         }
         if (proposal !== value) return;
         const changes = prepareProposal(value, snapshot);
@@ -764,7 +875,20 @@ export function mountAgent(host, ctx) {
       } catch (error) { ctx.note(error.message, true); }
       finally { if (review.isConnected && !review.dataset.staged) review.disabled = false; }
     }
-    review.disabled = !value.edits.length;
+    const sourceGap = !value.edits.length && value.checks.find(check =>
+      /^(?:Missing source context|Owner gap)\s*:/i.test(check));
+    const proposedChecks = value.checks.filter(check => check !== sourceGap);
+    const checkStatus = el("span", { className: "muted", role: "status" }, regression?.status);
+    const runCheck = checkId ? button("Run baseline and candidate check", async () => {
+      runCheck.disabled = true;
+      checkStatus.textContent = "Checking baseline and candidate…";
+      try {
+        const receipt = await ctx.api("/api/improvement/check", undefined, { id: runId, checkId });
+        checkStatus.textContent = receipt.status + " · Baseline failures " + (receipt.baseline.fail ?? "unknown")
+          + " · Candidate passes " + (receipt.candidate.pass ?? "unknown");
+      } catch (error) { checkStatus.textContent = error.message; }
+      finally { runCheck.disabled = false; }
+    }) : null;
     resultBody.replaceChildren(...(finding?.path ? [el("details", { open: true, className: "agent-edit" },
       el("summary", {}, "Selected defect · " + finding.path), el("p", {}, finding.summary),
       el("p", {}, "Trigger · " + finding.trigger), el("p", {}, "Impact · " + finding.impact),
@@ -778,16 +902,26 @@ export function mountAgent(host, ctx) {
           await ctx.openCandidateTarget(source.doc, source.start + finding.offset);
         } catch (error) { ctx.note(error.message, true); }
       }))] : []),
-      el("p", {}, value.summary), ...previews, evidenceView(evidence, attempts) ?? muted("Imported proposal · native verification pending"),
-      el("h3", {}, "Proposed checks"),
-      el("ul", { className: "agent-checks" }, value.checks.map(check => el("li", {}, check))),
+      ...(sourceGap ? [
+        el("h3", {}, "Needs source context"),
+        el("p", {}, sourceGap.replace(/^[^:]+:\s*/, "")),
+        button("Gather Context", gatherContext, "Find the missing source and attach it before running again", "primary"),
+        el("details", { className: "agent-edit" }, el("summary", {}, "Proposal summary"), el("p", {}, value.summary)),
+      ] : [el("p", {}, value.summary)]),
+      ...previews, evidenceView(evidence, attempts) ?? muted("Imported proposal · native verification pending"),
+      ...(runId ? [button("Continue with feedback", () =>
+        prepareFollowUp(snapshot, value.summary, value.edits[0]?.source, request.value.trim()))] : []),
+      ...(runCheck ? [el("div", { className: "agent-actions" }, runCheck, checkStatus)] : []),
+      ...(proposedChecks.length ? [el("details", { className: "agent-edit" },
+        el("summary", {}, "Proposed checks (" + proposedChecks.length + ")"),
+        el("ul", { className: "agent-checks" }, proposedChecks.map(check => el("li", {}, check))))] : []),
       ...value.edits.map(edit => {
         const file = capture.find(row => row.id === edit.source);
         return el("details", { className: "agent-edit" }, el("summary", {}, file.label + " · " + edit.reason),
           el("div", { className: "agent-diff" }, el("pre", { className: "removed" }, edit.before),
             el("pre", { className: "added" }, edit.after)));
-      }), review);
-    if (autoStage && value.edits.length && canAutoStage(evidence)) stageDrafts(true);
+      }), ...(value.edits.length ? [review] : []));
+    if (autoStage && value.edits.length) stageDrafts(true);
     if (runId) {
       const actions = el("div", { className: "agent-actions" });
       const feedback = outcome => {
@@ -806,16 +940,56 @@ export function mountAgent(host, ctx) {
   renderSources();
   void refreshQueue();
   return {
+    createMission({ task, paths = [], parityId }) {
+      openMissionComposer({ task, paths: paths.filter(canAssist), parityId, provider: "auto" });
+    },
+    openMission(id) { showView(true); missionPanel.open(id); },
     attach,
-    preset(value) { if (value && !request.value.trim()) request.value = value; },
-    /** Cross-page handoff (Parity board): replaces the task text unless a run is active. */
-    handoff(value) {
-      if (busy) return ctx.note("An AI run is already active; the handed-off task was not loaded.", true);
-      request.value = value;
-      request.dispatchEvent(new Event("input", { bubbles: true }));
+    /** Contextual handoffs use a fresh scope, with a deliberate draft replacement. */
+    handoff({ task, sources = [], paths = [], mode: nextMode, origin, parityId }, ready) {
+      if (busy) return ctx.note("Finish or stop the active AI run before opening a new task.", true);
+      if (typeof task !== "string" || !task.trim()) return;
+      const load = () => {
+        if (busy) return false;
+        showView(false);
+        parityTaskLink.hidden = typeof parityId !== "string" || !/^[A-Z][A-Z0-9-]{0,47}$/.test(parityId);
+        currentParityId = parityTaskLink.hidden ? undefined : parityId;
+        if (!parityTaskLink.hidden) {
+          parityTaskLink.href = "/parity?id=" + encodeURIComponent(parityId) + location.hash;
+          parityTaskLink.textContent = "Parity task " + parityId;
+        } else parityTaskLink.removeAttribute("href");
+        attached = [];
+        knowledge = undefined;
+        proposal = undefined;
+        capture = [];
+        resultBody.replaceChildren(muted("Ready to run"));
+        status.textContent = "Ready";
+        modReference = toolkitReference = textureReference = modelReference = "";
+        modTexture = undefined;
+        referencePreview.replaceChildren();
+        artPreview.textContent = "";
+        mode.value = ["refine", "audit", "systems"].includes(nextMode) ? nextMode : "refine";
+        passes.value = "1";
+        stage.checked = false;
+        evidenceOnRun.checked = true;
+        request.value = task;
+        for (const source of [...sources, ...paths.map(path => ({ path }))].slice(0, maxSources)) {
+          if (canAssist(source?.path)) attach(source);
+        }
+        renderSources();
+        ready?.(origin);
+        request.focus();
+        return true;
+      };
+      if (request.value.trim() && request.value.trim() !== submittedTask && request.value.trim() !== task.trim()) {
+        ctx.dialog("Replace the current AI task?", [
+          muted("This loads the new task and its selected sources. Saved run history is available in the workbench."),
+        ], "Replace task", load);
+      } else load();
     },
     focusField(spec, task) {
       if (busy) return ctx.note("An AI run is already active.", true);
+      showView(false);
       attached = [];
       mode.value = "refine";
       stage.checked = false;
@@ -824,6 +998,7 @@ export function mountAgent(host, ctx) {
       return true;
     },
     focusTask() {
+      showView(false);
       request.focus();
       request.setSelectionRange(request.value.length, request.value.length);
     },

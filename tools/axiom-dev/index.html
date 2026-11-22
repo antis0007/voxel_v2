@@ -8,10 +8,12 @@
   <link rel="stylesheet" href="/graph-style.css">
   <link rel="stylesheet" href="/catalog-style.css">
   <link rel="stylesheet" href="/workbench.css">
+  <link rel="stylesheet" href="/swarm-frame.css">
   <link rel="stylesheet" href="/recipe-wiring.css">
   <link rel="stylesheet" href="/portal-style.css">
   <link rel="stylesheet" href="/devtools-qol.css">
   <link rel="stylesheet" href="/forge-shell.css">
+  <link rel="stylesheet" href="/backlog.css">
   <script type="module" src="/boot.mjs"></script>
   <script type="module" src="/foundry-link.mjs"></script>
   <script type="module" src="/wand-lab-link.mjs"></script>
@@ -25,6 +27,8 @@
       <button id="workspace-tab">Workspace</button>
       <button id="agent-tab">AI</button>
       <button id="playtest-tab">Playtest</button>
+      <button id="backlog-tab">Backlog</button>
+      <button id="swarm-tab" title="Parity and engine swarm supervisor">Swarm</button>
     </nav>
     <span id="connection" class="badge" hidden></span>
     <button id="drafts-tab" class="drafts-tab" title="Open draft queue">Drafts</button>
@@ -80,6 +84,8 @@
   </main>
   <main id="playtest" class="playtest" hidden></main>
   <main id="agent" class="agent-workbench" aria-label="AI workbench" hidden></main>
+  <main id="backlog" class="backlog-workbench" aria-label="Development backlog" hidden></main>
+  <main id="swarm" class="swarm-frame" aria-label="Swarm supervisor" hidden></main>
   <footer><span id="notice" role="status"></span></footer>
   <dialog id="file-info-dialog" aria-labelledby="file-info-title">
     <header class="section-title"><h2 id="file-info-title">File info</h2><button id="close-file-info">Close</button></header>

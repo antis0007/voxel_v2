@@ -37,7 +37,8 @@ export function foundryPerformanceContext(task, evidenceRoot = process.env.AXIOM
     const population = /\b(\d+)\s+(?:visible\s+)?(?:builders?|workers?|residents?|agents?)\b/i.exec(task)?.[1];
     const reports = createFoundry(root).snapshot().performance.filter(r => !r.error
       && (!population || r.workload?.declared_population === Number(population)))
-      .sort((a, b) => (b.telemetry?.frame_ms?.max || 0) - (a.telemetry?.frame_ms?.max || 0)
+      .sort((a, b) => Number(task.includes(b.id)) - Number(task.includes(a.id))
+        || (b.telemetry?.frame_ms?.max || 0) - (a.telemetry?.frame_ms?.max || 0)
         || String(b.created_utc).localeCompare(String(a.created_utc)));
     const packets = [];
     let used = 2;

@@ -98,6 +98,7 @@
 .wire-dot.product { border-color: #e4c784; background: #977949; }
 .wire-dot.input { left: -6px; right: auto; }
 .wire-adv-library { grid-template-rows: minmax(0, 1fr); }
+.wire-adv-actions { margin-left: 0; gap: 5px; }
 .wire-adv-node { width: 158px; }
 .wire-adv-node .wire-node-handle { min-height: 34px; padding-inline: 8px; }
 .wire-adv-name { width: 100%; text-align: left; color: var(--text); font-size: 12px; font-weight: 650;

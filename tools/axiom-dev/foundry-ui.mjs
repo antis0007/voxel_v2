@@ -8,7 +8,7 @@ async function api(route, binary = false) {
 }
 import { organizePanels } from "./panel-organizer.mjs";
 import { installPalette, registerCommands } from "./command-palette.mjs";
-import { mountShell } from "./forge-shell.mjs";
+import { mountShell, sendToAi } from "./forge-shell.mjs";
 
 // Card filter: text, problems-only and auto-refresh pause survive the 5 s redraw.
 const prefsKey = "axiom-dev.foundry.prefs";
@@ -52,7 +52,12 @@ const sections = organizePanels(main, {
   before: main.children[1],
 });
 filterCards();
-mountShell({ current: "/foundry" });
+let activeReceipt;
+mountShell({ current: "/foundry", context: () => ({
+  label: activeReceipt ? "Foundry · " + activeReceipt : "Foundry",
+  summary: activeReceipt ? "Performance evidence receipt " + activeReceipt : document.getElementById("status")?.textContent.trim(),
+  sources: [{ path: "tools/axiom-dev/foundry-agent-context.mjs" }, { path: "tools/axiom-dev/foundry-service.mjs" }],
+}) });
 installPalette();
 registerCommands(() => [
   ...sections.entries().map(entry => ({ id: "foundry:" + entry.title, label: "Go to " + entry.title, group: "Section", run: entry.reveal })),
@@ -69,6 +74,7 @@ async function showCapture(id, image) {
     captureUrl = URL.createObjectURL(blob);
     document.querySelector("#capture img").src = captureUrl;
     document.getElementById("capture").hidden = false;
+    activeReceipt = id;
   } catch (error) { document.getElementById("status").textContent = error.message; }
 }
 async function refresh() {
@@ -86,6 +92,11 @@ async function refresh() {
         node("small", "Material conservation: " + physical.materials_conserved + "; save round-trip: " + physical.save_roundtrip));
       for (const finding of (r.findings || []).slice(0, 3)) c.append(node("p", (finding.metric || finding.kind) + ": p95 " + finding.p95_ms.toFixed(2) + " ms" + (finding.max_ms ? "; max " + finding.max_ms.toFixed(2) + " ms" : "")), node("small", finding.next_probe));
       c.append(node("p", (r.reliability_issues || []).slice(0, 4).join(" "), "muted"), node("code", r.binary_sha256));
+      const assist = node("button", "Investigate with AI");
+      assist.onclick = () => void sendToAi("Investigate performance receipt " + r.id +
+        ". Explain the largest measured cost, separate evidence from hypotheses, and propose one comparable follow-up capture.",
+        [], { mode: "audit", origin: "Foundry" });
+      c.append(assist);
       return c;
     }));
     const receipts = data.receipts.map(r => {

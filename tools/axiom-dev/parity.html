@@ -9,6 +9,8 @@
     <div class="coverage-head">
       <h1>Mod parity</h1>
       <p id="totals" class="coverage-totals" role="status">Loading ledger…</p>
+      <span id="parity-connection" class="parity-connection" role="status">Connecting</span>
+      <button id="verification-gaps" type="button" class="ghost" aria-pressed="false" hidden></button>
       <div class="legend" id="legend" aria-label="Status colours"></div>
       <button id="coverage-toggle" class="ghost" aria-expanded="true" title="Hide the coverage map">Hide map</button>
     </div>
@@ -18,11 +20,15 @@
     <aside class="rail" aria-label="Filters">
       <input id="query" type="search" placeholder="Search rows  /" aria-label="Search ID, label or mapping">
       <div class="rail-block"><h2>Family</h2><div id="families" class="facet"></div></div>
+      <div class="quick-families" aria-label="Family presets">
+        <button id="all-families" class="ghost" type="button">All families</button>
+        <button id="industrial-families" class="ghost" type="button">Industrial mods</button>
+      </div>
       <div class="rail-block"><h2>Status</h2><div id="statuses" class="facet"></div></div>
       <div class="rail-block"><h2>Milestone</h2><div id="milestones" class="facet facet-inline"></div></div>
       <div class="rail-block"><h2>Owner systems</h2>
-        <div class="segmented" id="readiness" role="radiogroup" aria-label="Owner readiness">
-          <button data-ready="" role="radio">Any</button><button data-ready="ready" role="radio" title="Every owner system already has code to build on">Ready</button><button data-ready="waiting" role="radio" title="An owner system is still design-only">Waiting</button>
+        <div class="segmented" id="readiness" role="radiogroup" aria-label="Owner code inventory">
+          <button data-ready="" role="radio">Any</button><button data-ready="ready" role="radio" title="Code is listed for every owner system">Code listed</button><button data-ready="waiting" role="radio" title="One or more owner systems have no code listed">Owner gaps</button>
         </div>
       </div>
       <button id="reset" class="ghost">Clear filters</button>
@@ -30,13 +36,14 @@
     </aside>
     <section class="results" aria-label="Feature rows">
       <div class="results-bar">
-        <span id="count" class="results-count"></span>
+        <span id="count" class="results-count" role="status"></span>
         <div class="segmented" id="view" role="radiogroup" aria-label="Layout">
           <button data-view="list" role="radio">List</button><button data-view="board" role="radio">Board</button>
         </div>
         <label class="inline">Group <select id="group"><option value="section">Section</option><option value="family">Family</option><option value="status">Status</option><option value="milestone">Milestone</option><option value="none">None</option></select></label>
-        <label class="inline">Sort <select id="sort"><option value="id">ID</option><option value="milestone">Milestone</option><option value="risk">Fewest risks</option><option value="status">Status</option></select></label>
+        <label class="inline">Sort <select id="sort"><option value="priority">Development priority</option><option value="id">ID</option><option value="milestone">Milestone</option><option value="risk">Fewest risks</option><option value="status">Status</option></select></label>
       </div>
+      <div id="active-filters" class="active-filters" aria-label="Active filters" hidden></div>
       <div id="rows" class="rows"></div>
     </section>
     <aside id="detail" class="detail" aria-label="Selected row" tabindex="-1"></aside>

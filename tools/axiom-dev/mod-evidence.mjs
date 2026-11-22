@@ -17,8 +17,8 @@ const metadata = /^(?:fabric\.mod\.json|quilt\.mod\.json|mcmod\.info|META-INF\/(
 const hook = /registr|recipe|blockentit|tileentit|inventory|energy|mana|tick|fluid|network|packet|loot|worldgen|mixin|capabilit|event/i;
 const display = text => text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 
-function directory(bytes) {
-  if (bytes.length < 22 || bytes.length > maxJarBytes) throw new Error("Choose a JAR under 48 MiB");
+function directory(bytes, byteLimit = maxJarBytes) {
+  if (bytes.length < 22 || bytes.length > byteLimit) throw new Error("ZIP size is outside the intake limit");
   let end = bytes.length - 22;
   const earliest = Math.max(0, end - 65535);
   for (; end >= earliest; end--) {
@@ -392,10 +392,10 @@ export function inspectModel(bytes, name, size, entries = directory(bytes)) {
   throw new Error("No supported cuboid model in the sampled JAR entries");
 }
 
-function recipeLeads(entries, read) {
-  const recipes = entries.filter(entry => /^data\/[^/]+\/recipes?\/.+\.json$/i.test(entry.name));
+function recipeLeads(entries, read, limit = 64) {
+  const recipes = entries.filter(entry => /^(?:assets|data)\/[^/]+\/recipes?\/.+\.json$/i.test(entry.name));
   const rows = [];
-  for (const entry of recipes.slice(0, 64)) {
+  for (const entry of recipes.slice(0, limit)) {
     try {
       const data = JSON.parse(read(entry)?.toString("utf8") ?? "null");
       const result = data?.result;
@@ -420,6 +420,70 @@ function recipeLeads(entries, read) {
   }
   return { total: recipes.length, rows };
 }
+
+/** Inspect a loose modpack ZIP in memory. No file from the archive is executed or extracted. */
+export function inspectModArchive(bytes, { includePaths = false } = {}) {
+  const entries = directory(bytes, maxPackBytes);
+  const jars = entries.filter(entry => /\.jar$/i.test(entry.name));
+  if (!jars.length || jars.length > 120) throw new Error("Expected between 1 and 120 JAR entries");
+  let totalBytes = 0;
+  const mods = jars.map(entry => {
+    const name = entry.name;
+    totalBytes += entry.size;
+    try {
+      if (totalBytes > maxPackExpandedBytes) throw new Error("Pack exceeds the total expanded JAR limit");
+      const jar = readEntry(bytes, entry, maxJarBytes);
+      if (!jar) throw new Error("Unreadable or oversized JAR");
+      const artifacts = directory(jar);
+      const paths = artifacts.map(artifact => artifact.name).sort();
+      let readBudget = 48 * 1024 * 1024;
+      let skippedReads = 0;
+      const read = (artifact, limit) => {
+        if (artifact.size > readBudget) { skippedReads++; return; }
+        try {
+          const content = readEntry(jar, artifact, limit);
+          if (content) readBudget -= content.length;
+          else skippedReads++;
+          return content;
+        } catch { skippedReads++; return undefined; }
+      };
+      const mods = inventory(artifacts, read);
+      const classes = paths.filter(file => /\.class$/i.test(file));
+      const resources = paths.filter(file => /^(?:assets|data)\//i.test(file));
+      const recipes = recipeLeads(artifacts, read, Infinity);
+      const languageFiles = artifacts.filter(artifact => /\/lang\/en_us\.(?:json|lang)$/i.test(artifact.name));
+      const language = languageFiles.flatMap(artifact => {
+        const value = read(artifact, 2 * 1024 * 1024)?.toString("utf8").replace(/^\uFEFF/, "") ?? "";
+        try {
+          return artifact.name.endsWith(".json") ? Object.keys(JSON.parse(value))
+            : value.split(/\r?\n/).filter(line => /^[\w.:-]+=/.test(line)).map(line => line.split("=", 1)[0]);
+        } catch { return []; }
+      });
+      const namespaces = [...new Set(resources.map(file => file.split("/")[1]))].sort();
+      const leads = paths.filter(file => /(?:recipe|registration|registry|advancement|manual|patchouli|worldgen|loot_tables)/i.test(file)
+        && !/\$|^META-INF\/maven/i.test(file));
+      const firstClasses = artifacts.filter(artifact => artifact.name.endsWith(".class"))
+        .sort((a, b) => Number(hook.test(b.name)) - Number(hook.test(a.name)));
+      const trace = behaviorTrace(artifacts, firstClasses,
+        artifacts.filter(artifact => /^(?:assets|data)\//i.test(artifact.name)), read, namespaces[0]);
+      return { name, sha256: createHash("sha256").update(jar).digest("hex"), bytes: jar.length,
+        files: paths.length, classes: classes.length, resources: resources.length, namespaces,
+        declared: mods.declared, boundaries: mods.boundaries, bundled: bundledDependencies(jar, artifacts),
+        recipeFiles: recipes.total, comparableRecipes: recipes.rows.length, englishKeys: language.length, skippedReads,
+        trace: { classes: trace.inspected, entryPoints: trace.declared.map(([owner]) => owner).slice(0, 6),
+          methods: trace.methods.slice(0, 5).map(({ owner, method, roles }) => ({ owner, method, roles })) },
+        ...(includePaths && { paths, language, recipes: recipes.rows }),
+        leads: leads.slice(0, 12) };
+    } catch (error) {
+      return { name, error: error.message };
+    }
+  });
+  return { sha256: createHash("sha256").update(bytes).digest("hex"), entries: entries.length,
+    otherFiles: entries.filter(entry => !/\.jar$/i.test(entry.name)).map(entry => entry.name), mods };
+}
+
+export const maxPackBytes = 160 * 1024 * 1024;
+const maxPackExpandedBytes = 512 * 1024 * 1024;
 
 function inventory(entries, extract) {
   const byName = new Map(entries.map(entry => [entry.name.toLowerCase(), entry]));

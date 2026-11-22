@@ -27,6 +27,32 @@
 @media (prefers-reduced-motion: reduce) { .forge-chip[data-state="busy"] i { animation: none; } }
 .forge-palette { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 12px; color: var(--muted, #9cacc1); }
 .forge-palette kbd { font: 10px "Cascadia Code", Consolas, monospace; padding: 0 5px; border: 1px solid var(--line, #303e51); border-radius: 4px; }
+.forge-ask {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 11px; min-height: 30px; white-space: nowrap;
+  background: var(--blue, #85d7e3); color: #142526; border: 1px solid transparent;
+  border-radius: 5px; font: 700 12px/1.4 "Segoe UI", system-ui, sans-serif;
+}
+.forge-ask:hover { filter: brightness(1.1); }
+.forge-ask:focus-visible { outline: 2px solid var(--focus, #f9c781); outline-offset: 2px; }
+.forge-assist {
+  width: min(520px, calc(100vw - 28px)); box-sizing: border-box; padding: 22px;
+  border: 1px solid var(--line, #455366); border-radius: 10px;
+  background: var(--panel, #171f2c); color: var(--text, #f0f3f8);
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif; box-shadow: 0 18px 80px #0009;
+}
+.forge-assist::backdrop { background: #090e14ad; }
+.forge-assist form { display: grid; gap: 14px; margin: 0; }
+.forge-assist h2 { margin: 0; font-size: 21px; }
+.forge-assist label, .forge-assist-context { display: grid; gap: 6px; }
+.forge-assist-context { border-inline-start: 2px solid var(--blue, #85d7e3); padding-inline-start: 10px; }
+.forge-assist-context small { color: var(--muted, #9cacc1); overflow-wrap: anywhere; }
+.forge-assist textarea {
+  box-sizing: border-box; width: 100%; min-height: 112px; resize: vertical; padding: 9px 11px;
+  background: var(--well, #111720); color: inherit; border: 1px solid var(--line, #455366); font: inherit;
+}
+.forge-assist-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.forge-assist-actions select { margin-right: auto; }
 /* Inside the main panel header */
 .forge-inline { display: flex; align-items: center; gap: 16px; margin-left: auto; }
 .forge-inline .forge-status { margin-left: 0; }
@@ -35,3 +61,175 @@
 /* The main panel header already carries five tabs; drop the switcher before it wraps (the palette still switches apps). */
 @media (max-width: 1280px) { .forge-inline .forge-apps { display: none; } }
 @media (max-width: 900px) { .forge-chip span { display: none; } .forge-apps a { padding: 5px 7px; } .forge-palette kbd { display: none; } }
+@media (max-width: 640px) {
+  .forge-shell { gap: 6px; height: auto; min-height: 44px; flex-wrap: wrap; padding: 5px 8px; }
+  .forge-inline { gap: 5px; }
+  .forge-status > .forge-chip, .forge-inline .forge-palette { display: none; }
+  .forge-ask { padding-inline: 7px; }
+}
+/* Keep navigation and live status on deliberate rows instead of widening the app. */
+body:has(> .top) { height: 100dvh; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+body > .top {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto; gap: 7px 14px; height: auto; min-width: 0;
+  padding: 8px 14px; align-items: center;
+}
+.top > .brand { grid-column: 1; grid-row: 1; }
+.top > .tabs { grid-column: 2; grid-row: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
+.top > .tabs button { flex: none; min-height: 32px; }
+.top > #drafts-tab { grid-column: 3; grid-row: 1; margin: 0; }
+.top > #item-tray { grid-column: 4; grid-row: 1; margin: 0; }
+.top > .forge-inline {
+  grid-column: 1 / -1; grid-row: 2; display: flex; min-width: 0; width: 100%;
+  margin: 0; padding-top: 7px; border-top: 1px solid var(--line); gap: 12px; flex-wrap: wrap;
+}
+.top .forge-inline .forge-apps { display: flex; min-width: 0; flex-wrap: wrap; }
+.top .forge-inline .forge-status { margin-left: auto; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+.top :is(.forge-apps a, .forge-ask, .forge-palette, #drafts-tab, #item-tray) { min-height: 32px; display: inline-flex; align-items: center; }
+.top .tabs:hover button kbd.tab-key { display: none; }
+body:has(> .top) > main { height: 100%; min-height: 0; min-width: 0; overflow: auto; }
+body:has(> .top) > .catalog-workspace { overflow: hidden; }
+.catalog-main, .catalog-body, .catalog-library, .catalog-detail { min-width: 0; min-height: 0; }
+.catalog-main .catalog-header { padding-inline: 12px; flex-wrap: wrap; }
+.catalog-detail-title, .catalog-detail-tools, .catalog-detail-body { padding-inline: 12px; }
+.catalog-filter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 8px; gap: 6px; align-items: center; }
+.catalog-filter input[type=search] { grid-column: 1 / -1; width: 100%; }
+.catalog-filter select { width: 100%; max-width: none; }
+.catalog-layout-switch { display: flex; gap: 4px; }
+.catalog-related > button { margin: 6px 6px 0 0; }
+.catalog-browser-foot { flex-wrap: wrap; padding: 7px 8px; }
+@media (max-width: 700px) {
+  body > .top { grid-template-columns: auto minmax(0, 1fr); gap: 6px; padding-inline: 8px; }
+  .top > #drafts-tab { grid-column: 1; grid-row: 2; justify-self: start; }
+  .top > #item-tray { grid-column: 2; grid-row: 2; justify-self: end; }
+  .top > .forge-inline { grid-row: 3; }
+  .top .forge-inline .forge-status { margin-left: 0; justify-content: flex-start; }
+  .top .forge-inline .forge-palette { display: inline-flex; }
+}
+body:has(> .top) > footer { display: flex; align-items: center; gap: 12px; min-width: 0; }
+body:has(> .top) > footer #notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body:has(> .top) > footer .axiom-app-status { flex: none; }
+
+/* Persistent editor activity dock. */
+.work-dock { position:fixed; inset:0 0 0 auto; width:340px; z-index:40; display:flex; flex-direction:column; background:var(--surface,#232624); color:var(--text,#e8e3cd); border-left:1px solid var(--line,#54554b); box-shadow:-6px 0 20px #0003; font:13px/1.45 system-ui; }
+.work-dock[hidden] { display:none; }
+.work-dock > header { display:flex; align-items:center; justify-content:space-between; padding:12px; border-bottom:1px solid var(--line,#54554b); }
+.work-dock h2 { margin:0; font:600 17px system-ui; }
+.work-dock > small { padding:8px 12px; color:var(--muted,#b7b5a9); }
+.work-dock-content { flex:1; min-height:0; overflow:auto; padding:0 12px 12px; scrollbar-gutter:stable; }
+.work-dock h3 { font:600 12px system-ui; text-transform:uppercase; letter-spacing:.06em; margin:20px 0 8px; }
+.work-task { border:1px solid var(--line,#54554b); border-radius:4px; padding:9px; margin:6px 0; background:var(--well,#1c201e); overflow-wrap:anywhere; }
+.work-task summary { cursor:pointer; }
+.work-task strong,.work-task small { display:block; margin-top:4px; }
+.work-task strong { font-weight:550; }
+.work-phase { font-size:11px; color:var(--gold,#d6bd76); }
+.work-task[data-phase=Running],.work-task[data-phase=Planning] { border-left:3px solid #80b6ad; }
+.work-task[data-phase=Blocked],.work-task[data-phase=Interrupted] { border-left:3px solid #d99a65; }
+.work-task p { margin:8px 0; white-space:pre-wrap; }
+.work-task progress { width:100%; height:6px; accent-color:#80b6ad; }
+.work-task small,.work-empty { color:var(--muted,#b7b5a9); font-size:12px; }
+.work-error { color:#efb18c; }
+.work-dock > footer { display:grid; gap:8px; padding:12px; border-top:1px solid var(--line,#54554b); }
+.work-dock > footer small { color:var(--muted,#b7b5a9); font-size:11px; }
+.forge-work-toggle { white-space:nowrap; }
+@media(min-width:1100px) { body.work-dock-open { padding-right:340px; box-sizing:border-box; } }
+@media(max-width:1099px) { .work-dock { width:min(360px,94vw); } }
+/* Center the single image cell; keep authored transparent borders intact. */
+:is([data-section="Items"],[data-section="Recipes"]) .catalog-items:not(.as-list) .catalog-tile { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); aspect-ratio:1; }
+.catalog-icon { flex:none; box-sizing:border-box; }
+.catalog-icon canvas,.item-slot canvas { display:block; object-fit:contain; image-rendering:pixelated; }
+.catalog-art { width:16px; height:16px; max-width:none; }
+:is([data-section="Items"],[data-section="Recipes"]) .catalog-items:not(.as-list) .catalog-art { width:32px; height:32px; }
+.catalog-detail-title > .catalog-icon .catalog-art,.item-slot .catalog-art { width:32px; height:32px; }
+.catalog-related .recipe-relation { grid-template-columns:32px minmax(0,1fr); min-height:48px; column-gap:9px; }
+.recipe-relation canvas { width:32px; height:32px; image-rendering:pixelated; grid-column:1; grid-row:1 / span 2; align-self:center; justify-self:center; }
+.recipe-relation strong,.recipe-relation span { grid-column:2; }
+.catalog-tile:focus-visible,.work-task summary:focus-visible,.forge-work-toggle:focus-visible { outline:2px solid #80b6ad; outline-offset:2px; }
+/* The live work control replaces the older duplicate AI count. */
+.forge-status > .forge-chip:nth-child(2) { display:none; }
+.work-task summary .work-error { color:#efb18c; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.work-task summary strong { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+/* Searchable, resizable activity inspector. */
+.work-dock { width:var(--work-dock-width,360px); box-sizing:border-box; }
+.work-dock-resize { position:absolute; left:-4px; top:0; bottom:0; width:8px; cursor:col-resize; touch-action:none; }
+.work-dock-resize:hover,.work-dock-resize:focus-visible { background:#80b6ad88; outline:none; }
+.work-counts { display:grid; grid-template-columns:repeat(3,1fr); margin:0 12px 10px; gap:8px; }
+.work-counts > span { display:grid; gap:2px; padding:8px; border:1px solid var(--line,#54554b); border-radius:4px; color:var(--muted,#b7b5a9); font-size:11px; }
+.work-counts strong { font:600 21px/1.1 system-ui; color:var(--text,#e8e3cd); }
+.work-tools { display:grid; gap:8px; padding:0 12px 10px; border-bottom:1px solid var(--line,#54554b); }
+.work-tools input { width:100%; min-width:0; box-sizing:border-box; }
+.work-filters { display:flex; flex-wrap:wrap; gap:4px; }
+.work-filters button { padding:4px 8px; font-size:12px; min-height:28px; }
+.work-filters button[aria-pressed=true] { background:#354d49; border-color:#80b6ad; color:#e4f5ef; }
+.work-paths { overflow-wrap:anywhere; margin-bottom:10px; }
+.work-open-mission { width:100%; text-align:left; margin-top:8px; }
+.work-dock[data-connection=stale] > small { color:#efb18c; }
+.work-dock[data-connection=stale] .work-counts { opacity:.55; }
+.work-lane { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.work-task[open] summary strong { display:block; }
+@media(min-width:1100px) { body.work-dock-open { padding-right:var(--work-dock-width,360px); } }
+@media(max-width:1099px) { .work-dock { width:min(380px,94vw); } .work-dock-resize { display:none; } }
+
+/* ===== Axiom console design pass: one token set, graphite surfaces, status colour as the only loud element ===== */
+:root {
+  --page: #0d1219; --panel: #121923; --surface: #182130; --raised: #1f2a3a; --well: #0a0f16;
+  --line: #243044; --line-soft: #1a2433;
+  --text: #e8edf4; --muted: #8998ae; --blue: #6fd0dd; --focus: #f2c27c;
+  --r-sm: 5px; --r-md: 8px; --r-lg: 12px;
+  --shadow-pop: 0 18px 60px #000a, 0 0 0 1px #ffffff0d;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+}
+body { background: var(--page); font-feature-settings: "tnum" 1, "cv11" 1; -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { border-radius: var(--r-sm); background: var(--surface); border-color: var(--line); transition: background .12s var(--ease), border-color .12s var(--ease), color .12s var(--ease); }
+button:hover:not(:disabled) { background: var(--raised); border-color: #3a4c66; }
+button:active:not(:disabled) { transform: translateY(1px); }
+input::placeholder, textarea::placeholder { color: #66758b; }
+::selection { background: #6fd0dd33; }
+* { scrollbar-width: thin; scrollbar-color: #2c3a50 transparent; }
+
+/* Shell bar */
+.forge-shell, body > .top { background: linear-gradient(#141c27, #101721); border-bottom: 1px solid var(--line); box-shadow: 0 1px 0 #ffffff08 inset; }
+.forge-brand { font-weight: 650; letter-spacing: .01em; }
+.forge-mark, .mark { border-radius: 7px; border: 1px solid #3c6572; background: linear-gradient(160deg, #1f3a47, #152632); color: var(--blue); box-shadow: 0 0 0 3px #6fd0dd12; }
+.forge-apps { gap: 1px; padding: 2px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: #0d141d; }
+.forge-apps a { border-radius: 6px; padding: 4px 11px; font-weight: 500; transition: background .12s var(--ease), color .12s var(--ease); }
+.forge-apps a.active { background: var(--raised); box-shadow: none; color: var(--text); }
+.forge-apps a.active::after { content: ""; display: block; height: 2px; margin: 3px -4px -4px; border-radius: 2px; background: var(--blue); }
+.forge-chip { background: #0d141d; border-color: var(--line-soft); font-variant-numeric: tabular-nums; }
+.forge-palette { border: 1px solid var(--line-soft); border-radius: var(--r-sm); background: #0d141d; }
+.forge-palette:hover { color: var(--text); border-color: var(--line); }
+.forge-ask { border-radius: var(--r-sm); background: var(--blue); color: #0b2228; box-shadow: 0 1px 0 #ffffff55 inset, 0 2px 10px #6fd0dd22; }
+.forge-assist { border-radius: var(--r-lg); box-shadow: var(--shadow-pop); background: var(--panel); }
+
+/* Live work dock */
+.work-dock { background: var(--panel); color: var(--text); border-left: 1px solid var(--line); box-shadow: -14px 0 40px #0006;
+  font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; }
+.work-dock > header { padding: 14px 16px 12px; border-bottom: 1px solid var(--line-soft); }
+.work-dock h2 { font: 650 16px/1.2 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; letter-spacing: -.005em; }
+.work-dock > small { padding: 8px 16px; color: var(--muted); font-size: 11.5px; }
+.work-counts { margin: 4px 16px 12px; gap: 6px; }
+.work-counts > span { padding: 9px 10px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--well); color: var(--muted); font-size: 11px; }
+.work-counts strong { font: 600 22px/1.1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.work-counts > span:first-child strong { color: var(--heat-verified); }
+.work-tools { padding: 0 16px 12px; }
+.work-tools input { background: var(--well); }
+.work-filters { gap: 2px; padding: 2px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--well); width: fit-content; }
+.work-filters button { border: 0; background: transparent; color: var(--muted); border-radius: 6px; padding: 3px 9px; min-height: 26px; }
+.work-filters button:hover { color: var(--text); background: var(--surface); }
+.work-filters button[aria-pressed=true] { background: var(--raised); color: var(--text); box-shadow: inset 0 0 0 1px #3a4c66; }
+.work-dock-content { padding: 0 16px 16px; }
+.work-dock h3 { margin: 18px 0 8px; font: 600 11.5px/1.2 "Segoe UI", system-ui, sans-serif; color: var(--muted); text-transform: none; letter-spacing: .02em; }
+.work-task { margin: 6px 0; padding: 10px 12px; border: 1px solid var(--line-soft); border-left: 3px solid var(--heat-parked); border-radius: var(--r-md); background: var(--surface); transition: border-color .12s var(--ease), background .12s var(--ease); }
+.work-task:hover { border-color: var(--line); background: #1b2536; }
+.work-task[data-phase=Running], .work-task[data-phase=Planning] { border-left-color: var(--heat-playable); }
+.work-task[data-phase=Blocked], .work-task[data-phase=Interrupted] { border-left-color: var(--heat-building); }
+.work-task[data-phase=Complete], .work-task[data-phase=Verified] { border-left-color: var(--heat-verified); }
+.work-task strong { font-weight: 600; line-height: 1.35; }
+.work-task small, .work-empty { color: var(--muted); }
+.work-phase { color: var(--heat-building); font-weight: 600; letter-spacing: .01em; }
+.work-error { color: #f0a58f; background: #f07f7f12; border-radius: var(--r-sm); padding: 4px 7px; margin-top: 6px; font-size: 12px; }
+.work-task progress { height: 4px; border-radius: 2px; accent-color: var(--heat-playable); }
+.work-dock > footer { padding: 12px 16px; border-top: 1px solid var(--line-soft); background: #0f1620; }
+.work-dock-resize:hover, .work-dock-resize:focus-visible { background: #6fd0dd55; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } .cell:hover { transform: none; } }

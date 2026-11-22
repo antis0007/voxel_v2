@@ -97,6 +97,8 @@ export function slotArt(item, artwork) {
 }
 
 export function slotTooltip(anchor, name, lines) {
+  // An empty title also suppresses native tooltips inherited from ancestors.
+  anchor.title = "";
   let tip;
   function hide() { tip?.remove(); tip = undefined; }
   anchor.addEventListener("pointerenter", () => {
@@ -117,6 +119,7 @@ export function slotTooltip(anchor, name, lines) {
 
 export function itemPalette(items, artwork, choose, named = false) {
   let page = 0, picked;
+  let clearTooltips = [];
   const take = 40;
   const find = el("input", { type: "search", placeholder: "Filter items", "aria-label": "Filter item palette" });
   const slots = el("div", { className: "workbench-slots", "aria-label": "Item palette" });
@@ -129,18 +132,20 @@ export function itemPalette(items, artwork, choose, named = false) {
     const query = find.value.toLowerCase().trim().split(/\s+/);
     const matches = items.filter(item => query.every(term => item.label.toLowerCase().includes(term)));
     const visible = matches.slice(page * take, (page + 1) * take);
+    for (const hide of clearTooltips) hide();
+    clearTooltips = [];
     slots.replaceChildren(...visible.map(item => {
       const slot = button("", () => {
         picked = item.code;
         for (const child of slots.children) child.setAttribute("aria-pressed", String(child.dataset.code === picked));
         choose(item);
-      }, item.label, "item-slot");
+      }, "", "item-slot");
       slot.dataset.code = item.code;
       slot.setAttribute("aria-label", item.label);
       slot.setAttribute("aria-pressed", String(item.code === picked));
       slot.append(slotArt(item, artwork), ...(named ? [el("span", {}, item.label)] : []));
       dragSource(slot, "item", item.code);
-      slotTooltip(slot, item.label, []);
+      clearTooltips.push(slotTooltip(slot, item.label, []));
       return slot;
     }));
     status.textContent = matches.length ? (page * take + 1) + "–" + (page * take + visible.length) + " / " + matches.length : "No items";

@@ -20,7 +20,7 @@ export function recipeStack(doc, node) {
 
 export function recipeRows(ctx, doc) {
   const root = ctx.tree(doc);
-  const stationNames = { hand: "Hand", bench: "Workbench", crystal_tech: "Crystal tech" };
+  const stationNames = { hand: "Hand", bench: "Workbench", crystal_tech: "Crystal tech", facility: "Workbench" };
   return root.children.flatMap((table, group) => (table.children ?? []).map((row, index) => {
     const output = field(row, "output");
     const product = recipeStack(doc, field(output, "item"));

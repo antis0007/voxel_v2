@@ -7,6 +7,7 @@ import { root, state, ensureDirectory, maxText } from "./workspace.mjs";
 import { parse } from "./syntax.mjs";
 import { zeroRecipeIngredient } from "./idea-data.mjs";
 import { parseVoxel } from "./voxel-model.mjs";
+import { playtestWorlds } from "./playtest-worlds.mjs";
 
 const name = process.platform === "win32" ? "axiom-playtest.exe" : "axiom-playtest";
 // AXIOM_DEV_EXE points the workbench at any built executable, e.g. target/debug for fast iteration.
@@ -52,9 +53,11 @@ export function rebuild(onBuilt) {
   ensureDirectory(state);
   const candidate = path.join(state, "building-" + name);
   log("Building Axiom in release-fast…");
-  const child = build = launch("cargo", ["rustc", "--locked", "--offline", "-p",
+  // Share Cargo's ordinary executable cache. A rustc `-o` override changes the
+  // compiler invocation and relinks the large app after an otherwise fresh build.
+  const child = build = launch("cargo", ["build", "--locked", "--offline", "-p",
     "minecraft_style_voxel_prototype", "--profile", "release-fast", "--bin",
-    "minecraft_style_voxel_prototype", "--", "-o", candidate]);
+    "minecraft_style_voxel_prototype", "--target-dir", path.join(root, "target")]);
   child.stdin.end();
   lines(child.stdout, log);
   lines(child.stderr, log);
@@ -62,7 +65,8 @@ export function rebuild(onBuilt) {
   child.once("close", async code => {
     try {
       if (code !== 0) return log("Build failed (" + code + ")");
-      const { rename } = await import("node:fs/promises");
+      const { copyFile, rename } = await import("node:fs/promises");
+      await copyFile(fallback, candidate);
       await rename(candidate, binary);
       built = true;
       log("Build complete");
@@ -134,6 +138,9 @@ export function start(existing, recipeText, spark, preview) {
   env.VOXEL_SAVE_DIR = activeDirectory;
   // Presentation-only override: a live HUD placement table (docs/design/HUD_LAYOUT.md).
   if (process.env.VOXEL_HUD_LAYOUT) env.VOXEL_HUD_LAYOUT = process.env.VOXEL_HUD_LAYOUT;
+  if (preview?.session && process.env.VOXEL_SHADER_DEV_DIR) {
+    env.VOXEL_SHADER_DEV_DIR = path.resolve(process.env.VOXEL_SHADER_DEV_DIR);
+  }
   if (sparkSpeed !== undefined) env.VOXEL_FORGE_SPARK_SPEED = String(sparkSpeed);
   if (preview?.recipe) env.VOXEL_FORGE_RECIPE = preview.recipe;
   if (preview?.model) {
@@ -157,7 +164,7 @@ export function start(existing, recipeText, spark, preview) {
   const args = existing ? [] : ["--axiom-dev-stdin"];
   if (preview?.session) {
     const { world, seed, scale, generator, scene = "exploration", view } = preview.session;
-    if (existing || !["superflat","hills","ridged","planet","nether","manyfold","gilded"].includes(world)
+    if (existing || !playtestWorlds.includes(world)
       || !Number.isInteger(seed) || seed < 0 || seed > 0xffffffff || ![1,0.5,0.25].includes(scale)
       || !["exploration","factory"].includes(scene)
       || (view !== undefined && (!Number.isInteger(view) || view < 4 || view > 64))
@@ -167,6 +174,7 @@ export function start(existing, recipeText, spark, preview) {
     args.push("--benchmark-world=" + world, "--benchmark-seed=" + seed, "--benchmark-scale=" + scale,
       "--benchmark-physics", "--benchmark-motion=static", "--benchmark-warmup=3600", "--benchmark-duration=3600");
     if (generator !== undefined) args.push("--benchmark-generator-version=" + generator);
+    if (preview.saved) args.push("--benchmark-saved-world");
     // Optional view distance in chunks: small values load fast and fit debug builds.
     if (view !== undefined) args.push("--benchmark-view-chunks=" + view);
     if (scene === "factory") {
@@ -176,9 +184,18 @@ export function start(existing, recipeText, spark, preview) {
       env.VOXEL_TORCH_REVIEW_MODE = "factory";
       env.VOXEL_CAPTURE_DIR = path.join(activeDirectory,"captures","review");
     }
+    // Native scene pixels and the highest supported cloud setting. Benchmark
+    // sessions disable the quality governor unless adaptation is explicitly
+    // requested; never silently lower visual-review quality to meet a frame cap.
+    // Keep the chosen view distance independent of shading quality.
+    args.push("--benchmark-render-scale=100", "--benchmark-cloud-divisor=2");
   }
   runIdentity = { id: randomBytes(8).toString("hex"), binary: candidate,
-    sha256: createHash("sha256").update(readFileSync(candidate)).digest("hex"), started: new Date().toISOString(), session: preview?.session };
+    sha256: createHash("sha256").update(readFileSync(candidate)).digest("hex"), started: new Date().toISOString(),
+    session: preview?.session, resumedCheckpoint: Boolean(preview?.saved), shaderDevDir: env.VOXEL_SHADER_DEV_DIR,
+    arguments: args,
+    qualityRequested: preview?.session ? { preset: "maximum", sceneScalePercent: 100,
+      cloudDivisor: 2, adaptive: false, shadows: true, indirectLighting: true } : undefined };
   const child = game = launch(candidate, args, env);
   child.stdin.on("error", error => log(error.message));
   lines(child.stderr, log);
@@ -231,7 +248,10 @@ export async function closeExperiment() {
   const child = game;
   await new Promise((resolve,reject)=>{
     const closed=()=>{clearTimeout(timeout);resolve();};
-    const timeout=setTimeout(()=>{child.off("close",closed);reject(new Error("Experiment is still closing; inspect status before starting another"));},5000);
+    // Driver teardown and pipe drainage can exceed five seconds after a busy
+    // capture run. Keep ownership until close; don't report a false failure or
+    // permit a second experiment while the first is releasing its GPU state.
+    const timeout=setTimeout(()=>{child.off("close",closed);reject(new Error("Experiment is still closing; inspect status before starting another"));},30000);
     child.once("close",closed);
     if(!child.kill()){clearTimeout(timeout);child.off("close",closed);reject(new Error("Could not close the experiment"));}
   });

@@ -666,5 +666,7 @@ export function mountRecipeWiring(host, ctx) {
       section("Board Controls", el("p", {}, "Click a cell to choose its material. Drag a cell to move or swap it."),
         el("p", {}, "Ctrl+C / Ctrl+V copies cards, cells and patterns. Delete clears a cell or removes a card.")));
   }
-  return { open, review: () => ctx.review(doc), refresh: () => open() };
+  return { open, review: () => ctx.review(doc), refresh: () => open(),
+    assistantContext: () => spec && { label: "Recipe wiring · " + (spec.label ?? "selected recipe"), sources: [spec] },
+  };
 }

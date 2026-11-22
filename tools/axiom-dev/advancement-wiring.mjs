@@ -1,4 +1,5 @@
 import { el, button, findEntry } from "./inspector.mjs";
+import { copyText } from "./context-menu.mjs";
 import { advancementPath, field, textOf } from "./idea-data.mjs";
 import { address } from "./targets.mjs";
 import { patch, quoted } from "./syntax.mjs";
@@ -15,6 +16,7 @@ export function mountAdvancementWiring(host, ctx) {
   const positions = new Map();
   const status = el("span", { className: "wire-status", role: "status" });
   const errors = el("p", { className: "wire-error", role: "status", hidden: true });
+  const feedback = el("span", { className: "wire-status", role: "status" });
   const list = el("div", { className: "wire-recipe-list", "aria-label": "Advancement nodes" });
   const search = el("input", { type: "search", placeholder: "Find an advancement", "aria-label": "Find an advancement" });
   const scroll = el("div", { className: "wire-scroll", "aria-label": "Advancement wire canvas" });
@@ -27,13 +29,27 @@ export function mountAdvancementWiring(host, ctx) {
       button("Reset Layout", () => { positions.clear(); renderCanvas(); }))),
   el("div", { className: "wire-layout" },
     el("aside", { className: "wire-library wire-adv-library" }, el("section", { className: "wire-library-recipes" },
-      el("header", { className: "wire-section-head" }, el("h2", {}, "Progression"), button("+ New", ctx.createAdvancement)),
+      el("header", { className: "wire-section-head" }, el("h2", {}, "Browse"), button("+ New", ctx.createAdvancement, "New advancement")),
       search, list)),
     el("section", { className: "wire-main" },
       el("header", { className: "wire-canvas-bar" }, el("strong", {}, "Advancement Tree"),
-        el("span", {}, "Parent → Advancement")), scroll, errors), inspector));
+        button("Show selection", () => revealSelection()),
+        feedback), scroll, errors), inspector));
   search.oninput = renderList;
-  search.onkeydown = event => { if (event.key === "Enter") list.firstElementChild?.click(); };
+  search.onkeydown = event => {
+    if (!["ArrowDown", "Enter"].includes(event.key)) return;
+    const first = list.querySelector("button");
+    if (!first) return;
+    event.preventDefault();
+    first.focus();
+    if (event.key === "Enter") first.click();
+  };
+  list.onkeydown = event => {
+    if (!["ArrowDown", "ArrowUp"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "ArrowDown") event.target.nextElementSibling?.focus();
+    else (event.target.previousElementSibling ?? search).focus();
+  };
 
   function report(message = "") { errors.textContent = message; errors.hidden = !message; }
   async function open(target) {
@@ -89,19 +105,30 @@ export function mountAdvancementWiring(host, ctx) {
   }
   function select(id, reveal = false) {
     selected = id;
-    renderList(); renderInspector();
+    feedback.textContent = "";
+    for (const control of list.querySelectorAll("button")) {
+      control.setAttribute("aria-current", String(control.dataset.advancement === id));
+    }
+    renderInspector();
     for (const node of scroll.querySelectorAll(".wire-adv-node")) {
       node.classList.toggle("wire-selected", node.dataset.advancement === id);
-      if (reveal && node.dataset.advancement === id) node.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
+    if (reveal) revealSelection();
+  }
+  function revealSelection() {
+    const node = [...scroll.querySelectorAll(".wire-adv-node")].find(card => card.dataset.advancement === selected);
+    node?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   function renderList() {
     const query = search.value.toLowerCase().trim();
     list.replaceChildren(...records.filter(row => (row.name + " " + row.id).toLowerCase().includes(query)).map(row => {
       const control = button(row.name, () => select(row.id, true), row.id, "wire-recipe-row");
+      control.dataset.advancement = row.id;
       control.setAttribute("aria-current", String(row.id === selected));
       return control;
     }));
+    if (!list.childElementCount) list.append(el("p", { role: "status" },
+      query ? "No matching advancements." : "No advancements yet."));
   }
   function layout() {
     const children = new Map();
@@ -165,10 +192,35 @@ export function mountAdvancementWiring(host, ctx) {
     findEntry("Choose Parent", records.filter(other => other.id !== row.id)
       .map(other => ({ key: other.id, label: other.name, detail: other.id })), row.parent, parent => link(row.id, parent));
   }
+  async function copyHandoff(id) {
+    try {
+      if (doc.text !== revision) read();
+      const row = byId.get(id);
+      if (!row) throw new Error("This advancement no longer exists in the draft.");
+      const children = records.filter(candidate => candidate.parent === id);
+      await copyText([
+        "Advancement: " + row.name + " (" + id + ")",
+        "Source: " + doc.path,
+        "Record address: " + JSON.stringify(row.parts),
+        "Version: " + (ctx.dirty(doc) ? "Unsaved editor draft" : "Saved project file"),
+        "Parent ID: " + (row.parent || "(root)"),
+        "Child IDs: " + (children.map(child => child.id).join(", ") || "(none)"),
+        "", "Current RON definition:", revision.slice(row.node.start, row.node.end),
+      ].join("\n"));
+      if (selected === id) feedback.textContent = "Handoff copied";
+    } catch (error) { report(error.message); }
+  }
   function renderInspector() {
     const row = byId.get(selected);
-    const title = el("header", { className: "wire-section-head" }, el("h2", {}, "Inspector"));
+    const heading = el("h2", { tabIndex: -1 }, row?.name ?? "Inspector");
+    const title = el("header", { className: "wire-section-head" }, heading);
     if (!row) { inspector.replaceChildren(title); return; }
+    const parent = byId.get(row.parent);
+    const children = records.filter(candidate => candidate.parent === row.id);
+    const jump = relative => button(relative.name, () => {
+      select(relative.id, true);
+      inspector.querySelector("h2").focus({ preventScroll: true });
+    }, relative.id);
     const name = el("input", { type: "text", value: row.name, maxLength: 120 });
     name.onchange = () => {
       const value = name.value.trim();
@@ -187,19 +239,31 @@ export function mountAdvancementWiring(host, ctx) {
       else report("Enter a positive target within range");
     };
     inspector.replaceChildren(title,
-      el("section", { className: "wire-section" }, el("h3", {}, "Advancement"),
+      el("section", { className: "wire-section" }, el("h3", {}, "Definition"),
         cap("Name", name), el("code", {}, row.id), el("p", {}, event),
-        amount ? cap("Target" + unit, quantity) : null,
-        ctx.assist ? button("Ask AI", () => ctx.assist({ path: doc.path, parts: row.parts, label: row.name })) : null),
-      el("section", { className: "wire-section" }, el("h3", {}, "Tree Parent"),
-        el("p", {}, byId.get(row.parent)?.name ?? (row.parent || "Branch Root")),
-        button(row.parent ? "Change Parent" : "Choose Parent", () => chooseParent(row)),
-        row.parent ? button("Disconnect", () => link(row.id, "")) : null));
+        amount ? cap("Target" + unit, quantity) : null),
+      el("section", { className: "wire-section" }, el("h3", {}, "Parent"),
+        parent ? jump(parent) : el("p", {}, row.parent ? "Missing parent · " + row.parent : "Branch root"),
+        el("div", { className: "wire-tools wire-adv-actions" },
+          button(row.parent ? "Change parent" : "Choose parent", () => chooseParent(row)),
+          row.parent ? button("Make root", () => link(row.id, "")) : null)),
+      el("section", { className: "wire-section" }, el("h3", {}, "Children"),
+        children.length ? children.map(jump) : el("p", {}, "No child advancements")),
+      el("section", { className: "wire-section" }, el("h3", {}, "AI handoff"),
+        el("div", { className: "wire-tools wire-adv-actions" },
+          button("Copy handoff", () => copyHandoff(row.id)),
+          ctx.assist ? button("Open in AI", () => ctx.assist({ path: doc.path, parts: row.parts, label: row.name })) : null)));
   }
   function render() {
+    feedback.textContent = "";
     status.textContent = ctx.dirty(doc) ? "Draft · advancements.ron" : "Saved · advancements.ron";
     undo.disabled = !doc.undo.length; redo.disabled = !doc.redo.length; review.disabled = !ctx.dirty(doc);
     renderList(); renderCanvas(); renderInspector();
   }
-  return { open, refresh: () => open(), review: () => ctx.review(doc) };
+  return { open, refresh: () => open(), review: () => ctx.review(doc),
+    assistantContext() {
+      const row = byId.get(selected);
+      return row && { label: "Advancements · " + row.name, sources: [{ path: doc.path, parts: row.parts, label: row.name }] };
+    },
+  };
 }

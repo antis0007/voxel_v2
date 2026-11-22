@@ -899,7 +899,7 @@ function build(doc, ui, sheet) {
       const bytes = Uint8Array.from(atob(result.png), value => value.charCodeAt(0));
       const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
       ui.dialog("Native tool preview", [el("p", {}, result.scope),
-        el("p", {}, "Rows: stone, copper, iron, steel. Blank columns use other native art paths."),
+        el("p", {}, "The first four rows show tools in stone, copper, iron, and steel. The last two show copper parts and clay molds."),
         el("div", { style: "overflow:auto;max-height:65vh" }, el("img", { src: url,
           alt: "Saved tool masks rendered by the native game composer", style: "width:" + result.width * 4 + "px;max-width:none;image-rendering:pixelated" })),
         el("p", { className: "muted" }, "Evidence: " + result.output)], "Done", () => { URL.revokeObjectURL(url); return true; });
@@ -916,6 +916,7 @@ function build(doc, ui, sheet) {
         })) : [el("p", {}, "No direct loader references found.")], "Done", () => true);
       } catch (error) { ui.note(error.message, true); }
     }),
+    button("Foliage wind guide", () => ui.open("docs/axiom-notes/sprite-foliage-wind.md"), "Open sprite wind reference and Axiom acceptance brief"),
     button("Normal map lab", () => openNormalLab(native, entry?.name ?? "sprite")),
     button("Export PNG", () => native.toBlob(blob => download(blob, (entry?.name ?? "sprite") + ".png"))),
     sheet ? button("Export Source", () => download(new Blob([doc.text], { type: "text/plain" }), doc.path.split("/").at(-1))) : null);

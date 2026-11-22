@@ -4,6 +4,10 @@ import { address } from "./targets.mjs";
 
 export const recipePath = "assets/recipes.ron";
 export const spawnPath = "assets/spawns.ron";
+export const habitatRealms = [
+  ["Surface", "Surface"], ["Underground", "Underground"], ["Nether", "Nether"], ["Shell", "Shell realms"],
+  ["Gloaming", "Gloaming"], ["Highfold", "Highfold"],
+];
 export const advancementPath = "assets/advancements.ron";
 export const field = (node, key) => node?.children?.find(child => child.key === key);
 export const textOf = node => node?.raw === undefined ? "" : decode(node.raw);

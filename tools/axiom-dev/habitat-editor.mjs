@@ -1,12 +1,11 @@
 import { el, button } from "./inspector.mjs";
 import { addEntry, patch, quoted } from "./syntax.mjs";
 import { resolve } from "./targets.mjs";
-import { field, spawnPath, textOf } from "./idea-data.mjs";
+import { field, habitatRealms, spawnPath, textOf } from "./idea-data.mjs";
 
 const animalBodies = new Set(["49", "50", "51", "52"]);
 export const animalBody = (id, body) => animalBodies.has(body) ? body : animalBodies.has(id) ? id : "";
 export const isAnimal = spec => Boolean(spec.body) || ["16", "17", "42"].includes(spec.id);
-const realms = [["Surface", "Surface"], ["Underground", "Underground"], ["Nether", "Nether"], ["Shell", "Shell realms"]];
 const times = [["Any", "Any time"], ["Day", "Day"], ["Night", "Night"]];
 const human = name => name.replace(/([a-z])([A-Z])/g, "$1 $2");
 
@@ -31,7 +30,7 @@ export async function editHabitat(ctx, species, rule, done, biome) {
     time.value = existingTime;
     const all = el("input", { type: "checkbox", checked: row ? !existingBiomes.length : !animal });
     const choices = names.map(name => [name, el("input", { type: "checkbox", checked: existingBiomes.includes(name) })]);
-    const realmChoices = realms.map(([value, title]) => [value, title,
+    const realmChoices = habitatRealms.map(([value, title]) => [value, title,
       el("input", { type: "checkbox", checked: existingRealms.includes(value) })]);
     const chips = el("div", { className: "habitat-biomes" }, choices.map(([name, input]) => el("label", {}, input, human(name))));
     all.onchange = () => { chips.hidden = all.checked; };

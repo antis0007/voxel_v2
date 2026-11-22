@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, readdirSync, openSync, closeSync, readSync, fstatSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, openSync, closeSync, readSync, fstatSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { randomBytes, createHash } from "node:crypto";
 import { root, state, ensureDirectory } from "./workspace.mjs";
@@ -47,12 +47,32 @@ export async function engineRequest(request) {
 }
 
 export function startEngineSession(request) {
-  if (!request || typeof request!=="object" || Array.isArray(request) || Object.keys(request).some(k => !["world","seed","scale","generator","scene","view"].includes(k))) {
-    throw new Error("Session fields: world, seed, scale, optional generator, scene (exploration or factory) and view (4..64 chunks)");
+  const fields = ["world", "seed", "scale", "generator", "scene", "view"];
+  if (!request || typeof request!=="object" || Array.isArray(request) || Object.keys(request).some(k => ![...fields,"resume"].includes(k))) {
+    throw new Error("Session fields: world, seed, scale, optional generator, scene and view; or resume with an existing disposable session ID");
+  }
+  const parent = path.join(state, "engine-worlds");
+  if (Object.hasOwn(request, "resume")) {
+    if (Object.keys(request).length !== 1 || typeof request.resume !== "string" || !/^[a-f0-9]{16}$/.test(request.resume)) {
+      throw new Error("Resume requires only the 16-character disposable session ID from saveDirectory");
+    }
+    const directory = path.join(parent, request.resume);
+    if (realpathSync(directory) !== directory) throw new Error("Disposable session directory was redirected");
+    const metadata = path.join(directory, "session.json"), checkpoint = path.join(directory, "quicksave.vxw");
+    for (const file of [metadata, checkpoint]) {
+      if (realpathSync(file) !== file || !statSync(file).isFile()) throw new Error("Expected this session's saved checkpoint and launch metadata");
+    }
+    if (statSync(metadata).size > 4096) throw new Error("Invalid disposable session metadata");
+    const saved = JSON.parse(readFileSync(metadata, "utf8"));
+    if (saved.schema !== 1 || !saved.session || typeof saved.session !== "object" || Array.isArray(saved.session)
+        || Object.keys(saved.session).some(key => !fields.includes(key))) throw new Error("Invalid disposable session metadata");
+    game.start(false, undefined, undefined, { directory, session: saved.session, saved: true });
+    return game.status();
   }
   const session = { world: "hills", seed: 74, scale: 1, ...request };
   if(session.scene==='factory')session.world='superflat';
-  const directory = ensureDirectory(path.join(state, "engine-worlds", randomBytes(8).toString("hex")));
+  const directory = ensureDirectory(path.join(parent, randomBytes(8).toString("hex")));
+  writeFileSync(path.join(directory, "session.json"), JSON.stringify({ schema: 1, session }), { flag: "wx" });
   game.start(false, undefined, undefined, { directory, session });
   return game.status();
 }

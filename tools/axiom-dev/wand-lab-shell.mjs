@@ -2,10 +2,11 @@
 // so the page's own module stays owned by its authors.
 import { installPalette, registerCommands } from "./command-palette.mjs";
 import { mountShell } from "./forge-shell.mjs";
+import { wandAssistantContext } from "./wand-lab-ui.mjs";
 
 const $ = id => document.getElementById(id);
 const click = selector => () => document.querySelector(selector)?.click();
-mountShell({ current: "/wand-lab" });
+mountShell({ current: "/wand-lab", context: wandAssistantContext });
 installPalette();
 registerCommands(() => [
   ...[...document.querySelectorAll("nav.tabs [data-tab]")].map(tab => ({

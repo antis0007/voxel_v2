@@ -13,6 +13,7 @@ import { canAssist, maxSources } from "./agent-contract.mjs";
 import { showSystemBoard } from "./system-board.mjs";
 import { materialPath } from "./material-properties.mjs";
 import { codingActions } from "./coding-actions.mjs";
+import { gameMap } from "./game-map.mjs";
 
 const systems = [
   ["alloying", "Materials and alloying", "Tool materials, molten recipes, casting and assembled equipment",
@@ -35,6 +36,12 @@ const systems = [
       "crates/app/src/world/farming/sidecar.rs", "tools/axiom-dev/RESIDENT_WORK.md"]],
   ["sim", "Simulation", "Cells, fluid rules, reactions and orbital systems",
     ["crates/app/src/simulation", "crates/sim/src", "crates/sim_gpu/src", "crates/space/src"], ["assets/reactions.ron", "assets/materials.ron"]],
+  ["space", "Moons and planets", "Bodies, spheres of influence, foreign ground and sky discs",
+    ["crates/space/src", "crates/app/src/planet", "crates/app/src/space_nav"],
+    ["docs/axiom-notes/moons-and-planets.md", "assets/star_systems.ron", "assets/planets.ron",
+      "crates/worldgen/src/moon.rs", "crates/app/src/planet/ground_mesh.rs", "crates/app/src/planet/bodies.rs",
+      "crates/app/src/planet/influence.rs", "crates/app/src/planet/review.rs",
+      "crates/app/src/shaders/celestial_bodies.wgsl", "tools/axiom-dev/PLANET_LAB.md"]],
   ["dungeons", "Dungeons and impossible spaces", "Room plans, illusions, treasure, encounters and gravity",
     ["crates/worldgen/src/dungeon/v2", "crates/worldgen/src/manyfold", "crates/app/src/manyfold"],
     ["crates/app/src/world/mirage.rs", "crates/app/src/world/adventure/encounters.rs",
@@ -113,11 +120,13 @@ export function mountGraph(host, ctx) {
   let offset = 0;
   let noteIndex;
   let currentDoc;
+  let mapView, mapChoice;
   const body = el("div", { className: "map-layout" });
   const crumb = el("div", { className: "map-crumb" });
   const find = button("Find anything", () => search(), "Find files, records, settings and notes (Ctrl+K)", "map-find");
   find.append(el("kbd", {}, "Ctrl K"));
   const tools = el("header", { className: "map-toolbar" }, crumb, find,
+    button("Files", () => go(folder("")), "Browse source, tools and documentation by folder"),
     button("System Boards", () => go(boards), "Open your custom system boards"),
     button("Create", () => createIdea(ctx, go, selected.path), "Create a recipe, spawn rule, or advancement", "primary"),
     button("New Note", () => newNote(selected.path && selected.kind !== "folder" ? selected : null), "Create a linked note"));
@@ -202,6 +211,57 @@ export function mountGraph(host, ctx) {
 
   const notes = () => noteIndex ??= ctx.api("/api/notes").catch(() => []);
 
+  async function recordMenu(spec, anchor, point) {
+    let target = spec;
+    if (spec.trail?.length) {
+      try {
+        const doc = await ctx.load(spec.path);
+        target = { ...spec, parts: address(ctx.tree(doc), spec.trail) };
+      } catch { /* The menu still offers the file-level actions. */ }
+    }
+    const bounds = anchor.getBoundingClientRect();
+    contextAction(target, anchor, point ?? [bounds.left, bounds.bottom]);
+  }
+
+  // Key and value rows for the map's side panel: a record's fields, or a
+  // source file's tunable constants.
+  async function recordFields(spec) {
+    const doc = await ctx.load(spec.path);
+    if (/\.rs$/.test(spec.path)) return rustTunables(doc.text).map(item => [item.name, item.raw + "  " + item.type]);
+    if (!["ron", "json"].includes(doc.kind)) return [];
+    const node = at(ctx.tree(doc), spec.trail ?? []);
+    if (!node?.children) return [];
+    const body = !node.key && node.children[1]?.children && node.children[0]?.raw !== undefined ? node.children[1] : node;
+    return body.children.map((child, index) => [child.key ?? "[" + index + "]",
+      child.raw !== undefined ? decode(child.raw) : doc.text.slice(child.start, child.end).replace(/\s+/g, " ").slice(0, 160)]);
+  }
+
+  // The project node is the whole-game graph. It keeps its camera and
+  // selection across refreshes and is rebuilt only when a catalog changes.
+  async function showMap(ticket) {
+    let graph;
+    try { graph = await ctx.api("/api/game-graph"); }
+    catch { return false; }
+    if (ticket !== request) return true;
+    if (!graph?.nodes) return false;
+    if (mapView?.stamp !== graph.stamp) {
+      const prior = mapView?.current();
+      mapView = gameMap(graph, {
+        edit: go,
+        openFile: (path, trail) => ctx.open(path, trail, trail ? undefined : 1),
+        menu: recordMenu,
+        onSelect: spec => { mapChoice = spec; },
+        note: (message, failed) => ctx.note(message, failed),
+        maxPins: maxSources,
+        assist: (specs, task) => ctx.assist ? ctx.assist(specs, task) : ctx.note("The agent workbench is unavailable here", true),
+        fields: recordFields,
+      });
+      if (prior) mapView.focus(prior.path, prior.trail);
+    }
+    body.replaceChildren(mapView.element);
+    return true;
+  }
+
   async function refresh(resetNotes = false) {
     if (resetNotes) noteIndex = undefined;
     const ticket = ++request;
@@ -215,6 +275,8 @@ export function mountGraph(host, ctx) {
     let outgoing = [];
     const incoming = history.length ? [history.at(-1)] : [];
     let view = original;
+    if (original.kind === "project" && await showMap(ticket)) return;
+    if (ticket !== request) return;
     try {
       if (original.kind === "project") {
         outgoing = [boards, ...systemNodes];
@@ -480,6 +542,10 @@ export function mountGraph(host, ctx) {
   }
 
   return { refresh, search, review: () => ctx.review(currentDoc),
+    assistantContext: () => {
+      const spec = selected.kind === "project" ? mapChoice : selected;
+      return spec?.path && { label: "Reference Map · " + spec.label, sources: [spec] };
+    },
     open: spec => {
       ctx.activate();
       go({ ...spec, kind: spec.parts ? "record" : fileNode(spec.path).kind });

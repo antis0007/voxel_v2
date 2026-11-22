@@ -261,6 +261,10 @@ export function mountPlaytest(host, api, note, visible) {
 
   sync();
   setInterval(() => { if (visible()) { sync(); loadOptions(); } }, 1000);
-  return { sections };
+  return { sections, assistantContext() {
+    const session = game?.run?.session;
+    return { label: "Playtest", summary: [status.textContent, session?.world, session && "Seed " + session.seed]
+      .filter(Boolean).join(" · "), sources: [{ path: "crates/app/src/dev_panel/engine.rs" }] };
+  } };
 }
 

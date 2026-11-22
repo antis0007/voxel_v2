@@ -3,10 +3,22 @@ const nativeCheckers = new Set(catalogContracts.map(row => row.schema.split("/")
 const sourcePath = /^(?:assets|crates|docs|tools)\/(?:[\w .-]+\/)*[\w .-]+\.(?:ron|json|rs|wgsl|toml|md|mjs|css|html|txt)$/i;
 export const canAssist = path => typeof path === "string" && sourcePath.test(path) &&
   !path.split("/").some(part => part.startsWith("."));
+// String.length/HTML input lengths count UTF-16 code units, not UTF-8 bytes.
+export const maxTaskLength = 16_000;
+// Mission references JSON-encode the objective, acceptance and prior step summaries.
+// Reserve worst-case six-character JSON escapes without trimming user instructions.
+export const maxWorkflowReference = 6 * (maxTaskLength + 700 + 12 * (600 + 120)) + 4096;
+export function assertTask(task, label = "Task") {
+  if (typeof task !== "string" || !task.trim()) throw new Error(label + " needs a non-empty brief.");
+  if (task.length > maxTaskLength) throw new Error(label + " allows at most " + maxTaskLength
+    + " characters (received " + task.length + "). Shorten it or split it into missions; no text was submitted to the model.");
+}
 export const maxSources = 5;
 export const maxExcerpt = 4800;
 export const maxPackReference = 64_000;
-export const verificationSource = file => nativeCheckers.has(file) || /^tools\/portal-native-check\//.test(file) || /^tools\/axiom-dev\/(?:agent-(?:evidence|checks|contract|decisions|runner|bundles)|verification-guard|workspace|server|catalog-contracts|fabrication-contract|native-content-validation|build-validators|portal-validator|build-portal-validator)\.mjs$/.test(file) || /(?:^|\/)(?:tests?|benches|fixtures)(?:\/|\.)|(?:[._-](?:tests?|spec|bench))\./i.test(file);
+export const verificationSource = file => nativeCheckers.has(file) || file === "tools/axiom-dev/mesh-budget-regression.rs"
+  || /^tools\/axiom-dev\/(?:workflow(?:-store|-live-review|-source)?|agent-lane|parity-(?:work|provider|snapshot|source-tools)|factory-lab|scenarios\/[^/]+)\.(?:mjs|json)$/.test(file)
+  || /^tools\/portal-native-check\//.test(file) || /^tools\/axiom-dev\/(?:agent-(?:evidence|checks|contract|decisions|runner|bundles)|verification-guard|workspace|server|catalog-contracts|fabrication-contract|native-content-validation|build-validators|portal-validator|build-portal-validator)\.mjs$/.test(file) || /(?:^|\/)(?:tests?|benches|fixtures)(?:\/|\.)|(?:[._-](?:tests?|spec|bench))\./i.test(file);
 const maxChanges = 12;
 
 const string = { type: "string" };

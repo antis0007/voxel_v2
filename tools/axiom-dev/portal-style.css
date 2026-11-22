@@ -20,6 +20,10 @@
 .portal-empty { position: absolute; left: 30px; top: 55px; width: 390px; max-width: calc(100vw - 90px); display: grid; gap: 18px; color: #b5c4d5; }
 .portal-empty h2 { font-size: 25px; color: var(--text); }
 .portal-empty button { justify-self: start; }
+.portal-recovery { width: min(28rem, calc(100% - 44px)); left: 22px; top: 24px; gap: 12px;
+  padding: 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.portal-recovery p, .portal-recovery code { overflow-wrap: anywhere; }
+.portal-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .portal-inspector { min-height: 0; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); padding: 22px 19px; display: flex; flex-direction: column; gap: 15px; }
 .portal-inspector h2 { font-size: 20px; overflow-wrap: anywhere; }
 .portal-kicker { color: var(--blue); font-size: 10px; letter-spacing: 1.4px; }

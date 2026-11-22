@@ -1,10 +1,14 @@
 import { el, button } from "./inspector.mjs";
 import { applyPortalOperations, dimensions, portalPath } from "./portal-operations.mjs";
+import { copyText } from "./context-menu.mjs";
+
+const validatorCommand = "node tools/axiom-dev/build-portal-validator.mjs";
 
 export function mountPortalLayout(host, ctx) {
   let base, graph, operations = [], undo = [], redo = [], selected, linking, filter = "Surface", busy = false;
   let zoom = 1, pan = [24, 36];
-  const toolbar = el("header", { className: "portal-toolbar" });
+  let loading;
+  const toolbar = el("header", { className: "portal-toolbar" }, el("strong", {}, "Dimensions & portals"));
   const status = el("p", { className: "portal-status", role: "status", "aria-live": "polite" });
   const canvas = el("div", { className: "portal-canvas", "aria-label": "Portal layout canvas" });
   const stage = el("div", { className: "portal-stage" });
@@ -273,5 +277,36 @@ export function mountPortalLayout(host, ctx) {
     }
     load(await ctx.api("/api/portal-layout")); fit(); message("Saved layout loaded. Add an opening to begin.");
   }
-  return { async refresh() { if (!base) { try { await reload(); } catch (error) { message(error.message, true); } } }, open() { return this.refresh(); } };
+  function refresh() {
+    if (base || loading) return loading;
+    stage.replaceChildren();
+    message("Loading saved layout…");
+    loading = reload().catch(error => {
+      const needsValidator = error.message === "Build the portal validator: " + validatorCommand;
+      message("Could not load the saved layout.", true);
+      stage.replaceChildren(el("div", { className: "portal-empty portal-recovery" },
+        el("h2", {}, needsValidator ? "Portal validator needs setup" : "Layout unavailable"),
+        el("p", {}, needsValidator
+          ? "Run this command from the Axiom project folder, then retry."
+          : error.message),
+        needsValidator ? el("code", {}, validatorCommand) : null,
+        el("div", { className: "portal-recovery-actions" },
+          needsValidator ? button("Copy command", act(async () => {
+            await copyText(validatorCommand);
+            message("Build command copied.");
+          })) : null,
+          button("Retry", refresh, "", "primary"))));
+    }).finally(() => { loading = undefined; });
+    return loading;
+  }
+  return { refresh, open: refresh,
+    assistantContext() {
+      const opening = selected?.kind === "node" && graph?.nodes.find(row => row.id === selected.id);
+      return {
+        label: opening ? "Dimensions & portals · " + opening.label : "Dimensions & portals",
+        summary: opening ? "Opening " + opening.id : undefined,
+        sources: [{ path: portalPath }, { path: "crates/app/src/world/portals.rs" }],
+      };
+    },
+  };
 }

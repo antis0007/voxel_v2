@@ -5,9 +5,15 @@
 const RECENT_KEY = "axiom-dev.palette.recent";
 const providers = [];
 let dialog, input, list, scope, items = [], cursor = 0, filterGroup = "";
+let reportError = console.error;
 
 const recent = {
-  read() { try { return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]"); } catch { return []; } },
+  read() {
+    try {
+      const entries = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+      return Array.isArray(entries) ? entries : [];
+    } catch { return []; }
+  },
   push(id) {
     const next = [id, ...recent.read().filter(entry => entry !== id)].slice(0, 12);
     try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)); } catch { /* private window */ }
@@ -60,7 +66,13 @@ function render() {
     chip.textContent = name;
     chip.className = active ? "active" : "";
     chip.setAttribute("aria-pressed", String(active));
-    chip.onclick = () => { filterGroup = name === "All" ? "" : name; if (prefix) input.value = query; render(); input.focus(); };
+    chip.onclick = () => {
+      filterGroup = name === "All" ? "" : name;
+      if (prefix) input.value = query;
+      cursor = 0;
+      render();
+      input.focus();
+    };
     return chip;
   }));
   items = all
@@ -97,11 +109,22 @@ function render() {
     row.onclick = () => execute(command);
     return row;
   }));
-  if (!items.length) list.append(Object.assign(document.createElement("li"), { className: "palette-empty", textContent: "No matching commands" }));
-  input.setAttribute("aria-activedescendant", items.length ? "palette-item-" + cursor : "");
+  list.scrollTop = 0;
+  if (!items.length) {
+    list.append(Object.assign(document.createElement("li"), {
+      className: "palette-empty",
+      role: "presentation",
+      textContent: "No matches. Try a shorter search or choose All.",
+    }));
+  }
+  mark();
 }
 
 function mark() {
+  if (!items.length) {
+    input.removeAttribute("aria-activedescendant");
+    return;
+  }
   [...list.children].forEach((row, index) => {
     row.classList.toggle("active", index === cursor);
     row.setAttribute("aria-selected", String(index === cursor));
@@ -110,10 +133,14 @@ function mark() {
   input.setAttribute("aria-activedescendant", items.length ? "palette-item-" + cursor : "");
 }
 
-function execute(command) {
+async function execute(command) {
   dialog.close();
-  recent.push(command.id);
-  try { Promise.resolve(command.run()).catch(error => console.error(error)); } catch (error) { console.error(error); }
+  try {
+    await command.run();
+    recent.push(command.id);
+  } catch (error) {
+    reportError(`${command.label} failed. ${error?.message ?? error}`);
+  }
 }
 
 function build() {
@@ -124,6 +151,7 @@ function build() {
   input.type = "search";
   input.placeholder = "Type a command, file, section…  (group: narrows, e.g. file: recipes)";
   input.setAttribute("role", "combobox");
+  input.setAttribute("aria-label", "Search commands");
   input.setAttribute("aria-controls", "palette-list");
   input.setAttribute("aria-expanded", "true");
   scope = document.createElement("div");
@@ -133,24 +161,17 @@ function build() {
   list.setAttribute("role", "listbox");
   const foot = document.createElement("p");
   foot.className = "palette-foot";
-  foot.textContent = "↑↓ move · Enter run · Tab next group · Esc close";
+  foot.textContent = "↑↓ move · Enter run · Tab reach filters · Esc close";
   dialog.append(input, scope, list, foot);
   document.body.append(dialog);
   input.addEventListener("input", () => { cursor = 0; render(); });
   input.addEventListener("keydown", event => {
+    if (event.isComposing || !items.length) return;
     if (event.key === "ArrowDown") { event.preventDefault(); cursor = Math.min(items.length - 1, cursor + 1); mark(); }
     else if (event.key === "ArrowUp") { event.preventDefault(); cursor = Math.max(0, cursor - 1); mark(); }
     else if (event.key === "PageDown") { event.preventDefault(); cursor = Math.min(items.length - 1, cursor + 8); mark(); }
     else if (event.key === "PageUp") { event.preventDefault(); cursor = Math.max(0, cursor - 8); mark(); }
     else if (event.key === "Enter") { event.preventDefault(); if (items[cursor]) execute(items[cursor]); }
-    else if (event.key === "Tab") {
-      event.preventDefault();
-      const names = ["", ...new Set(collect().map(command => command.group))];
-      const at = names.findIndex(name => name.toLowerCase() === filterGroup.toLowerCase());
-      filterGroup = names[(at + (event.shiftKey ? names.length - 1 : 1)) % names.length];
-      cursor = 0;
-      render();
-    }
   });
   dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
 }
@@ -168,7 +189,8 @@ export function openPalette(group = "") {
 }
 
 /** Install the global shortcuts once. */
-export function installPalette() {
+export function installPalette(onError = console.error) {
+  reportError = onError;
   document.addEventListener("keydown", event => {
     const modifier = event.ctrlKey || event.metaKey;
     if (event.key === "F1" || (modifier && event.shiftKey && event.key.toLowerCase() === "p")) {

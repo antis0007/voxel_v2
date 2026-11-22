@@ -33,6 +33,15 @@ const state = {
   survey: null, surveySort: { key: "vs_reference", dir: -1 },
   undo: [], redo: [],
 };
+export function wandAssistantContext() {
+  const { tier, mode, slots } = state.build;
+  const deck = slots.map(id => state.byId.get(id)?.name ?? String(id)).join(", ");
+  return {
+    label: "Wand Lab · " + state.tab,
+    summary: "Tier " + tier + " · Cast mode " + mode + " · Deck " + (deck || "empty"),
+    sources: [{ path: "assets/spells.ron" }, { path: "crates/app/src/dev_panel/wand_lab.rs" }],
+  };
+}
 const remembered = (() => { try { return JSON.parse(localStorage.getItem(STORE) ?? "{}"); } catch { return {}; } })();
 Object.assign(state.build, remembered.build ?? {});
 state.locked = remembered.locked ?? [];

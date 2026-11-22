@@ -6,7 +6,7 @@ import { posix } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { files, read, root } from "./workspace.mjs";
-import { canAssist, maxSources } from "./agent-contract.mjs";
+import { canAssist, maxSources, assertTask } from "./agent-contract.mjs";
 import { boardTargets, focusLine } from "./context-targets.mjs";
 import { cachedMod, inspectMod } from "./mod-evidence.mjs";
 import { parityContext } from "./parity-data.mjs";
@@ -107,7 +107,10 @@ function compilerDiagnostics(logs, indexed) {
 
 export async function collectContext(request, logs = []) {
   const { task, paths = [], symbols = [], targets = [], modDigests = [] } = request ?? {};
-  if (typeof task !== "string" || !task.trim() || task.length > 2400 || !Array.isArray(paths) ||
+  assertTask(task);
+  const query = request.query === undefined ? task : request.query;
+  assertTask(query, "Context query");
+  if (!Array.isArray(paths) ||
       paths.length > maxSources || paths.some(path => !canAssist(path)) || !Array.isArray(symbols) ||
       !Array.isArray(targets) || targets.length > maxSources || targets.some(target =>
         !canAssist(target?.path) || (target.line !== undefined && (!Number.isSafeInteger(target.line) || target.line < 1)) ||
@@ -129,6 +132,7 @@ export async function collectContext(request, logs = []) {
   const owned = unique([...paths, ...targets.map(target => target.path)]).filter(path => indexed.has(path));
   if (owned.length > maxSources) throw new Error("Choose up to five project sources");
   const focus = new Map(), boardVersions = [], warnings = [];
+  for (const path of unique(paths)) if (!indexed.has(path)) warnings.push("Requested source unavailable: " + path);
   function add(target, via) {
     if (!indexed.has(target.path)) { warnings.push("Source unavailable · " + target.path); return; }
     const list = focus.get(target.path) ?? [];
@@ -146,8 +150,8 @@ export async function collectContext(request, logs = []) {
   }
   for (const target of await contentTargets(owned, indexed, warnings)) add(target);
   const names = unique([...symbols, ...targets.map(target => target.name).filter(Boolean),
-    ...terms(task).filter(word => /_|[a-z][A-Z]/.test(word))]).slice(0, 16);
-  const words = unique(terms(task.toLowerCase()).filter(word => !generic.has(word))).slice(0, 12);
+    ...terms(query).filter(word => /_|[a-z][A-Z]/.test(word))]).slice(0, 16);
+  const words = unique(terms(query.toLowerCase()).filter(word => !generic.has(word))).slice(0, 12);
   // Plain-language requests need content retrieval too, not just filename matches.
   const toolingScope = owned.length > 0 && owned.every(path => path.startsWith("tools/"));
   const found = await references(names.length ? names : words, toolingScope ? ["tools/axiom-dev", "docs"] : undefined);
@@ -165,12 +169,12 @@ export async function collectContext(request, logs = []) {
     if (!diagnosticsByPath.has(row.path)) diagnosticsByPath.set(row.path, []);
     diagnosticsByPath.get(row.path).push(row);
   }
-  const taskText = task.toLowerCase().replaceAll("\\", "/");
+  const taskText = query.toLowerCase().replaceAll("\\", "/");
   const rank = path => {
     const lower = path.toLowerCase();
     if (toolingScope && /^(?:crates|assets)\//.test(path) && !focus.has(path) && !taskText.includes(lower)) return 0;
     if (!owned.some(source => source.startsWith("tools/")) && path.startsWith("tools/")
-        && !focus.has(path) && !taskText.includes(lower) && !/\b(?:tooling|workbench|developer|forge)\b/i.test(task)) return 0;
+        && !focus.has(path) && !taskText.includes(lower) && !/\b(?:tooling|workbench|developer|forge)\b/i.test(query)) return 0;
     const matchingDiagnostic = diagnosticsByPath.get(path)?.some(row => words.some(word => row.message.toLowerCase().includes(word)));
     return Number(owned.includes(path)) * 18 + Number(focus.has(path)) * 16 + Math.min(3, matching.get(path)?.length ?? 0) * 7
       + Number(taskText.includes(lower)) * 24 + Number(Boolean(matchingDiagnostic)) * 8
@@ -263,7 +267,7 @@ export async function collectContext(request, logs = []) {
     .filter(Boolean).slice(0, 12).map(({ score, ...row }) => row);
   const related = new Set([...owned, ...evidence.map(row => row.path)]);
   const runtime = request.runtime === true ? await engineContext(task) : undefined;
-  const packet = { task, evidence, modReferences, runtime, performance: foundryPerformanceContext(task), parity: parityContext(task), diagnostics: diagnostic.filter(row => related.has(row.path)).slice(-8),
+  const packet = { task, query: request.query, evidence, modReferences, runtime, performance: foundryPerformanceContext(task), parity: parityContext(task), diagnostics: diagnostic.filter(row => related.has(row.path)).slice(-8),
     symbols: names, crossReferences: found.available, sampledFiles,
     warnings: unique(warnings).slice(0, 8), boardVersions };
   const id = revision(JSON.stringify(packet));
@@ -292,5 +296,5 @@ export function loadContext(id, task) {
   const packet = bundles.get(id);
   if (!packet || packet.task !== task) throw new Error("Gather context again for this task");
   assertContextFresh(packet);
-  return packet;
+  return { id, ...packet };
 }
