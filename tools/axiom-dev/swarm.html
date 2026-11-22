@@ -349,6 +349,7 @@ dialog::backdrop{background:#05070acc;backdrop-filter:blur(2px)}
   <h4>Capacity</h4>
   <label for="s-workers">Agents<small>parallel workers</small></label><input type="number" id="s-workers" min="1" max="16">
   <label for="s-budget">Spend cap ($)<small>pause when reached; 0 = no cap</small></label><input type="number" id="s-budget" min="0" step="1">
+  <label for="s-bwin">Cap window (h)<small>cap applies per window and resets by itself; 0 = cumulative</small></label><input type="number" id="s-bwin" min="0" max="720" step="1">
   <label for="s-rspend">Reset spend<small>start counting the cap from $0</small></label><input type="checkbox" id="s-rspend">
   <label for="s-family">Family<small>where rows come from; empty families fall back to the whole ledger</small></label><select id="s-family"></select>
   <h4>Builders</h4>
@@ -481,7 +482,7 @@ function paint(){if(!S)return;const s=S,t=s.totals,c=s.cfg,now=s.now;const ws=cr
   else if(s.design?.running?.length)setPill('run','Designing '+s.design.running.map(r=>r.key).join(', '));
   else setPill('idle',s.idle?.text?'Idle · '+s.idle.text.split('.')[0]:'Idle',s.idle?.text);
   $('fam').textContent=c.family;$('run-btn').textContent=s.paused?'Resume':'Pause';$('run-btn').className=s.paused?'go':'';
-  $('sp-v').textContent=usd(spent);$('sp-c').textContent=c.budget?'of '+usd(c.budget):'no cap';
+  $('sp-v').textContent=usd(spent);$('sp-c').textContent=c.budget?'of '+usd(c.budget)+(c.budgetWindowH?' per '+c.budgetWindowH+' h':''):'no cap';
   $('sp-run').textContent=c.budget&&burn>0?dur(Math.max(0,c.budget-spent)/burn*36e5)+' left':usd(burn)+'/h';
   $('sp-bar').style.width=(c.budget?Math.min(100,spent/c.budget*100):0)+'%';
   document.title=(s.checkpointing?'checking':s.paused?'paused':busy.length?busy.length+' building':'idle')+' · Axiom Swarm';
@@ -694,14 +695,14 @@ async function inspectPrompt(id){id=sid(id);inspKind='prompt';inspKey=id;clearIn
 
 /* ---------- settings ---------- */
 function openSettings(){if(!S)return;const c=S.cfg;
-  $('s-workers').value=S.workers.filter(w=>w.status!=='stopped'&&!w.retire).length;$('s-budget').value=c.budget||0;$('s-rspend').checked=false;
+  $('s-workers').value=S.workers.filter(w=>w.status!=='stopped'&&!w.retire).length;$('s-budget').value=c.budget||0;$('s-bwin').value=c.budgetWindowH||0;$('s-rspend').checked=false;
   $('s-family').innerHTML=['all',...(S.families||[])].map(f=>`<option ${f===c.family?'selected':''}>${H(f)}</option>`).join('');
   $('s-scout').checked=!!c.scout;$('s-context').checked=c.context!==false;$('s-ready').checked=!!c.readyOnly;$('s-prove').checked=c.prove!==false;$('s-pbatch').value=c.proveBatch??3;
   $('s-breaker').value=c.breaker??6;$('s-alert').checked=pref('alert')==='1';$('s-explore').value=c.exploreTurns;$('s-cp').value=c.checkpointEvery??8;
   $('s-design').checked=c.decide!==false;$('s-epics').checked=c.designEpics!==false;$('s-dmax').value=c.decideMax??24;$('settings').showModal()}
 $('settings').addEventListener('close',()=>{if($('settings').returnValue!=='save')return;const al=$('s-alert').checked;pref('alert',al?'1':'0');
   if(al&&window.Notification&&Notification.permission==='default')Notification.requestPermission();
-  post('ctl/set',{workers:+$('s-workers').value,budget:+$('s-budget').value,family:$('s-family').value,scout:$('s-scout').checked,context:$('s-context').checked,readyOnly:$('s-ready').checked,
+  post('ctl/set',{workers:+$('s-workers').value,budget:+$('s-budget').value,budgetWindowH:+$('s-bwin').value,family:$('s-family').value,scout:$('s-scout').checked,context:$('s-context').checked,readyOnly:$('s-ready').checked,
     prove:$('s-prove').checked,proveBatch:+$('s-pbatch').value,breaker:+$('s-breaker').value,exploreTurns:+$('s-explore').value,checkpointEvery:+$('s-cp').value,
     decide:$('s-design').checked,designEpics:$('s-epics').checked,decideMax:+$('s-dmax').value,...($('s-rspend').checked?{resetSpend:true}:{})},'Settings')});
 

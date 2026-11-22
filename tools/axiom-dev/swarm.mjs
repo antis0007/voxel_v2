@@ -207,6 +207,12 @@ const state = { startedAt: Date.now(), cfg, paused: null, stop: false, workers: 
 // spending as soon as the new code started.
 const keepPausedFile = path.join(dir, "restart-paused.json");
 try { if (existsSync(keepPausedFile)) { state.paused = String(JSON.parse(readFileSync(keepPausedFile, "utf8")).paused || "paused") + " (kept across restart)"; unlinkSync(keepPausedFile); } } catch { /* start unpaused */ }
+// A breaker cooldown timer dies with the process: re-arm one (30 min) for a breaker pause carried across a restart,
+// or the restarted swarm would wait for Resume. A red-tree breaker pause is left to the health gate.
+if (/^circuit breaker\b/.test(state.paused ?? "") && !/does not compile/.test(state.paused)) setTimeout(() => {
+  if (!/^circuit breaker\b/.test(state.paused ?? "")) return;
+  state.paused = null; event("circuit breaker: cooldown over after restart; resumed");
+}, 30 * 60_000);
 // Every model cost goes through here so the per-process total and the cumulative cap ledger never drift.
 // Restarts used to show "0 proven" although proven results are on disk.
 state.totals.proven = [...finished.values()].filter(r => r.status === "proven").length;
